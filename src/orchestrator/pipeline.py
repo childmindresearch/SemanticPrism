@@ -187,6 +187,12 @@ class SemanticPrismOrchestrator:
             self._save_state(partition, "outputs/05_topology/modularity_partition.json")
             self._save_state(hierarchy, "outputs/05_topology/extracted_hierarchy.json")
             self.visualizer.visualize_topology(graph, partition, "outputs/05_topology/03_topology_communities_graph.html", "Phase 5: Global Modularity Map")
+            
+            # --- Hypergraph Expansion ---
+            logger.info("Building N-ary Hypergraph Topology matrices")
+            hypergraph_res = self.topology.build_hypergraph_topology(mapped_triples)
+            self.topology.visualize_hypergraph(hypergraph_res["B"], "outputs/05_topology")
+            
             _dump_current_log()
         
             logger.info("==================================================")

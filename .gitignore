@@ -44,6 +44,7 @@ inputs/*
 !inputs/.gitkeep
 !inputs/testdocs/
 notes/
+tests/
 
 # Jupyter Notebooks
 .ipynb_checkpoints/

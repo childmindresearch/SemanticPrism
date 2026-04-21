@@ -33,10 +33,12 @@ The pipeline is split into explicit modular stages: Extraction, Syntactic Normal
 - **Taxonomic Lifting**: Assigns a formal hypernym label to represent the cluster via Chain-of-Thought reasoning.
 
 ### 5. Topology Engine (`graph_builder.py`)
-**Purpose**: Constructs a mathematically defined directed graph and partitions it into modular semantic communities.
+**Purpose**: Constructs mathematically defined graphs, partitions them into modular semantic communities, and builds n-ary hypergraph representations for spectral analysis.
 **Components**:
 - **Directed Graph Construction**: Builds a NetworkX `DiGraph` from the normalized triples, tracking cumulative edge weights and predicate sets.
-- **Leiden Community Detection**: Computes modularity partitions for directed graphs.
+- **N-ary Hypergraph Grouping**: Groups triples around their `theme_association`, securely tracking local neighborhoods (Identity Guard) to map a bipartite graph connecting entities to thematic hyperedges.
+- **Spectral Matrices**: Computes the hypergraph Incidence Matrix ($H$) and Laplacian ($L$) via `numpy` to map high-level entity-theme interactions mathematically.
+- **Leiden Community Detection**: Computes modularity partitions for the directed graphs and runs Louvain detection on the bipartite structure for high-fidelity Pyvis visualization outputs.
 - **Hierarchy Extraction**: Restructures the graph into isolated subgraphs representing distinct semantic communities.
 
 ### 6. Synthesis Engine (`synthesizer.py`)
@@ -63,6 +65,7 @@ The system strictly divides non-deterministic interpretation (LLM) and determini
 - **Clustering**: Agglomerative clustering.
 - **Centroid Calculation**: Mean vector and cosine distance operations.
 - **Graph Construction**: Managing nodes, edges, and cumulative weights.
+- **Spectral Graph Mathematics**: Computing the hypergraph Incidence Matrix ($H$) and Laplacian ($L$).
 - **Community Detection**: Executing the Leiden algorithm to find partitions.
 
 ## Applied Mathematical and Topological Formulas
@@ -81,3 +84,8 @@ The system strictly divides non-deterministic interpretation (LLM) and determini
 **4. Network Topology & Modularity Optimization**
 - **Formula/Application**: Semantic relationships are modeled as a weighted directed graph $G = (V, E)$. Edge weights are additive $w(u, v) = \sum_{i} 1$, accumulating over occurrences of the same subject-object pairs.
 - **Leiden Algorithm**: Resolves graph community structure by optimizing the `ModularityVertexPartition`. Modularity measures the density of edges inside communities compared to edges outside communities. The Leiden algorithm ensures communities are guaranteed to be connected and correctly resolves partitions in directed graphs.
+
+**5. N-ary Hypergraph & Spectral Matrices**
+- **Formula/Application**: Complex thematic events are modeled as a bipartite graph $B$ connecting standard entity nodes to thematic hyperedge nodes.
+- **Incidence Matrix ($H$)**: An $|V| \times |E|$ binary matrix where $H_{i,j} = 1$ if entity $v_i$ participates in thematic hyperedge $e_j$, else $0$.
+- **Laplacian ($L$)**: The graph Laplacian is computed algebraically via $L = D_v - H H^T$, where $D_v$ is the diagonal degree matrix representing the total themes each entity engages with.

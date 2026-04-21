@@ -11,17 +11,17 @@ llm:
   fixed_num_ctx: 8192
   manage_vram: true               # Actively purges and drops active model bindings safely.
 
-  # api_backend: "ollama"
-  # base_url: "http://localhost:11434/v1"
-  # api_key: "ollama"
-  # model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
+  api_backend: "ollama"
+  base_url: "http://localhost:11434/v1"
+  api_key: "ollama"
+  model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
   
-  api_backend: "vertexai"
-  vertex_endpoint: "mg-endpoint-14588ae2-9669-44b8-be58-dc05b9e85526"
-  model_name: "Qwen/Qwen3.5-35B-A3B-FP8"
-  google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
-  vertex_project: "607968988315"
-  vertex_location: "us-central1"
+  # api_backend: "vertexai"
+  # vertex_endpoint: "mg-endpoint-14588ae2-9669-44b8-be58-dc05b9e85526"
+  # model_name: "Qwen/Qwen3.5-35B-A3B-FP8"
+  # google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
+  # vertex_project: "607968988315"
+  # vertex_location: "us-central1"
 
 extraction:
   domain: "Unknown"

@@ -5,6 +5,12 @@ into a hierarchical Modularity network safely securely strictly cleanly natively
 """
 
 import networkx as nx
+import numpy as np
+from pyvis.network import Network
+from collections import defaultdict
+import matplotlib.colors as mcolors
+import matplotlib.cm as cm
+import os
 from typing import List, Dict, Tuple, Any
 from src.extraction.schemas import RawTriple
 from src.core.logger import get_logger
@@ -114,3 +120,118 @@ class TopologyEngine:
                 hierarchy[comm_key]["sub_graph"].add_edge(u, v, **data)
                 
         return hierarchy
+
+    def build_hypergraph_topology(self, triples: List[RawTriple]) -> Dict[str, Any]:
+        """
+        Implements: 1. Identity Guard, 2. N-ary Grouping, 
+        3. Spectral Math (H & L) based on the bipartite hyperedge logic.
+        """
+        logger.info("Initializing n-ary hypergraph system topologically.")
+        
+        # --- Step 1: Identity Guard / Neighborhood Scoping ---
+        # Scoping entities by their local topology to distinguish generic tags
+        entity_neighborhoods = defaultdict(set)
+        for t in triples:
+            entity_neighborhoods[t.subject].add((t.predicate, t.object))
+            entity_neighborhoods[t.object].add((t.subject, t.predicate))
+
+        # --- Step 2: N-ary Hyperedge Grouping (Bipartite Model) ---
+        # Themes act as hyperedges connecting entities
+        B = nx.Graph()
+        hyperedge_map = defaultdict(list)
+        all_entities = set()
+
+        for t in triples:
+            theme = t.theme_association if t.theme_association else "Other"
+            hyperedge_map[theme].append(t)
+            all_entities.update([t.subject, t.object])
+
+        # Add nodes to the Bipartite Graph for math and viz
+        for theme, tri_list in hyperedge_map.items():
+            he_node = f"HE: {theme}"
+            # Store original predicates as attributes on the hyperedge
+            B.add_node(he_node, label=theme, is_hyperedge=True, 
+                       predicates=[t.predicate for t in tri_list])
+            
+            for t in tri_list:
+                for ent in [t.subject, t.object]:
+                    if ent not in B:
+                        B.add_node(ent, label=ent, is_hyperedge=False)
+                    B.add_edge(ent, he_node)
+
+        # --- Step 3: Construct Incidence Matrix (H) & Laplacian (L) ---
+        entities_sorted = sorted(list(all_entities))
+        themes_sorted = sorted(list(hyperedge_map.keys()))
+        ent_idx = {ent: i for i, ent in enumerate(entities_sorted)}
+        thm_idx = {thm: j for j, thm in enumerate(themes_sorted)}
+
+        H = np.zeros((len(entities_sorted), len(themes_sorted)))
+        for theme, tri_list in hyperedge_map.items():
+            participants = set([t.subject for t in tri_list] + [t.object for t in tri_list])
+            for ent in participants:
+                H[ent_idx[ent], thm_idx[theme]] = 1
+
+        # Laplacian L = D - H*H.T
+        Dv = np.diag(np.sum(H, axis=1))
+        L = Dv - np.dot(H, H.T)
+
+        return {
+            "B": B,
+            "H": H, 
+            "L": L, 
+            "entities": len(entities_sorted), 
+            "themes": len(themes_sorted),
+            "entity_neighborhoods": dict(entity_neighborhoods)
+        }
+
+    def visualize_hypergraph(self, B: nx.Graph, output_dir: str = "outputs/05_topology") -> str:
+        """
+        Executes community detection and Centrality for Viz, 
+        and generates a high-fidelity Pyvis visualization.
+        """
+        logger.info("Generating high-fidelity hypergraph visualization.")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # --- Community Detection & Centrality for Viz ---
+        communities = nx.community.louvain_communities(B)
+        community_map = {node: i for i, comm in enumerate(communities) for node in comm}
+        centrality = nx.degree_centrality(B)
+
+        # --- High-Fidelity Pyvis Visualization ---
+        net = Network(height="800px", width="100%", bgcolor="#222222", font_color="white")
+        colors = [mcolors.to_hex(cm.tab20(i % 20)) for i in range(len(communities))]
+
+        for node, attrs in B.nodes(data=True):
+            is_he = attrs.get('is_hyperedge', False)
+            comm_id = community_map.get(node, 0)
+            
+            shape = "box" if is_he else "dot"
+            color = colors[comm_id % len(colors)]
+            
+            size = centrality.get(node, 0.0) * 200 + (35 if is_he else 15)
+            
+            title = f"Role: {'Hyperedge' if is_he else 'Entity'}\nCommunity: {comm_id}"
+            if is_he:
+                title += f"\nPredicates: {', '.join(set(attrs.get('predicates', [])))}"
+
+            net.add_node(node, label=attrs.get('label', node), color=color, shape=shape, 
+                         size=size, title=title, borderWidth=2, shadow=True)
+
+        for source, target in B.edges():
+            net.add_edge(source, target, color="rgba(200,200,200,0.3)", width=1)
+
+        # ForceAtlas2 Physics for Celestial layout
+        net.set_options("""
+        {
+          "physics": {
+            "forceAtlas2Based": {"gravitationalConstant": -80, "centralGravity": 0.005, "springLength": 200, "springConstant": 0.08},
+            "solver": "forceAtlas2Based",
+            "stabilization": {"iterations": 150}
+          }
+        }
+        """)
+        
+        output_file = os.path.join(output_dir, "04_hypergraph_topology_graph.html")
+        net.save_graph(output_file)
+        logger.info(f"Hypergraph visualization saved to {output_file}")
+        return output_file
