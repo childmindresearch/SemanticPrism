@@ -1,0 +1,152 @@
+2026-04-19 21:01:27 | INFO     | ContextManager | Initialized ContextManager - VRAM Free: 11860 MB, RAM Free: 19548 MB
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+====================================
+{
+  "instances": [
+    {
+      "prompt": "You are an expert NLP theme extraction system.\n\nYou MUST return a JSON object matching this schema EXACTLY:\n{\n  \"properties\": {\n    \"themes\": {\n      \"items\": {\n        \"type\": \"string\"\n      },\n      \"title\": \"Themes\",\n      \"type\": \"array\"\n    }\n  },\n  \"required\": [\n    \"themes\"\n  ],\n  \"title\": \"ThemeDiscoveryResult\",\n  \"type\": \"object\"\n}\n\n\nAnalyze the text and extract themes."
+    }
+  ],
+  "parameters": {
+    "temperature": 0.1,
+    "max_tokens": 8192
+  }
+}
+====================================
+2026-04-19 21:01:32 | ERROR    | SemanticLLMClient | Instructor API Execution failed: <failed_attempts>
+
+<generation number="1">
+<exception>
+    Connection error.
+</exception>
+<completion>
+    None
+</completion>
+</generation>
+
+<generation number="2">
+<exception>
+    Connection error.
+</exception>
+<completion>
+    None
+</completion>
+</generation>
+
+<generation number="3">
+<exception>
+    Connection error.
+</exception>
+<completion>
+    None
+</completion>
+</generation>
+
+</failed_attempts>
+
+<last_exception>
+    Connection error.
+</last_exception>

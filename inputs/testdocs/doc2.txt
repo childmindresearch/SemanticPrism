@@ -1,0 +1,69 @@
+ <ORGANIZATION> CLINICAL EVALUATION REPORT
+
+Date of Evaluation: October 14, 2025
+Date of Report: October 28, 2025
+Client Name: <PERSON>
+Date of Birth: May 12, 2017 (Age: 8 years, 5 months)
+Grade: 3rd Grade
+Clinician: <PERSON>, Psy.D.
+
+REASON FOR REFERRAL
+<PERSON> was referred to <ORGANIZATION> by their parents for a comprehensive diagnostic evaluation. Concerns include persistent difficulties with sustained attention, frequent "daydreaming" in class, and significant emotional reactivity when transitioning between preferred and non-preferred tasks. Their teacher at <ORGANIZATION> School noted that while <PERSON> is academically capable, they often fail to complete independent work and struggle with social cues during recess.
+
+ASSESSMENT PROCEDURES
+The following assessment tools and data sources were utilized:
+
+Clinical Interview: With parents and <PERSON>.
+
+Conners 4: Parent and Teacher Rating Scales.
+
+Behavior Assessment System for Children (BASC-3): Parent and Teacher Forms.
+
+Wechsler Intelligence Scale for Children (WISC-V): Selected subtests.
+
+Review of Records: Previous report cards and pediatrician notes.
+
+CLINICAL OBSERVATIONS
+<PERSON> presented as a cooperative and engaging child. They established age-appropriate eye contact but frequently shifted in their seat, occasionally standing up to look at items on the clinician's shelf. When tasks became challenging, <PERSON> exhibited "avoidant" behaviors, such as asking for water breaks or changing the subject. They showed a tendency toward "all-or-nothing" thinking (e.g., "I’m bad at math because I missed this one").
+
+TEST RESULTS & DATA INTEGRATION
+Cognitive and Academic Functioning
+Preliminary results from the WISC-V suggest that <PERSON> possesses High Average verbal reasoning skills. However, their Working Memory and Processing Speed scores fell within the Low Average range. This "bottleneck" effect explains why <PERSON> understands complex concepts but struggles to get them down on paper.
+
+Behavioral and Emotional Functioning
+Data from the BASC-3 and Conners 4 indicate clinically significant elevations in the following areas:
+
+Inattention: Both parents and teachers report that <PERSON> loses track of instructions and requires frequent redirection.
+
+Emotional Reactivity: Scores suggest <PERSON> experiences "big feelings" more intensely than peers, often resulting in tearfulness or shut-down behaviors when frustrated.
+
+Executive Functioning: Deficits were noted in planning, organizing, and initiating tasks.
+
+DIAGNOSTIC IMPRESSION
+Based on the current evaluation, <PERSON> meets the diagnostic criteria for the following:
+
+Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2): Evidenced by a persistent pattern of inattention and hyperactivity that interferes with functioning in two or more settings.
+
+Generalized Anxiety Disorder (F41.1): Characterized by excessive worry regarding academic performance and social rejection, contributing to their emotional reactivity.
+
+SUMMARY AND RECOMMENDATIONS
+<PERSON> is a bright and creative child whose primary challenges stem from executive functioning deficits and anxiety. To support their development, the following is recommended:
+
+School-Based Supports
+Individualized Education Program (IEP) or 504 Plan: To provide accommodations such as extended time on tests and preferential seating away from distractions.
+
+Task Breakdown: Assignments should be broken into smaller, manageable "chunks" with frequent check-ins.
+
+Visual Schedules: Utilize a visual timer or checklist to help <PERSON> navigate transitions.
+
+Therapeutic Interventions
+Cognitive Behavioral Therapy (CBT): To help <PERSON> identify and challenge "anxious thoughts" and develop coping strategies for frustration.
+
+Parent Management Training (PMT): To assist parents in implementing consistent behavioral structures and positive reinforcement at home.
+
+Medical Consultation
+It is recommended that the family share this report with <PERSON>’s pediatrician or a child psychiatrist to discuss the potential role of pharmacological support for ADHD symptoms.
+
+Signature:
+<PERSON>, Psy.D.
+Clinical Psychologist, <ORGANIZATION>

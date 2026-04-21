@@ -1,0 +1,68 @@
+ <ORGANIZATION> CLINICAL EVALUATION REPORT
+
+Date of Evaluation: November 05, 2025
+Date of Report: November 19, 2025
+Client Name: <PERSON>
+Date of Birth: August 22, 2016 (Age: 9 years, 2 months)
+Grade: 4th Grade
+Clinician: <PERSON>, Ph.D.
+
+REASON FOR REFERRAL
+<PERSON> was referred to <ORGANIZATION> for a diagnostic evaluation due to increasing academic friction and interpersonal difficulties. At home, parents report significant "meltdowns" during the evening routine. At school, <PERSON>’s teacher at <ORGANIZATION> Academy describes them as a "bright but inconsistent" student who frequently disrupts the flow of the classroom with off-topic comments or refusal to comply with group instructions.
+
+BEHAVIORAL OBSERVATIONS AND EXAMPLES
+Home Environment
+Parental interviews and home-based rating scales reveal a pattern of executive functioning deficits that manifest in daily stressors:
+
+The "Morning Logjam": <PERSON> is unable to complete a three-step routine (brush teeth, get dressed, put on shoes) without a minimum of four to five verbal prompts. They are frequently found distracted by a toy or staring into space halfway through dressing.
+
+Task Avoidance: Homework sessions often last three hours for assignments that should take twenty minutes. <PERSON> exhibits "escape behaviors," such as complaining of physical ailments (e.g., stomach aches) or dropping pencils to stall the initiation of writing tasks.
+
+Emotional Dysregulation: Small triggers, such as being told a favorite snack is unavailable, result in "Level 10" emotional responses (screaming or slamming doors) that can last up to thirty minutes.
+
+School Environment
+Teacher reports and classroom observations highlight challenges with self-regulation and social pragmatics:
+
+Impulse Control: <PERSON> frequently blurt out answers before the teacher has finished the question. During "carpet time," they struggle to keep their hands to themselves, often poking peers or playing with their shoelaces.
+
+Executive Dysfunction: Their desk is described as "chronically disorganized," with crumpled papers and missing supplies. <PERSON> often forgets to turn in completed work, even when it is tucked inside their backpack.
+
+Social Reciprocity: During recess, <PERSON> struggles to negotiate the rules of a game. If a peer suggests a change to the rules, <PERSON> may become rigid, declare the game "stupid," and walk away, leading to social isolation.
+
+TEST RESULTS & CLINICAL DATA
+Cognitive Testing (WISC-V)
+<PERSON> demonstrated Superior range performance in Fluid Reasoning, indicating a high capacity for solving novel, abstract problems. However, their Processing Speed fell into the Borderline range.
+
+Clinical Significance: In the classroom, <PERSON> understands the material faster than their peers but cannot output the work at the same pace. This leads to a "performance gap" that fuels their frustration and subsequent behavioral outbursts.
+
+Rating Scales (BASC-3 & BRIEF-2)
+Inhibition: Clinically significant. <PERSON> struggles to "stop and think" before acting.
+
+Shift: Elevated. <PERSON> has extreme difficulty moving from a high-interest activity (e.g., Video Games/Recess) to a low-interest activity (e.g., Math/Chores).
+
+DIAGNOSTIC IMPRESSION
+Based on the integrated data, <PERSON> meets criteria for:
+
+Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2): Primary drivers are poor impulse control and significant distractibility.
+
+Oppositional Defiant Disorder (F91.3): Characterized by a frequent pattern of irritability and defiance toward authority figures, largely triggered by transitions and cognitive fatigue.
+
+COMPREHENSIVE RECOMMENDATIONS
+Targeted Educational Strategies
+The "First/Then" Principle: Use visual boards to show "First: 5 Math Problems, Then: 2 Minutes of Drawing." This reduces the perceived "infinity" of the non-preferred task.
+
+Heavy Work Breaks: Allow <PERSON> to perform "heavy work" (e.g., carrying the mail to the office or doing wall pushes) to provide proprioceptive input when they appear hyperactive.
+
+Home-Based Interventions
+Collaborative & Proactive Solutions (CPS): Shift away from a "punishment" model to a "problem-solving" model. Identify the "lagging skills" that cause the meltdowns and work with <PERSON> to find solutions during calm periods.
+
+Environment Design: Minimize visual clutter in <PERSON>'s study area. Use a "launchpad" by the front door—a specific bin for their backpack and shoes—to reduce morning friction.
+
+Therapeutic Plan
+Social Skills Group: To practice "perspective-taking" and flexible thinking in a supervised peer setting.
+
+Child-Parent Psychotherapy: To repair the parent-child bond which has been strained by chronic behavioral conflict.
+
+Signature:
+<PERSON>, Ph.D.
+Clinical Director, <ORGANIZATION>

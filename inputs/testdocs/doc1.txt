@@ -1,0 +1,73 @@
+<ORGANIZATION>
+Comprehensive Psychological Evaluation Report
+Confidential – For Clinical Use Only
+Patient Name: <PERSON>
+Date of Birth: March 12, 2018
+Chronological Age: 8 years, 1 month
+Gender: Female
+Grade: 2nd Grade
+Date of Evaluation: February 10 & 17, 2026
+Date of Report: April 3, 2026
+Evaluator: <PERSON>, PsyD
+Licensed Clinical Psychologist
+<ORGANIZATION>
+Referring Provider: <PERSON>, MD (Pediatrics)
+REASON FOR REFERRAL
+<PERSON> was referred for a comprehensive psychological evaluation due to concerns from parents and teachers regarding difficulties with attention, emotional regulation, social interactions, and academic engagement. Symptoms have been present for approximately two years and are impacting school performance and family functioning. Parents requested diagnostic clarification and recommendations for support.
+BACKGROUND INFORMATION
+Developmental History
+Pregnancy, delivery, and early developmental milestones were reported as typical and within normal limits. <PERSON> sat unsupported at 7 months, walked at 13 months, used single words by 12 months, and began combining words by 20 months. Sleep patterns are irregular with occasional bedtime resistance. Appetite is generally good.
+Medical History
+No major illnesses, injuries, or hospitalizations. Routine vision and hearing screenings are within normal limits. No current medications. No history of seizures, significant head trauma, or toxic exposures.
+Family History
+<PERSON> lives with both biological parents who are married. There is a reported family history of attention and anxiety-related difficulties on the paternal side. No other significant psychiatric or developmental disorders noted in immediate family. The family environment is described as supportive with consistent routines.
+Educational History
+<PERSON> attends a general education 2nd-grade classroom in a public school. Teachers report challenges with sustaining attention during group and independent work, difficulty completing assignments on time, and occasional emotional outbursts when frustrated. Academic skills appear to be in the average range when structure is provided, though progress is inconsistent due to inattention and disorganization.
+Social/Behavioral History
+<PERSON> has a small group of friends but often has trouble sharing or managing disappointment during play. At home, she can be argumentative about daily routines and homework. No history of aggression toward others or destruction of property. Reported strengths include creativity, kindness toward younger children, and strong expressive language skills.
+ASSESSMENT PROCEDURES
+
+Clinical interview with parents (approximately 2 hours)
+Clinical interview with <PERSON> (40 minutes)
+Teacher telephone interview and standardized rating scales
+Wechsler Intelligence Scale for Children, Fifth Edition (WISC-V)
+Conners 4th Edition – Parent and Teacher Forms
+Behavior Assessment System for Children, Third Edition (BASC-3) – Parent, Teacher, and Self-Report
+Test of Variables of Attention (TOVA)
+Children’s Depression Inventory, Second Edition (CDI-2)
+Screen for Child Anxiety Related Emotional Disorders (SCARED) – Parent and Child versions
+Review of available school and pediatric records
+
+BEHAVIORAL OBSERVATIONS
+<PERSON> arrived on time and was initially shy but warmed up quickly. She was talkative and cooperative yet displayed frequent fidgeting, shifting in her seat, and occasional off-task behaviors. Attention to tasks varied; she required moderate redirection. Speech was clear and fluent. Affect was generally euthymic with some anxiety noted during challenging tasks. Effort and motivation appeared adequate throughout the evaluation sessions.
+TEST RESULTS AND CLINICAL FINDINGS
+Cognitive Ability
+On the WISC-V, <PERSON>’s overall intellectual functioning fell in the Average to High Average range (Full Scale IQ = 112, 79th percentile). Strongest performance was observed in Verbal Comprehension and Fluid Reasoning. Processing Speed and Working Memory indices were lower relative to other domains, falling in the low average range and consistent with reported attentional concerns.
+Attention and Executive Functioning
+Results from the Conners 4 and TOVA indicated clinically significant difficulties with inattention and impulsivity in both home and school environments (T-scores ranging from 68–76). Performance on the TOVA showed elevated omission and commission errors along with high variability in response time, supporting deficits in sustained attention and inhibitory control.
+Social-Emotional and Behavioral Functioning
+BASC-3 profiles revealed clinically significant elevations in hyperactivity, attention problems, and emotional self-regulation across reporters. SCARED scores indicated elevated anxiety symptoms (parent total score = 28, above clinical cutoff), particularly related to separation and school performance. CDI-2 results did not suggest significant depressive symptoms. Teacher ratings were somewhat higher than parent ratings, indicating greater impairment in the structured school setting.
+Diagnostic Impression
+Based on a review of developmental history, behavioral observations, multi-informant standardized measures, and cognitive testing, <PERSON> meets DSM-5-TR criteria for the following diagnoses:
+1. Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2)
+Moderate severity. Symptoms are present across multiple settings and cause clinically significant impairment in academic and social functioning.
+2. Separation Anxiety Disorder (F93.0)
+Mild severity. Excessive fear of separation from attachment figures that interferes with daily activities.
+No evidence of a specific learning disorder, autism spectrum disorder, or oppositional defiant disorder was identified at this time. Notable strengths include solid verbal abilities and a supportive family system.
+RECOMMENDATIONS
+
+Medical Consultation – Referral to a child and adolescent psychiatrist for consideration of medication management options for ADHD symptoms.
+Behavioral Interventions – Participation in evidence-based parent training program (e.g., 8–12 sessions of behavioral parent management training) to address compliance and emotional regulation at home.
+School Supports – Request a Section 504 Plan or IEP meeting to implement classroom accommodations such as preferential seating, extended time on assignments/tests, frequent breaks, and use of organizational tools. Daily behavior report card recommended.
+Individual Therapy – Weekly cognitive-behavioral therapy (CBT) focused on anxiety management, coping skills, and building emotional regulation. Services can be coordinated through <ORGANIZATION> or community providers.
+Follow-up – Re-evaluation in 12 months or earlier if significant changes occur. Ongoing monitoring of academic progress and response to interventions is advised.
+
+Summary Statement
+<PERSON> is a bright and engaging 8-year-old girl presenting with ADHD, Combined Presentation and co-occurring Separation Anxiety Disorder. With timely, evidence-based intervention including behavioral support, school accommodations, and therapy, significant improvement in attention, anxiety, and overall functioning is anticipated.
+Signed:
+<PERSON>, PsyD
+Licensed Psychologist
+<ORGANIZATION>
+Report reviewed by:
+<PERSON>, MD
+Medical Director, <ORGANIZATION>

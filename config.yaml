@@ -1,0 +1,46 @@
+# SemanticPrism Primary Configuration
+
+pipeline:
+  use_async: true
+  max_concurrent_llm_calls: 3
+  normalize_text: true
+
+llm:
+  connection_protocol: "sdk"      # "sdk" (Instructor/OpenAI bindings) or "http" (raw requests)
+  context_source: "dynamic"       # "dynamic" (auto calculate via manager) or "config" (static map)
+  fixed_num_ctx: 8192
+  manage_vram: true               # Actively purges and drops active model bindings safely.
+
+  # api_backend: "ollama"
+  # base_url: "http://localhost:11434/v1"
+  # api_key: "ollama"
+  # model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
+  
+  api_backend: "vertexai"
+  vertex_endpoint: "mg-endpoint-14588ae2-9669-44b8-be58-dc05b9e85526"
+  model_name: "Qwen/Qwen3.5-35B-A3B-FP8"
+  google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
+  vertex_project: "607968988315"
+  vertex_location: "us-central1"
+
+extraction:
+  domain: "Unknown"
+  theme_chunk_max_words: 8000
+  triple_chunk_max_words: 2500
+
+refinement:
+  embedding_model: "all-MiniLM-L6-v2"
+  similarity_threshold: 0.15
+  compression_mode: "isolated"
+  compress_fields: 
+    - "subject"
+    - "object"
+  spectral_variance_retention: 0.95
+  hypernym_resolution: "semantic_centroid"
+  community_detection: "louvain"
+
+output:
+  schemas_dir: "outputs/schemas"
+  graphs_dir: "outputs/graphs"
+  checkpoints_dir: "outputs/checkpoints"
+  logs_dir: "outputs/logs"
