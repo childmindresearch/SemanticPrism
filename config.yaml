@@ -6,6 +6,7 @@ pipeline:
   normalize_text: true
 
 llm:
+  verbose: true
   connection_protocol: "sdk"      # "sdk" (Instructor/OpenAI bindings) or "http" (raw requests)
   context_source: "dynamic"       # "dynamic" (auto calculate via manager) or "config" (static map)
   fixed_num_ctx: 8192

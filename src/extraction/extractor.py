@@ -16,7 +16,7 @@ from src.core.chunking import chunk_text
 from src.core.logger import get_logger
 from src.helpers.context_manager import ContextManager
 import src.extraction.prompts as prompts
-from src.core.llm_client import SemanticLLMClient
+from src.llm.llm_client import SemanticLLMClient
 
 logger = get_logger("ExtractionPipeline")
 

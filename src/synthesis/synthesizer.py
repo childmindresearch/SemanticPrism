@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 import src.synthesis.prompts as prompts
 from src.synthesis.schemas import GeneratedSchema
 from src.core.logger import get_logger
-from src.core.llm_client import SemanticLLMClient
+from src.llm.llm_client import SemanticLLMClient
 
 logger = get_logger("SynthesisEngine")
 

@@ -16,7 +16,7 @@ from sklearn.metrics.pairwise import cosine_distances
 from src.nlp.schemas import ClusterContextualValidation, TaxonomicVerification
 from src.core.logger import get_logger
 import src.nlp.prompts as prompts
-from src.core.llm_client import SemanticLLMClient
+from src.llm.llm_client import SemanticLLMClient
 
 logger = get_logger("HypernymPipeline")
 
