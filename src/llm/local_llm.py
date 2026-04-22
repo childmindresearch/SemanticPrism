@@ -2,7 +2,6 @@ import json
 import logging
 import urllib.request
 import instructor
-from openai import AsyncOpenAI, OpenAI
 
 from src.core.logger import get_logger
 from src.helpers.context_manager import ContextManager
@@ -55,16 +54,19 @@ class LocalLLMProvider:
 
     def get_sync_client(self):
         logger.debug(f"Initializing Synchronous Local SDK Client ({self.backend}).")
-        return instructor.from_openai(
-            OpenAI(base_url=self.base_url, api_key=self.api_key),
-            mode=self.instructor_mode
+        return instructor.from_provider(
+            f"ollama/{self.model_name}",
+            mode=self.instructor_mode,
+            base_url=self.base_url
         )
 
     def get_async_client(self):
         logger.debug(f"Initializing Asynchronous Local SDK Client ({self.backend}).")
-        return instructor.from_openai(
-            AsyncOpenAI(base_url=self.base_url, api_key=self.api_key),
-            mode=self.instructor_mode
+        return instructor.from_provider(
+            f"ollama/{self.model_name}",
+            mode=self.instructor_mode,
+            base_url=self.base_url,
+            async_client=True
         )
 
     def execute_http_raw(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int):
