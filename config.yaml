@@ -23,6 +23,10 @@ llm:
   # google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
   # vertex_project: "607968988315"
   # vertex_location: "us-central1"
+  
+  # api_backend: "litellm"
+  # model_name: "ollama/mistral-nemo" # Example proxy routing for LiteLLM
+  # base_url: "http://localhost:11434"
 
 extraction:
   domain: "Unknown"

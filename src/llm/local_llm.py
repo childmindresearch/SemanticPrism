@@ -54,6 +54,10 @@ class LocalLLMProvider:
 
     def get_sync_client(self):
         logger.debug(f"Initializing Synchronous Local SDK Client ({self.backend}).")
+        if self.backend == 'litellm':
+            import litellm
+            return instructor.from_litellm(litellm.completion, mode=self.instructor_mode)
+            
         return instructor.from_provider(
             f"ollama/{self.model_name}",
             mode=self.instructor_mode,
@@ -62,6 +66,10 @@ class LocalLLMProvider:
 
     def get_async_client(self):
         logger.debug(f"Initializing Asynchronous Local SDK Client ({self.backend}).")
+        if self.backend == 'litellm':
+            import litellm
+            return instructor.from_litellm(litellm.acompletion, mode=self.instructor_mode)
+            
         return instructor.from_provider(
             f"ollama/{self.model_name}",
             mode=self.instructor_mode,
