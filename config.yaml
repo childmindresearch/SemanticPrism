@@ -11,18 +11,19 @@ llm:
   fixed_num_ctx: 8192
   manage_vram: true              # Actively purges and drops active model bindings safely.
 
-  # api_backend: "ollama"
-  # base_url: "http://localhost:11434/v1"
-  # api_key: "ollama"
+  api_backend: "ollama"
+  base_url: "http://localhost:11434/v1"
+  api_key: "ollama"
+  model_name: "gemma4:26b"
   # #model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
   # model_name: "huggingface.co/google/gemma-3-12b-it-qat-q4_0-gguf:latest"
   
-  api_backend: "vertexai"
-  google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
-  vertex_project: "607968988315"
-  vertex_location: "us-central1"
-  vertex_endpoint: "mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8"
-  base_url: "https://mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8.us-central1-587318152446.prediction.vertexai.goog"
+  #api_backend: "vertexai"
+  #google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
+  #vertex_project: "607968988315"
+  #vertex_location: "us-central1"
+  #vertex_endpoint: "mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8"
+  #base_url: "https://mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8.us-central1-587318152446.prediction.vertexai.goog"
 
 
 extraction:
