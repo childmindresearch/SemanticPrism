@@ -8,43 +8,48 @@ The pipeline is split into explicit modular stages: Extraction, Syntactic Normal
 ## Pipeline Architecture and Components
 
 ### 1. Extraction Pipeline (`extractor.py`)
-**Purpose**: Transforms unstructured text matrices into formal subject-predicate-object triples and discovers overarching domain themes.
+**Purpose**: Transforms unstructured text matrices into formal subject-predicate-object triples and discovers overarching domain themes to guide the extraction process.
 **Components**:
 - **Multi-Document Theme Consolidation**: Ingests multiple text documents, extracts local themes, weights them by cross-document frequency, and synthesizes a singular master domain context.
-- **Triple Extraction**: Extracts logical raw triples using an entity registry to maintain coreference context.
+- **Triple Extraction**: Extracts logical raw triples using an entity registry to maintain coreference context across the documents.
 
 ### 2. Syntactic Normalization (`normalize_text.py`)
-**Purpose**: Binds raw string tokens to deterministically scrubbed states prior to embedding logic.
+**Purpose**: Binds raw string tokens to deterministically scrubbed states prior to embedding logic, eliminating syntactic and grammatical ambiguities without structural loss.
 **Components**:
-- **Explicit Lexical Normalization**: Utilizes constrained JSON decoding to construct strict 1:1 key-value mappings linking raw subject/predicate/object tokens directly to their normalized counterparts without relying on fragile list indexing.
+- **Explicit Lexical Normalization**: Utilizes the LLM with constrained JSON decoding to construct strict 1:1 key-value mapping dictionaries. This securely links raw tokens (e.g., `{"dogs": "dog"}`) directly to normalized counterparts without relying on fragile list indexing.
 
 ### 3. Embedding Pipeline (`embedding.py`)
-**Purpose**: Projects raw string fields into a vector space and reduces redundancy by clustering semantically identical components.
+**Purpose**: Projects normalized strings into a dense vector space to reduce redundancy by grouping semantically identical components.
 **Components**:
-- **Vector Encoding**: Generates embeddings for extracted subjects, objects, and predicates.
-- **Weighted PCA**: Duplicates embedding rows by item frequency and performs dimensionality reduction.
-- **Agglomerative Clustering**: Groups embeddings mathematically to identify semantic clusters.
+- **Vector Encoding**: Generates embeddings for extracted subjects, objects, and predicates via local models.
+- **Weighted PCA & Eigengap Analysis**: Duplicates embedding rows by item frequency and dynamically performs optimal dimensionality reduction.
+- **Agglomerative Clustering**: Groups embeddings mathematically using `cosine` distance and `average` linkage to propose semantic clusters.
 
 ### 4. Hypernym Pipeline (`hypernyms.py`)
-**Purpose**: Merges mathematical centroids with validation protocols to enforce hierarchical taxonomic structures.
+**Purpose**: Merges mathematical centroids with LLM validation protocols to enforce hierarchical taxonomic structures (moving from specific entities to abstract superclasses).
 **Components**:
-- **Contextual Validation**: Evaluates the coherence of proposed mathematical clusters and splits rejected clusters.
-- **Geometric Centroid Calculation**: Computes the central vector for a cluster and maps it to the closest string.
-- **Taxonomic Lifting**: Assigns a formal hypernym label to represent the cluster via Chain-of-Thought reasoning.
+- **Contextual Validation**: Evaluates the logical coherence of mathematically proposed clusters and splits rejected sets.
+- **Geometric Centroid Calculation**: Computes the mean embedding vector for a verified cluster and maps it to the specific string with the minimum cosine distance.
+- **Taxonomic Lifting**: Uses Chain-of-Thought reasoning to assign a formal abstract superclass label (hypernym) that accurately represents the cluster.
 
-### 5. Topology Engine (`graph_builder.py`)
-**Purpose**: Constructs mathematically defined graphs, partitions them into modular semantic communities, and builds n-ary hypergraph representations for spectral analysis.
+### 5. Taxonomic Resolution Mapping (`nlp_mapping.py`)
+**Purpose**: Condenses the specific localized triple topology into a higher-order abstracted topology.
 **Components**:
-- **Directed Graph Construction**: Builds a NetworkX `DiGraph` from the normalized triples, tracking cumulative edge weights and predicate sets.
+- **Deterministic String Replacement**: Performs a dictionary-based scan over the normalized triples, deterministically overwriting specific subjects and objects with their newly assigned taxonomic hypernyms, dramatically simplifying the graph structure.
+
+### 6. Topology Engine (`graph_builder.py`)
+**Purpose**: Constructs mathematically defined networks, partitions them into modular semantic communities, and builds n-ary hypergraph representations for spectral analysis.
+**Components**:
+- **Directed Graph Construction**: Builds a NetworkX `DiGraph` from the mapped triples, tracking cumulative edge weights $w(u, v) = \sum_{i} 1$.
 - **N-ary Hypergraph Grouping**: Groups triples around their `theme_association`, securely tracking local neighborhoods (Identity Guard) to map a bipartite graph connecting entities to thematic hyperedges.
-- **Spectral Matrices**: Computes the hypergraph Incidence Matrix ($H$) and Laplacian ($L$) via `numpy` to map high-level entity-theme interactions mathematically.
-- **Leiden Community Detection**: Computes modularity partitions for the directed graphs and runs Louvain detection on the bipartite structure for high-fidelity Pyvis visualization outputs.
+- **Spectral Matrices**: Computes the hypergraph Incidence Matrix ($H$) and Laplacian ($L = D_v - H H^T$) via `numpy` to map high-level entity-theme interactions mathematically.
+- **Leiden Community Detection**: Optimizes the `ModularityVertexPartition` to reliably compute modularity partitions for the directed graphs and runs Louvain detection on the bipartite structure.
 - **Hierarchy Extraction**: Restructures the graph into isolated subgraphs representing distinct semantic communities.
 
-### 6. Synthesis Engine (`synthesizer.py`)
-**Purpose**: Transforms abstract network communities into structured, executable Pydantic schemas.
+### 7. Synthesis Engine (`synthesizer.py`)
+**Purpose**: Transforms abstract mathematical network communities into structured, executable programmatic models.
 **Components**:
-- **Schema Generation**: Converts graph edges and nodes of each community into programmatic Python class abstractions.
+- **Type-Safe Schema Generation**: Converts the graph edges and nodes of each isolated community into programmatic Pydantic class abstractions representing the ontological structures.
 - **Output Export**: Aggregates models and writes the global JSON context (`semantic_prism_master_graph.json`) and executable Python file (`semantic_models.py`).
 
 ## LLM vs. Offline Computation
@@ -64,6 +69,7 @@ The system strictly divides non-deterministic interpretation (LLM) and determini
 - **Dimensionality Reduction**: Principal Component Analysis (PCA).
 - **Clustering**: Agglomerative clustering.
 - **Centroid Calculation**: Mean vector and cosine distance operations.
+- **Taxonomic Resolution Mapping**: Deterministic dictionary string replacement.
 - **Graph Construction**: Managing nodes, edges, and cumulative weights.
 - **Spectral Graph Mathematics**: Computing the hypergraph Incidence Matrix ($H$) and Laplacian ($L$).
 - **Community Detection**: Executing the Leiden algorithm to find partitions.
