@@ -38,7 +38,7 @@ class SynthesisEngine:
         os.makedirs(self.output_dir, exist_ok=True)
         logger.info("Synthesis Engine Initialized natively.")
 
-    async def generate_schemas(self, hierarchy: Dict[str, Dict[str, Any]], master_domain: str) -> Dict[str, GeneratedSchema]:
+    async def generate_schemas(self, hierarchy: Dict[str, Dict[str, Any]], master_domain: str, theme_inheritance_map: Dict[str, List[str]] = None) -> Dict[str, GeneratedSchema]:
         """
         Iterates over mapped communities and uses the LLM to generate Pydantic schemas and Python code from the graph structure.
         """
@@ -57,7 +57,12 @@ class SynthesisEngine:
                 "relationships": edge_strings
             }
             
+            inheritance_guidelines = "No strict inheritance detected. Default to BaseModel."
+            if theme_inheritance_map:
+                inheritance_guidelines = f"Global Theme Inheritance Map (Subclass -> Parent): {json.dumps(theme_inheritance_map)}\nIf this community represents a subclassed theme, generate Protocol interfaces to implement the inheritance dynamically."
+            
             user_msg = prompts.PYDANTIC_CODE_GEN_USER_PROMPT.format(
+                inheritance_guidelines=inheritance_guidelines,
                 community_graph_json=json.dumps(context, indent=2)
             )
             
@@ -101,9 +106,11 @@ class SynthesisEngine:
         
         for k, schema in resolved_schemas.items():
             output_payload[k] = schema.model_dump()
-            if schema.python_code:
+            if schema.protocols_code:
+                python_blocks.append(f"### Protocols/Interfaces for Community: {schema.title} ###\n{schema.protocols_code}\n\n")
+            if schema.concrete_models_code:
                 # Provide functional demarcations per generated mathematical community natively
-                python_blocks.append(f"### Code for Community: {schema.title} ###\n{schema.python_code}\n\n")
+                python_blocks.append(f"### Concrete Models for Community: {schema.title} ###\n{schema.concrete_models_code}\n\n")
             
         file_path = os.path.join(self.output_dir, "semantic_prism_master_graph.json")
         py_file_path = os.path.join(self.output_dir, "semantic_models.py")
@@ -114,7 +121,7 @@ class SynthesisEngine:
             
             if python_blocks:
                 with open(py_file_path, 'w', encoding='utf-8') as f:
-                    f.write('from pydantic import BaseModel, Field\nfrom typing import List, Optional\n\n')
+                    f.write('from pydantic import BaseModel, Field\nfrom typing import List, Optional, Protocol, Any\nimport abc\n\n')
                     f.write("\n".join(python_blocks))
                 logger.info(f"Pydantic Python Schemas brilliantly dynamically structurally successfully mapped to {py_file_path}")
                 

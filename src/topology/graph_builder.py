@@ -51,7 +51,7 @@ class TopologyEngine:
         logger.info(f"Topological Map completely mapped explicitly structurally natively. Nodes: {G.number_of_nodes()}, Edges: {G.number_of_edges()}")
         return G
 
-    def detect_communities(self, graph: nx.DiGraph) -> Dict[str, int]:
+    def detect_communities(self, graph: nx.DiGraph, resolution: float = 1.0) -> Dict[str, int]:
         """
         Uses the Leiden algorithm to compute modularity clusters for the directed graph, returning a mapping of nodes to community IDs.
         """
@@ -75,8 +75,9 @@ class TopologyEngine:
                 
             partition_result = leidenalg.find_partition(
                 ig_graph, 
-                leidenalg.ModularityVertexPartition, 
-                weights='weight' if weights else None
+                leidenalg.RBConfigurationVertexPartition, 
+                weights='weight' if weights else None,
+                resolution_parameter=resolution
             )
             
             partition = {}
@@ -90,7 +91,7 @@ class TopologyEngine:
             logger.warning(f"Mathematical structural evaluation aborted organically securely intrinsically. {e}")
             return {node: 0 for node in graph.nodes()}
 
-    def extract_hierarchy(self, graph: nx.DiGraph, partition: Dict[str, int]) -> Dict[str, Dict[str, Any]]:
+    def extract_hierarchy(self, graph: nx.DiGraph, partition: Dict[str, int], min_size: int = 1) -> Dict[str, Dict[str, Any]]:
         """
         Parses the graph and the detected communities to build a hierarchical dictionary containing nodes, edges, and subgraphs for each community.
         """
@@ -119,9 +120,16 @@ class TopologyEngine:
                 hierarchy[comm_key]["edges"].append(edge_data)
                 hierarchy[comm_key]["sub_graph"].add_edge(u, v, **data)
                 
-        return hierarchy
+        filtered_hierarchy = {}
+        for comm_key, comm_data in hierarchy.items():
+            if len(comm_data["nodes"]) >= min_size:
+                filtered_hierarchy[comm_key] = comm_data
+            else:
+                logger.info(f"Pruning micro-community {comm_key} natively mathematically (size {len(comm_data['nodes'])} < {min_size}).")
+                
+        return filtered_hierarchy
 
-    def build_hypergraph_topology(self, triples: List[RawTriple]) -> Dict[str, Any]:
+    def build_hypergraph_topology(self, triples: List[RawTriple], overlap_threshold: float = 0.80) -> Dict[str, Any]:
         """
         Implements: 1. Identity Guard, 2. N-ary Grouping, 
         3. Spectral Math (H & L) based on the bipartite hyperedge logic.
@@ -175,13 +183,29 @@ class TopologyEngine:
         Dv = np.diag(np.sum(H, axis=1))
         L = Dv - np.dot(H, H.T)
 
+        # --- Step 4: Theme Overlap Matrix (O = H^T * H) ---
+        O = np.dot(H.T, H)
+        theme_inheritance_map = defaultdict(list)
+        
+        # Calculate Subsets/Inheritance based on the overlap threshold
+        for i, theme_a in enumerate(themes_sorted):
+            for j, theme_b in enumerate(themes_sorted):
+                if i != j:
+                    shared_nodes = O[i, j]
+                    total_b = O[j, j]  # Total nodes in theme_b
+                    
+                    if total_b > 0 and (shared_nodes / total_b) >= overlap_threshold:
+                        # Theme B overlaps >85% with Theme A -> Theme B subclasses/inherits Theme A
+                        theme_inheritance_map[theme_a].append(theme_b)
+
         return {
             "B": B,
             "H": H, 
             "L": L, 
             "entities": len(entities_sorted), 
             "themes": len(themes_sorted),
-            "entity_neighborhoods": dict(entity_neighborhoods)
+            "entity_neighborhoods": dict(entity_neighborhoods),
+            "theme_inheritance_map": dict(theme_inheritance_map)
         }
 
     def visualize_hypergraph(self, B: nx.Graph, output_dir: str = "outputs/05_topology") -> str:

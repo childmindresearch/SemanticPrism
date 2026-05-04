@@ -7,26 +7,23 @@ pipeline:
 
 llm:
   verbose: true
-  connection_protocol: "sdk"      # "sdk" (Instructor/OpenAI bindings) or "http" (raw requests)
   context_source: "dynamic"       # "dynamic" (auto calculate via manager) or "config" (static map)
   fixed_num_ctx: 8192
-  manage_vram: true               # Actively purges and drops active model bindings safely.
+  manage_vram: true              # Actively purges and drops active model bindings safely.
 
-  api_backend: "ollama"
-  base_url: "http://localhost:11434/v1"
-  api_key: "ollama"
-  model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
+  # api_backend: "ollama"
+  # base_url: "http://localhost:11434/v1"
+  # api_key: "ollama"
+  # #model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
+  # model_name: "huggingface.co/google/gemma-3-12b-it-qat-q4_0-gguf:latest"
   
-  # api_backend: "vertexai"
-  # vertex_endpoint: "mg-endpoint-14588ae2-9669-44b8-be58-dc05b9e85526"
-  # model_name: "Qwen/Qwen3.5-35B-A3B-FP8"
-  # google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
-  # vertex_project: "607968988315"
-  # vertex_location: "us-central1"
-  
-  # api_backend: "litellm"
-  # model_name: "ollama/mistral-nemo" # Example proxy routing for LiteLLM
-  # base_url: "http://localhost:11434"
+  api_backend: "vertexai"
+  google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
+  vertex_project: "607968988315"
+  vertex_location: "us-central1"
+  vertex_endpoint: "mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8"
+  base_url: "https://mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8.us-central1-587318152446.prediction.vertexai.goog"
+
 
 extraction:
   domain: "Unknown"
@@ -35,14 +32,43 @@ extraction:
 
 refinement:
   embedding_model: "all-MiniLM-L6-v2"
+  
+  # Cosine Distance tolerance for Agglomerative Clustering (0.0 to 2.0). 
+  # 0.05 = Extremely strict (only perfect synonyms merge)
+  # 0.15 = Strict (~85% conceptual overlap required)
+  # 0.40 = Loose (merges loosely related concepts)
   similarity_threshold: 0.15
+  
   compression_mode: "isolated"
   compress_fields: 
     - "subject"
     - "object"
+    - "predicate"
+  
+  # PCA Dimensionality Reduction target (0.0 to 1.0).
+  # Controls how much original semantic information is preserved when compressing math vectors.
+  # 0.80 = Aggressive compression (faster clustering, loses semantic nuance)
+  # 0.95 = High fidelity (preserves 95% of variance, excellent balance)
+  # 0.99 = Minimal compression (preserves nearly all nuance, slower math)
   spectral_variance_retention: 0.95
   hypernym_resolution: "semantic_centroid"
   community_detection: "louvain"
+
+topology:
+  # The minimum percentage of nodes that must overlap between two themes 
+  # for one to mathematically inherit from the other (e.g., 0.80 = 80% overlap).
+  inheritance_overlap_threshold: 0.80
+  
+  # Resolution parameter for the Leiden algorithm (RBConfigurationVertexPartition).
+  # Controls the granularity of the detected communities.
+  # 1.0 = Default modularity behavior.
+  # < 1.0 = Produces fewer, larger communities (e.g., 0.5 merges smaller clusters).
+  # > 1.0 = Produces many small, highly granular communities.
+  leiden_resolution: 1.0
+  
+  # The minimum number of nodes a community must have to be processed for schema synthesis.
+  # If a detected cluster has fewer nodes than this threshold, it is considered a "micro-community" and pruned.
+  min_community_size: 4
 
 output:
   schemas_dir: "outputs/schemas"

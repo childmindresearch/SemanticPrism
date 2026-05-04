@@ -9,6 +9,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="google.api_cor
 from src.core.logger import get_logger
 from src.llm.local_llm import LocalLLMProvider
 from src.llm.public_llm import PublicLLMProvider
+from pydantic_ai import Agent
 
 logger = get_logger("SemanticLLMClient")
 
@@ -45,36 +46,20 @@ class SemanticLLMClient:
         
         if self.verbose:
             provider_type = "public" if self.backend == 'vertexai' else "local"
-            print(f"[LLM Diagnostic] Type: {provider_type} | Model: {self.provider.model_name} | Context: {actual_ctx} | Protocol: {self.connection_protocol} ({self.backend})")
+            print(f"[LLM Diagnostic] Type: {provider_type} | Model: {self.provider.model_name} | Context: {actual_ctx} | Native Pydantic AI")
         
         try:
-            if self.connection_protocol == "http" and self.backend != 'vertexai':
-                result = await asyncio.to_thread(self.provider.execute_http_raw, system_prompt, user_prompt, response_model, actual_ctx)
-            elif self.connection_protocol == "http" and self.backend == 'vertexai':
-                result = await asyncio.to_thread(self.provider.execute_http_raw, system_prompt, user_prompt, response_model)
-            else:
-                client = self.provider.get_async_client()
-                
-                kwargs = {"max_retries": 3,
-                    "model": self.provider.model_name,
-                    "response_model": response_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ]
-                }
-                
-                if self.backend == 'ollama':
-                    kwargs['extra_body'] = {"options": {"num_ctx": actual_ctx}}
-                    
-                result = await client.chat.completions.create(**kwargs)
+            model = self.provider.get_model()
+            agent = Agent(model, system_prompt=system_prompt, output_type=response_model, retries=3)
+            
+            result = await agent.run(user_prompt)
                 
             if hasattr(self.provider, 'release_vram'):
                 self.provider.release_vram()
-            return result
+            return result.output
         except Exception as e:
             self.error_history.append(str(e))
-            logger.error(f"Instructor API Execution failed: {e}")
+            logger.error(f"Pydantic AI Execution failed: {e}")
             if hasattr(self.provider, 'release_vram'):
                 self.provider.release_vram()
             return None
@@ -87,36 +72,20 @@ class SemanticLLMClient:
         
         if self.verbose:
             provider_type = "public" if self.backend == 'vertexai' else "local"
-            print(f"[LLM Diagnostic] Type: {provider_type} | Model: {self.provider.model_name} | Context: {actual_ctx} | Protocol: {self.connection_protocol} ({self.backend})")
+            print(f"[LLM Diagnostic] Type: {provider_type} | Model: {self.provider.model_name} | Context: {actual_ctx} | Native Pydantic AI")
         
         try:
-            if self.connection_protocol == "http" and self.backend != 'vertexai':
-                result = self.provider.execute_http_raw(system_prompt, user_prompt, response_model, actual_ctx)
-            elif self.connection_protocol == "http" and self.backend == 'vertexai':
-                result = self.provider.execute_http_raw(system_prompt, user_prompt, response_model)
-            else:
-                client = self.provider.get_sync_client()
-                
-                kwargs = {"max_retries": 3,
-                    "model": self.provider.model_name,
-                    "response_model": response_model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt}
-                    ]
-                }
-                
-                if self.backend == 'ollama':
-                    kwargs['extra_body'] = {"options": {"num_ctx": actual_ctx}}
-                    
-                result = client.chat.completions.create(**kwargs)
+            model = self.provider.get_model()
+            agent = Agent(model, system_prompt=system_prompt, output_type=response_model, retries=3)
+            
+            result = agent.run_sync(user_prompt)
                 
             if hasattr(self.provider, 'release_vram'):
                 self.provider.release_vram()
-            return result
+            return result.output
         except Exception as e:
             self.error_history.append(str(e))
-            logger.error(f"Instructor API Execution failed: {e}")
+            logger.error(f"Pydantic AI Execution failed: {e}")
             if hasattr(self.provider, 'release_vram'):
                 self.provider.release_vram()
             return None

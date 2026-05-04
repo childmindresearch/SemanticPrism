@@ -3,7 +3,6 @@ import json
 import logging
 import httpx
 from openai import AsyncOpenAI, OpenAI
-import instructor
 
 from src.core.logger import get_logger
 
@@ -108,7 +107,6 @@ class PublicLLMProvider:
         self.model_name = "google-vertex-model"
         self.base_url = None
         self.api_key = "dummy_key"
-        self.instructor_mode = instructor.Mode.JSON_SCHEMA
         self._initialize_vertex()
 
     def _get_vertex_token(self) -> str:
@@ -167,69 +165,17 @@ class PublicLLMProvider:
                 
             self.api_key = self._get_vertex_token()
 
-    def get_sync_client(self):
-        logger.debug("Initializing Synchronous Public SDK Client (VertexAI).")
-        http_client = httpx.Client(transport=VertexTransport(self.api_key))
-        return instructor.from_openai(
-            OpenAI(base_url=self.base_url, api_key=self.api_key, http_client=http_client),
-            mode=self.instructor_mode
-        )
-
-    def get_async_client(self):
-        logger.debug("Initializing Asynchronous Public SDK Client (VertexAI).")
+    def get_model(self):
+        logger.debug("Initializing Public Pydantic AI Model (VertexAI tunnel).")
+        # Utilize the custom httpx transport to intercept and translate OpenAI payload format to Vertex AI
         http_client = httpx.AsyncClient(transport=AsyncVertexTransport(self.api_key))
-        return instructor.from_openai(
-            AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, http_client=http_client),
-            mode=self.instructor_mode
-        )
-
-    def execute_http_raw(self, system_prompt: str, user_prompt: str, response_model):
-        import urllib.request
-        logger.debug("Executing raw native Vertex AI sequence via OpenAI-compatible REST tunnel.")
         
-        schema_format = response_model.model_json_schema()
-        custom_system = f"{system_prompt}\n\nCRITICAL: Your output MUST be a valid, populated JSON INSTANCE that strictly conforms to the following JSON Schema. Do NOT output the schema definition itself (no $defs, type declarations, etc.). Only output the factual JSON data:\n{json.dumps(schema_format)}"
+        # Instantiate OpenAI async client wrapping the custom transport
+        client = AsyncOpenAI(base_url=self.base_url, api_key=self.api_key, http_client=http_client)
         
-        endpoint = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.model_name,
-            "messages": [
-                {"role": "system", "content": custom_system},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": 0.1,
-            "max_tokens": 4096,
-            "stream": False
-        }
+        # Return the Pydantic AI model
+        from pydantic_ai.models.openai import OpenAIModel
+        from pydantic_ai.providers.openai import OpenAIProvider
         
-        data = json.dumps(payload).encode('utf-8')
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.api_key}'
-        }
-        
-        req = urllib.request.Request(endpoint, data=data, headers=headers)
-        
-        try:
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                if "choices" in result and len(result["choices"]) > 0:
-                    content = result["choices"][0]["message"]["content"]
-                    
-                    import re
-                    match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', content, re.DOTALL)
-                    if match:
-                        clean_json = match.group(1)
-                    else:
-                        content = content.strip()
-                        start_idx = content.find('{')
-                        end_idx = content.rfind('}')
-                        if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
-                            clean_json = content[start_idx:end_idx+1]
-                        else:
-                            clean_json = content
-                            
-                    return response_model.model_validate_json(clean_json)
-        except Exception as e:
-            logger.error(f"Vertex HTTP Raw Execution failed securely: {e}")
-            return None
+        provider = OpenAIProvider(openai_client=client)
+        return OpenAIModel(self.model_name, provider=provider)

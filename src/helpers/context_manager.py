@@ -20,8 +20,9 @@ class ContextManager:
     def __init__(self, model_name: str):
         self.model_name = model_name
         self.vram_free_mb = self._get_native_vram()
-        self.ram_free_mb = self._get_native_ram()
-        logger.info(f"Initialized ContextManager - VRAM Free: {self.vram_free_mb} MB, RAM Free: {self.ram_free_mb} MB")
+        # self.ram_free_mb = self._get_native_ram()
+        # logger.info(f"Initialized ContextManager - VRAM Free: {self.vram_free_mb} MB, RAM Free: {self.ram_free_mb} MB")
+        logger.info(f"Initialized ContextManager - VRAM Free: {self.vram_free_mb} MB")
 
     def _get_native_vram(self) -> int:
         """
@@ -45,30 +46,30 @@ class ContextManager:
             logger.warning(f"Native VRAM check failed securely: {e}. Defaulting VRAM to 0 MB.")
             return 0
 
-    def _get_native_ram(self) -> int:
-        """
-        Reads native Linux /proc/meminfo securely to calculate free memory.
-        """
-        try:
-            with open('/proc/meminfo', 'r') as f:
-                lines = f.readlines()
-            
-            mem_free = 0
-            mem_available = 0
-            
-            for line in lines:
-                if line.startswith('MemFree:'):
-                    mem_free = int(line.split()[1]) // 1024  # Convert kB to MB
-                elif line.startswith('MemAvailable:'):
-                    mem_available = int(line.split()[1]) // 1024
-            
-            # Prefer MemAvailable as it is the most functionally accurate metric natively
-            if mem_available > 0:
-                return mem_available
-            return mem_free
-        except Exception as e:
-            logger.warning(f"Native RAM check securely failed: {e}. Defaulting RAM to 0 MB.")
-            return 0
+    # def _get_native_ram(self) -> int:
+    #     """
+    #     Reads native Linux /proc/meminfo securely to calculate free memory.
+    #     """
+    #     try:
+    #         with open('/proc/meminfo', 'r') as f:
+    #             lines = f.readlines()
+    #         
+    #         mem_free = 0
+    #         mem_available = 0
+    #         
+    #         for line in lines:
+    #             if line.startswith('MemFree:'):
+    #                 mem_free = int(line.split()[1]) // 1024  # Convert kB to MB
+    #             elif line.startswith('MemAvailable:'):
+    #                 mem_available = int(line.split()[1]) // 1024
+    #         
+    #         # Prefer MemAvailable as it is the most functionally accurate metric natively
+    #         if mem_available > 0:
+    #             return mem_available
+    #         return mem_free
+    #     except Exception as e:
+    #         logger.warning(f"Native RAM check securely failed: {e}. Defaulting RAM to 0 MB.")
+    #         return 0
 
     def calculate_safe_bounds(self, default_chunk_words: int = 6000) -> int:
         """

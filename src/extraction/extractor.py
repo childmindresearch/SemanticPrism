@@ -14,7 +14,7 @@ from src.extraction.schemas import (
 )
 from src.core.chunking import chunk_text
 from src.core.logger import get_logger
-from src.helpers.context_manager import ContextManager
+# from src.helpers.context_manager import ContextManager
 import src.extraction.prompts as prompts
 from src.llm.llm_client import SemanticLLMClient
 

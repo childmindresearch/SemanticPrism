@@ -1,7 +1,5 @@
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
-from enum import Enum
-
 class Theme(BaseModel):
     """Represents an isolated, high-level structural theme."""
     title: str = Field(description="The formal title of the extracted theme.")
@@ -30,14 +28,6 @@ class MasterThemeSynthesisResult(BaseModel):
         }
     }
 
-class RelationshipType(Enum):
-    """Categorizes the link to improve graph traversal."""
-    ACTION = "action"
-    PROPERTY = "property" # e.g., Color, Size
-    MEMBERSHIP = "membership" # e.g., "is a", "part of"
-    SPATIAL = "spatial" # e.g., "located in"
-    TEMPORAL = "temporal" # e.g., "occurred during"
-    OTHER = "other"
 
 class RawTriple(BaseModel):
     """
@@ -47,7 +37,6 @@ class RawTriple(BaseModel):
     subject: str = Field(..., description="The exact source entity exactly as it appears in the source text. Do not modify the casing or format.")
     predicate: str = Field(..., description="The exact relationship verb or linking phrase exactly as it appears in the source text. Do not use snake_case.")
     object: str = Field(..., description="The exact target entity or attribute value exactly as it appears in the source text. Do not modify the casing or format.")
-    relationship_kind: RelationshipType = Field(default=RelationshipType.OTHER, description="The semantic category of the predicate.")
     source_quote: str = Field(..., description="The exact snippet from the text that proves this relationship exists.")
     certainty_score: float = Field(ge=0, le=1, description="Confidence score: 1.0 for explicit facts, 0.5 for inferred.")
     theme_association: Optional[str] = Field(default="Other", description="The theme this triple most closely aligns with, if any.")

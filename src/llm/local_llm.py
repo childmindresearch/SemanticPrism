@@ -1,12 +1,62 @@
 import json
 import logging
 import urllib.request
-import instructor
-
+import httpx
 from src.core.logger import get_logger
 from src.helpers.context_manager import ContextManager
+from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.providers.ollama import OllamaProvider
+from src.llm.model_profiles import get_model_profile
 
 logger = get_logger("LocalLLMProvider")
+
+class AsyncOllamaTransport(httpx.AsyncBaseTransport):
+    """
+    HTTP Interceptor (Transport Hook)
+    ---------------------------------
+    Pydantic AI generates OpenAI-compliant payloads where an AI tool call is accompanied
+    by a `content: null` block. Ollama's underlying Go parser strictly rejects `null` (or `<nil>`) 
+    in favor of an empty string `""`. 
+    
+    This interceptor catches the outbound HTTP payload nanoseconds before it leaves the application,
+    scans the message array, and natively patches any `null` contents into `""` if tool calls are present.
+    This provides total framework immunity without modifying brittle site-packages.
+    """
+    def __init__(self, fallback_transport: httpx.AsyncBaseTransport = None):
+        self._fallback_transport = fallback_transport or httpx.AsyncHTTPTransport()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        # Only intercept JSON payloads heading out to the LLM
+        if request.content and request.headers.get("content-type") == "application/json":
+            try:
+                body = json.loads(request.content)
+                modified = False
+                
+                # Iterate through the history/messages looking for the `<nil>` bug trigger
+                if "messages" in body:
+                    for msg in body["messages"]:
+                        # If any message natively passes `content: null` or omits it entirely, force it to `""`
+                        if msg.get("content") is None:
+                            msg["content"] = ""
+                            modified = True
+                            
+                # If we mutated the payload, we must rebuild the HTTP Request object natively
+                if modified:
+                    new_content = json.dumps(body).encode("utf-8")
+                    request = httpx.Request(
+                        method=request.method,
+                        url=request.url,
+                        headers=request.headers,
+                        content=new_content
+                    )
+                    # Reset the Content-Length to match our new payload size securely
+                    request.headers["content-length"] = str(len(new_content))
+                    
+            except Exception as e:
+                # If JSON parsing fails, fail open and just send the raw request
+                logger.debug(f"AsyncOllamaTransport parsing bypass: {e}")
+                
+        return await self._fallback_transport.handle_async_request(request)
 
 class LocalLLMProvider:
     def __init__(self, config):
@@ -17,10 +67,7 @@ class LocalLLMProvider:
         self.model_name = self.config['llm']['model_name']
         self.manage_vram = self.config['llm'].get('manage_vram', False)
         
-        if self.backend == 'ollama':
-            self.instructor_mode = instructor.Mode.JSON
-        else:
-            self.instructor_mode = instructor.Mode.TOOLS
+        # Legacy instructor mode tracking removed
 
         self.context_source = self.config['llm'].get('context_source', 'dynamic')
         self.fixed_num_ctx = self.config['llm'].get('fixed_num_ctx', 8192)
@@ -36,10 +83,25 @@ class LocalLLMProvider:
         return self.fixed_num_ctx
 
     def release_vram(self):
+        # 1. First, surgically close the Pydantic AI connection pool that is locking Ollama natively
+        if hasattr(self, 'active_client') and self.active_client:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self.active_client.aclose())
+                else:
+                    loop.run_until_complete(self.active_client.aclose())
+            except Exception as e:
+                logger.debug(f"Bypassed active client teardown natively: {e}")
+            finally:
+                self.active_client = None
+
+        # 2. If config has manage_vram disabled, we stop here.
         if not self.manage_vram or self.backend != 'ollama':
             return
             
-        logger.debug("Executing manual GPU memory flush.")
+        logger.debug("Executing manual GPU memory flush natively.")
         
         endpoint = self.base_url.replace('/v1', '/api/generate') if '/v1' in self.base_url else "http://localhost:11434/api/generate"
         payload = {"model": self.model_name, "keep_alive": 0}
@@ -52,54 +114,15 @@ class LocalLLMProvider:
         except Exception as e:
             logger.warning(f"VRAM clear structurally bypassed: {e}")
 
-    def get_sync_client(self):
-        logger.debug(f"Initializing Synchronous Local SDK Client ({self.backend}).")
-        if self.backend == 'litellm':
-            import litellm
-            return instructor.from_litellm(litellm.completion, mode=self.instructor_mode)
-            
-        return instructor.from_provider(
-            f"ollama/{self.model_name}",
-            mode=self.instructor_mode,
-            base_url=self.base_url
-        )
-
-    def get_async_client(self):
-        logger.debug(f"Initializing Asynchronous Local SDK Client ({self.backend}).")
-        if self.backend == 'litellm':
-            import litellm
-            return instructor.from_litellm(litellm.acompletion, mode=self.instructor_mode)
-            
-        return instructor.from_provider(
-            f"ollama/{self.model_name}",
-            mode=self.instructor_mode,
-            base_url=self.base_url,
-            async_client=True
-        )
-
-    def execute_http_raw(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int):
-        logger.debug("Executing raw native HTTP sequence.")
+    def get_model(self):
+        logger.debug(f"Initializing Local Pydantic AI Model ({self.backend}).")
         
-        schema_format = response_model.model_json_schema()
-        custom_system = f"{system_prompt}\n\nCRITICAL: Your output MUST be a valid, populated JSON INSTANCE that strictly conforms to the following JSON Schema. Do NOT output the schema definition itself (no $defs, type declarations, etc.). Only output the factual JSON data:\n{json.dumps(schema_format)}"
+        # Instantiate the custom interceptor to protect against Ollama <nil> bugs
+        # Store it on `self` so we can securely close it inside `release_vram`
+        self.active_client = httpx.AsyncClient(transport=AsyncOllamaTransport(), timeout=httpx.Timeout(200.0))
+        provider = OllamaProvider(base_url=self.base_url, http_client=self.active_client)
         
-        endpoint = self.base_url.replace('/v1', '/api/generate') if '/v1' in self.base_url else "http://localhost:11434/api/generate"
-        payload = {
-            "model": self.model_name,
-            "prompt": f"{custom_system}\n\n{user_prompt}",
-            "options": {"num_ctx": num_ctx},
-            "format": "json",
-            "stream": False
-        }
-        
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(endpoint, data=data, headers={'Content-Type': 'application/json'})
-        
-        try:
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                if "response" in result:
-                    return response_model.model_validate_json(result["response"])
-        except Exception as e:
-            logger.error(f"HTTP Raw Execution failed securely returning None map: {e}")
-            return None
+        profile = get_model_profile(self.model_name)
+        if profile:
+            return OllamaModel(self.model_name, provider=provider, profile=profile)
+        return OllamaModel(self.model_name, provider=provider)
