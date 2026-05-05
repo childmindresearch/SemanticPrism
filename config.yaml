@@ -19,11 +19,11 @@ llm:
   # model_name: "huggingface.co/google/gemma-3-12b-it-qat-q4_0-gguf:latest"
   
   #api_backend: "vertexai"
-  #google_credentials_path: "keys/knowledgeontology-1c9b2932ef2d.json"
-  #vertex_project: "607968988315"
+  #google_credentials_path: ""
+  #vertex_project: ""
   #vertex_location: "us-central1"
-  #vertex_endpoint: "mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8"
-  #base_url: "https://mg-endpoint-c0d902ec-159b-4f6b-8da8-0b4092845bf8.us-central1-587318152446.prediction.vertexai.goog"
+  #vertex_endpoint: ""
+  #base_url: ""
 
 
 extraction:
