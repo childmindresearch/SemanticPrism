@@ -9,6 +9,7 @@ import asyncio
 import os
 import json
 import time
+import csv
 from datetime import datetime
 from typing import Dict, Any, List
 import yaml
@@ -28,6 +29,7 @@ logger = get_logger("SemanticPrismOrchestrator")
 class SemanticPrismOrchestrator:
     def __init__(self, config_path: str = "config.yaml"):
         logger.info("Initializing Master Pipeline Orchestrator.")
+        self.config_path = config_path
         self.extractor = ExtractionPipeline(config_path)
         self.embedder = EmbeddingPipeline(config_path)
         self.hypernyms = HypernymPipeline(config_path)
@@ -51,15 +53,16 @@ class SemanticPrismOrchestrator:
         except Exception as e:
             logger.warning(f"Failed parsing natively to write state to {filepath}: {e}")
 
-    async def execute_knowledge_pipeline(self, documents: List[str]) -> str:
+    async def execute_knowledge_pipeline(self, documents: List[Dict[str, str]]) -> str:
         """
-        Executes the explicit linear logic sequence parsing multiple text matrices.
-        Returns the absolute filepath to the finalized semantic master map JSON.
+        Executes the explicit linear logic sequence parsing multiple text matrices in parallel.
+        Accepts documents in structured format: [{'filename': ..., 'text': ...}]
+        Returns the absolute filepath to the finalized semantic master models file.
         """
         start_time = time.time()
         start_datetime = datetime.now()
         pipeline_errors = []
-        doc_lengths = [len(doc) for doc in documents]
+        doc_lengths = [len(doc["text"]) for doc in documents]
         
         original_subjs = set()
         original_preds = set()
@@ -72,6 +75,15 @@ class SemanticPrismOrchestrator:
         master_context = None
         raw_triples = []
         file_path = ""
+        
+        # Initialize telemetry tracking
+        extraction_telemetry = {
+            doc["filename"]: {
+                "theme_extraction": "Failed/Null",
+                "triple_extraction": "Failed/Null"
+            }
+            for doc in documents
+        }
         
         def _dump_current_log():
             all_errors = pipeline_errors.copy()
@@ -113,25 +125,52 @@ class SemanticPrismOrchestrator:
             logger.info("STAGE 1: LLM EXTRACTION & THEME CONSOLIDATION")
             logger.info("==================================================")
             
-            for idx, text in enumerate(documents):
-                logger.info(f"Processing themes for document {idx + 1}/{len(documents)}")
-                themes = await self.extractor.discover_themes(text)
+            # 1.A: Parallel Theme Discovery
+            logger.info(f"Discovering theme nodes concurrently for {len(documents)} documents...")
+            async def safe_discover_themes(doc):
+                try:
+                    theme_results = await self.extractor.discover_themes(doc["text"])
+                    extraction_telemetry[doc["filename"]]["theme_extraction"] = "Success"
+                    return theme_results
+                except Exception as e:
+                    logger.error(f"Theme extraction failed for {doc['filename']}: {e}")
+                    return []
+
+            theme_tasks = [safe_discover_themes(doc) for doc in documents]
+            theme_results = await asyncio.gather(*theme_tasks)
+            
+            for themes in theme_results:
                 all_themes.extend(themes)
             
             self._save_state(all_themes, "outputs/01_extraction/original_themes.json")
         
+            # 1.B: Master Theme Synthesis
+            logger.info("Consolidating theme lists to identify master global domain...")
             weighted_string = self.extractor.weight_themes(all_themes)
             master_context = await self.extractor.consolidate_themes(weighted_string)
+            master_domain = master_context.master_domain if master_context else "General Complex Logic"
             self._save_state(master_context, "outputs/01_extraction/distilled_themes.json")
+            logger.info(f"🎯 Master Domain Distilled: {master_domain}")
             _dump_current_log()
         
-            master_domain = master_context.master_domain if master_context else "General"
-        
-            raw_triples = []
-            for idx, text in enumerate(documents):
-                logger.info(f"Processing triples for document {idx + 1}/{len(documents)}")
-                triples = await self.extractor.extract_triples(text, master_context)
-                raw_triples.extend(triples)
+            # 1.C: Parallel Logical Triple Extraction (SVO)
+            logger.info("Extracting logical triples concurrently...")
+            async def safe_extract_triples(doc, context):
+                try:
+                    triples = await self.extractor.extract_triples(doc["text"], context)
+                    for trip in triples:
+                        trip.source_document = doc["filename"]
+                    extraction_telemetry[doc["filename"]]["triple_extraction"] = "Success"
+                    return triples
+                except Exception as e:
+                    logger.error(f"Triple extraction failed for {doc['filename']}: {e}")
+                    return []
+
+            triple_tasks = [safe_extract_triples(doc, master_context) for doc in documents]
+            triple_results = await asyncio.gather(*triple_tasks)
+            
+            for trips in triple_results:
+                raw_triples.extend(trips)
         
             if not raw_triples:
                 logger.warning("Pipeline terminated early. No logical triples discovered.")
@@ -139,35 +178,79 @@ class SemanticPrismOrchestrator:
             
             self._save_state(raw_triples, "outputs/01_extraction/original_triplets.json")
             self.visualizer.visualize_triples(raw_triples, "outputs/01_extraction/01_raw_triples_graph.html", "Phase 1: Raw Extractions")
+            
+            # Export extraction telemetry report to CSV
+            csv_path = "outputs/01_extraction/extraction_telemetry.csv"
+            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+            try:
+                with open(csv_path, mode="w", newline="", encoding="utf-8") as f:
+                    writer = csv.writer(f)
+                    writer.writerow(["document_name", "theme_extraction_status", "triple_extraction_status"])
+                    for doc_name, status in extraction_telemetry.items():
+                        writer.writerow([
+                            os.path.basename(doc_name),
+                            status["theme_extraction"],
+                            status["triple_extraction"]
+                        ])
+                logger.info(f"Extraction telemetry CSV report saved to: {csv_path}")
+            except Exception as e:
+                logger.error(f"Failed to export extraction telemetry CSV: {e}")
         
             original_subjs = {t.subject for t in raw_triples}
             original_preds = {t.predicate for t in raw_triples}
             original_objs = {t.object for t in raw_triples}
         
-            # New Phase 2.5 block
-            normalized_triples, norm_subjs, norm_preds, norm_objs = await execute_normalization_phase(
-                self.extractor,
-                raw_triples,
-                master_domain,
-                self._save_state
-            )
+            # 1.D: Text Normalization
+            logger.info("Executing NLP Lexical Normalization phase...")
+            try:
+                normalized_triples, norm_subjs, norm_preds, norm_objs = await execute_normalization_phase(
+                    self.extractor,
+                    raw_triples,
+                    master_domain,
+                    self._save_state
+                )
+            except Exception as e:
+                logger.error(f"Normalization phase failed, bypassing: {e}")
+                normalized_triples = raw_triples
+                norm_subjs, norm_preds, norm_objs = original_subjs, original_preds, original_objs
             _dump_current_log()
             
             logger.info("==================================================")
             logger.info("STAGE 2: OFFLINE EMBEDDING & MODULARITY PROPOSALS")
             logger.info("==================================================")
-            proposed_clusters = self.embedder.process_triples(normalized_triples)
-            self._save_state(proposed_clusters, "outputs/02_embedding/clusters_identified.json")
+            
+            # Theme-based Embedding Process
+            if all_themes and master_context:
+                logger.info("Executing theme-based embedding mapping...")
+                try:
+                    self.embedder.theme_based_embedding(all_themes, master_context)
+                except Exception as e:
+                    logger.error(f"Theme-based embedding failed: {e}")
+            else:
+                logger.warning("Skipping theme-based embedding: original themes or master context is missing.")
+                
+            # Triple Vector Clustering offloaded to a background thread
+            logger.info("Offloading heavy offline matrix computation to background thread...")
+            try:
+                proposed_clusters = await asyncio.to_thread(self.embedder.process_triples, normalized_triples)
+                self._save_state(proposed_clusters, "outputs/02_embedding/clusters_identified.json")
+            except Exception as e:
+                logger.error(f"Embedding processing failed: {e}")
+                proposed_clusters = []
             _dump_current_log()
         
             logger.info("==================================================")
             logger.info("STAGE 3: HYBRID HYPERNYM TAXONOMIC LIFTING")
             logger.info("==================================================")
-            verified_clusters = await self.hypernyms.validate_context_vectors(proposed_clusters, master_domain)
-            self._save_state(verified_clusters, "outputs/03_hypernym_lifting/verified_clusters.json")
-        
-            hypernym_mapping = await self.hypernyms.taxonomic_lift(verified_clusters, master_domain)
-            self._save_state(hypernym_mapping, "outputs/03_hypernym_lifting/hypernym_mapping.json")
+            try:
+                verified_clusters = await self.hypernyms.validate_context_vectors(proposed_clusters, master_domain)
+                self._save_state(verified_clusters, "outputs/03_hypernym_lifting/verified_clusters.json")
+            
+                hypernym_mapping = await self.hypernyms.taxonomic_lift(verified_clusters, master_domain)
+                self._save_state(hypernym_mapping, "outputs/03_hypernym_lifting/hypernym_mapping.json")
+            except Exception as e:
+                logger.error(f"Taxonomic hypernym lifting failed: {e}")
+                hypernym_mapping = {}
             _dump_current_log()
         
             logger.info("==================================================")
@@ -181,25 +264,65 @@ class SemanticPrismOrchestrator:
             logger.info("==================================================")
             logger.info("STAGE 5: TOPOLOGICAL GRAPH MATRICES")
             logger.info("==================================================")
-            graph = self.topology.build_graph(mapped_triples)
-            partition = self.topology.detect_communities(graph)
-            hierarchy = self.topology.extract_hierarchy(graph, partition)
-            self._save_state(partition, "outputs/05_topology/modularity_partition.json")
-            self._save_state(hierarchy, "outputs/05_topology/extracted_hierarchy.json")
-            self.visualizer.visualize_topology(graph, partition, "outputs/05_topology/03_topology_communities_graph.html", "Phase 5: Global Modularity Map")
-            
-            # --- Hypergraph Expansion ---
-            logger.info("Building N-ary Hypergraph Topology matrices")
-            hypergraph_res = self.topology.build_hypergraph_topology(mapped_triples)
-            self.topology.visualize_hypergraph(hypergraph_res["B"], "outputs/05_topology")
-            
+            try:
+                # Construct directed network graph
+                graph = self.topology.build_graph(mapped_triples)
+                
+                # Fetch Topology hyperparameters dynamically from config
+                overlap_threshold = 0.80
+                leiden_resolution = 1.0
+                min_community_size = 4
+                if os.path.exists(self.config_path):
+                    try:
+                        with open(self.config_path, "r") as f:
+                            cfg = yaml.safe_load(f)
+                            overlap_threshold = cfg.get("topology", {}).get("inheritance_overlap_threshold", 0.80)
+                            leiden_resolution = cfg.get("topology", {}).get("leiden_resolution", 1.0)
+                            min_community_size = cfg.get("topology", {}).get("min_community_size", 4)
+                    except Exception as ecf:
+                        logger.warning(f"Could not load custom topology parameters from config: {ecf}")
+
+                # Leiden Community Detection and Hierarchy extraction
+                partition = self.topology.detect_communities(graph, resolution=leiden_resolution)
+                hierarchy = self.topology.extract_hierarchy(graph, partition, min_size=min_community_size)
+                
+                self._save_state(partition, "outputs/05_topology/modularity_partition.json")
+                self._save_state(hierarchy, "outputs/05_topology/extracted_hierarchy.json")
+                self.visualizer.visualize_topology(graph, partition, "outputs/05_topology/03_topology_communities_graph.html", "Phase 5: Global Modularity Map")
+                
+                # Bipartite Hypergraph Topology expansion and spectral matrices
+                logger.info("Building N-ary Hypergraph Topology matrices")
+                hypergraph_res = self.topology.build_hypergraph_topology(mapped_triples, overlap_threshold=overlap_threshold)
+                self.topology.visualize_hypergraph(hypergraph_res["B"], "outputs/05_topology")
+                
+                hierarchy_export = {
+                    "entities_count": hypergraph_res["entities"],
+                    "themes_count": hypergraph_res["themes"],
+                    "theme_inheritance_map": hypergraph_res.get("theme_inheritance_map", {})
+                }
+                self._save_state(hierarchy_export, "outputs/05_topology/theme_inheritance_hierarchy.json")
+
+                spectral_export = {
+                    "H_matrix": hypergraph_res["H"].tolist(),
+                    "L_matrix": hypergraph_res["L"].tolist()
+                }
+                self._save_state(spectral_export, "outputs/05_topology/hypergraph_spectral_matrices.json")
+            except Exception as e:
+                logger.error(f"Topological graph analysis failed: {e}")
+                hypergraph_res = {}
+                hierarchy = {}
             _dump_current_log()
         
             logger.info("==================================================")
             logger.info("STAGE 6: GENERATIVE SCHEMA SYNTHESIS")
             logger.info("==================================================")
-            resolved_schemas = await self.synthesizer.generate_schemas(hierarchy, master_domain)
-            file_path = self.synthesizer.build_global_context(resolved_schemas)
+            try:
+                theme_inheritance_map = hypergraph_res.get("theme_inheritance_map", {})
+                resolved_schemas = await self.synthesizer.generate_schemas(hierarchy, master_domain, theme_inheritance_map)
+                file_path = self.synthesizer.build_global_context(resolved_schemas)
+            except Exception as e:
+                logger.error(f"Generative schema synthesis failed: {e}")
+                file_path = ""
             _dump_current_log()
         
             logger.info("==================================================")

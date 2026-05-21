@@ -2,14 +2,15 @@
 
 pipeline:
   use_async: true
-  max_concurrent_llm_calls: 3
+  max_concurrent_llm_calls: 2
   normalize_text: true
 
 llm:
   verbose: true
   context_source: "dynamic"       # "dynamic" (auto calculate via manager) or "config" (static map)
-  fixed_num_ctx: 8192
-  manage_vram: true              # Actively purges and drops active model bindings safely.
+  fixed_num_ctx: 8000
+  manage_vram: false              # Actively purges and drops active model bindings safely.
+  timeout_seconds: 600.0         # Connection timeout for concurrent LLM processing
 
   api_backend: "ollama"
   base_url: "http://localhost:11434/v1"
@@ -28,17 +29,17 @@ llm:
 
 extraction:
   domain: "Unknown"
-  theme_chunk_max_words: 8000
-  triple_chunk_max_words: 2500
+  theme_chunk_max_words: 6000
+  triple_chunk_max_words: 6000
 
 refinement:
-  embedding_model: "all-MiniLM-L6-v2"
+  embedding_model: "BAAI/bge-large-en-v1.5"
   
   # Cosine Distance tolerance for Agglomerative Clustering (0.0 to 2.0). 
   # 0.05 = Extremely strict (only perfect synonyms merge)
   # 0.15 = Strict (~85% conceptual overlap required)
   # 0.40 = Loose (merges loosely related concepts)
-  similarity_threshold: 0.15
+  similarity_threshold: 0.4
   
   compression_mode: "isolated"
   compress_fields: 
@@ -58,7 +59,7 @@ refinement:
 topology:
   # The minimum percentage of nodes that must overlap between two themes 
   # for one to mathematically inherit from the other (e.g., 0.80 = 80% overlap).
-  inheritance_overlap_threshold: 0.80
+  inheritance_overlap_threshold: 0.66
   
   # Resolution parameter for the Leiden algorithm (RBConfigurationVertexPartition).
   # Controls the granularity of the detected communities.
@@ -69,7 +70,7 @@ topology:
   
   # The minimum number of nodes a community must have to be processed for schema synthesis.
   # If a detected cluster has fewer nodes than this threshold, it is considered a "micro-community" and pruned.
-  min_community_size: 4
+  min_community_size: 8
 
 output:
   schemas_dir: "outputs/schemas"

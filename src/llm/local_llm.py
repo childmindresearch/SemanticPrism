@@ -66,6 +66,7 @@ class LocalLLMProvider:
         self.api_key = self.config['llm'].get('api_key', 'ollama')
         self.model_name = self.config['llm']['model_name']
         self.manage_vram = self.config['llm'].get('manage_vram', False)
+        self.timeout_seconds = float(self.config['llm'].get('timeout_seconds', 1800.0))
         
         # Legacy instructor mode tracking removed
 
@@ -77,27 +78,19 @@ class LocalLLMProvider:
         else:
             self.context_manager = None
 
-    def get_context_size(self, target_tokens: int = 8192) -> int:
+    def get_context_size(self, target_tokens: int = None) -> int:
+        if target_tokens is None:
+            target_tokens = self.fixed_num_ctx
+            
         if self.context_source == "dynamic" and self.context_manager:
             return self.context_manager.calculate_safe_bounds(target_tokens)
         return self.fixed_num_ctx
 
     def release_vram(self):
-        # 1. First, surgically close the Pydantic AI connection pool that is locking Ollama natively
-        if hasattr(self, 'active_client') and self.active_client:
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(self.active_client.aclose())
-                else:
-                    loop.run_until_complete(self.active_client.aclose())
-            except Exception as e:
-                logger.debug(f"Bypassed active client teardown natively: {e}")
-            finally:
-                self.active_client = None
+        # Note: We no longer forcefully close the HTTP client here because it is shared 
+        # across concurrent requests. Closing it would kill active parallel streams.
 
-        # 2. If config has manage_vram disabled, we stop here.
+        # If config has manage_vram disabled, we stop here.
         if not self.manage_vram or self.backend != 'ollama':
             return
             
@@ -117,10 +110,11 @@ class LocalLLMProvider:
     def get_model(self):
         logger.debug(f"Initializing Local Pydantic AI Model ({self.backend}).")
         
-        # Instantiate the custom interceptor to protect against Ollama <nil> bugs
-        # Store it on `self` so we can securely close it inside `release_vram`
-        self.active_client = httpx.AsyncClient(transport=AsyncOllamaTransport(), timeout=httpx.Timeout(200.0))
-        provider = OllamaProvider(base_url=self.base_url, http_client=self.active_client)
+        # Share a single persistent client with a massive timeout for concurrent queueing
+        if not hasattr(self, 'shared_client') or self.shared_client is None:
+            self.shared_client = httpx.AsyncClient(transport=AsyncOllamaTransport(), timeout=httpx.Timeout(self.timeout_seconds))
+            
+        provider = OllamaProvider(base_url=self.base_url, http_client=self.shared_client)
         
         profile = get_model_profile(self.model_name)
         if profile:

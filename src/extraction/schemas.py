@@ -6,6 +6,7 @@ class Theme(BaseModel):
     description: str = Field(description="A brief description of the theme.")
     reasoning: str = Field(description="Reasoning for classifying this as a critical theme.")
 
+
 class ThemeDiscoveryResult(BaseModel):
     """The aggregate output of the Theme Discovery phase."""
     themes: List[Theme] = Field(description="List of themes discovered in the text.")
@@ -40,6 +41,7 @@ class RawTriple(BaseModel):
     source_quote: str = Field(..., description="The exact snippet from the text that proves this relationship exists.")
     certainty_score: float = Field(ge=0, le=1, description="Confidence score: 1.0 for explicit facts, 0.5 for inferred.")
     theme_association: Optional[str] = Field(default="Other", description="The theme this triple most closely aligns with, if any.")
+    source_document: str = Field(default="Unknown", description="The original document file this triple was extracted from.")
 
     @field_validator('subject', 'predicate', 'object')
     @classmethod

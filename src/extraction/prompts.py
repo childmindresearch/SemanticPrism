@@ -6,9 +6,12 @@ Phase 1: Extraction processes via Instructor/Ollama.
 """
 
 THEME_DISCOVERY_SYSTEM_PROMPT = """You are an Ontological Concept Engine tasked with Phase 1: Theme Discovery.
-Your objective is to read the provided text and strictly discover the most critical underlying abstractions or structural 'forms' of information it represents, moving explicitly away from isolated specific subjects.
-For example, rather than mapping specific instances (e.g., Plato, Aristotle, Metaphysics, Logic) as distinct themes, you MUST map the broader systemic abstractions that govern them (e.g., 'Historical Philosophical Figures', 'Epistemological Methodology', 'Ontological Theory').
-Do not force finding themes if none exist, but accurately map as many relevant, abstract overarching categories as the depth of text naturally demands. The exact amount of categories should be fully dictated dynamically by the text's scale!
+Your objective is to read the provided text and strictly discover the most critical underlying abstractions or structural 'forms' of information it represents, moving explicitly away from isolated specific subjects and maintaining distinction across themes.
+Examples:
+1. Rather than mapping specific instances (e.g., Plato, Aristotle, Metaphysics, Logic) as distinct themes, you MUST map the broader systemic abstractions that govern them (e.g., 'Historical Philosophical Figures', 'Epistemological Methodology', 'Ontological Theory').
+2. Rather than mapping specific instances (e.g., Metformin, HbA1c testing, Type 2 Diabetes, Insulin resistance), you MUST map the broader systemic abstractions that govern them (e.g., 'Endocrine Metabolic Disorders', 'Pharmacotherapeutic Interventions', 'Biomarker Diagnostic Metrics').
+3. Rather than mapping specific instances (e.g., Phishing email, CrowdStrike sensor, Ransomware, ISO 27001 compliance), you MUST map the broader systemic abstractions that govern them (e.g., 'Threat Vector Vectors', 'Endpoint Telemetry Mechanisms', 'Malicious Payload Typologies', 'Information Security Governance Frameworks').
+Do not force finding themes if none exist, but accurately map as many relevant, abstract overarching categories as the depth of text naturally demands. Maintaining efficiency, the exact amount of categories should be dictated dynamically by the text's content.
 These themes will act as the macro-level ontological categories for downstream factual extraction.
 For each theme, provide its title, a brief description, and your reasoning as to why it is a critical class of information."""
 

@@ -14,7 +14,6 @@ from src.extraction.schemas import (
 )
 from src.core.chunking import chunk_text
 from src.core.logger import get_logger
-# from src.helpers.context_manager import ContextManager
 import src.extraction.prompts as prompts
 from src.llm.llm_client import SemanticLLMClient
 
@@ -163,15 +162,13 @@ class ExtractionPipeline:
                 res = await self.llm.safe_api_call_async(
                     prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT,
                     user_msg,
-                    TripleExtractionResult,
-                    num_ctx=8192
+                    TripleExtractionResult
                 )
             else:
                 res = self.llm.safe_api_call_sync(
                     prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT,
                     user_msg,
-                    TripleExtractionResult,
-                    num_ctx=8192
+                    TripleExtractionResult
                 )
                 
             if res is not None and res.triples:
@@ -207,15 +204,13 @@ class ExtractionPipeline:
                 res = await self.llm.safe_api_call_async(
                     prompts.LLM_PREPROCESSING_SYSTEM_PROMPT,
                     user_msg,
-                    NormalizedStrings,
-                    num_ctx=4096
+                    NormalizedStrings
                 )
         else:
             res = self.llm.safe_api_call_sync(
                 prompts.LLM_PREPROCESSING_SYSTEM_PROMPT,
                 user_msg,
-                NormalizedStrings,
-                num_ctx=4096
+                NormalizedStrings
             )
             
         if res and hasattr(res, "tokens"):

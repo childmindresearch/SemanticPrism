@@ -7,6 +7,7 @@ import yaml
 import json
 import asyncio
 import os
+import re
 from typing import Dict, Any, List
 
 import src.synthesis.prompts as prompts
@@ -15,6 +16,13 @@ from src.core.logger import get_logger
 from src.llm.llm_client import SemanticLLMClient
 
 logger = get_logger("SynthesisEngine")
+
+def _to_snake_case(text: str) -> str:
+    """Converts text to a clean snake_case string for filenames."""
+    s = text.lower().strip()
+    s = re.sub(r'[^a-z0-9_]', '_', s)
+    s = re.sub(r'_+', '_', s)
+    return s.strip('_')
 
 class SynthesisEngine:
     def __init__(self, config_path: str = "config.yaml"):
@@ -31,6 +39,7 @@ class SynthesisEngine:
         self.use_async = self.config.get('pipeline', {}).get('use_async', False)
         self.max_concurrent = self.config.get('pipeline', {}).get('max_concurrent_llm_calls', 3)
         self.output_dir = "outputs"
+        self.schemas_dir = self.config.get('output', {}).get('schemas_dir', 'outputs/schemas')
         
         logger.info("Initializing Master LLM Factory for semantic synthesis mappings natively.")
         self.llm = SemanticLLMClient(config_path)
@@ -126,6 +135,29 @@ class SynthesisEngine:
                 logger.info(f"Pydantic Python Schemas brilliantly dynamically structurally successfully mapped to {py_file_path}")
                 
             logger.info(f"Master Synthesis exported flawlessly to {file_path}")
+            
+            # Write individual community schemas
+            if self.schemas_dir:
+                os.makedirs(self.schemas_dir, exist_ok=True)
+                for k, schema in resolved_schemas.items():
+                    individual_blocks = []
+                    if schema.protocols_code:
+                        individual_blocks.append(schema.protocols_code)
+                    if schema.concrete_models_code:
+                        individual_blocks.append(schema.concrete_models_code)
+                        
+                    if individual_blocks:
+                        filename = f"{_to_snake_case(schema.title)}.py"
+                        individual_path = os.path.join(self.schemas_dir, filename)
+                        try:
+                            with open(individual_path, 'w', encoding='utf-8') as f:
+                                f.write('from pydantic import BaseModel, Field\nfrom typing import List, Optional, Protocol, Any\nimport abc\n\n')
+                                f.write("\n\n".join(individual_blocks))
+                                f.write("\n")
+                            logger.info(f"Successfully wrote standalone community schema file to: {individual_path}")
+                        except Exception as e_ind:
+                            logger.error(f"Failed to write standalone community schema file {filename}: {e_ind}")
+                            
         except Exception as e:
             logger.error(f"Export mapping natively failed: {e}")
             

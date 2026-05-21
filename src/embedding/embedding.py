@@ -12,7 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import AgglomerativeClustering
 from collections import Counter
 
-from src.extraction.schemas import RawTriple
+from src.extraction.schemas import RawTriple, ThemeDiscoveryResult, MasterThemeSynthesisResult
 from src.core.logger import get_logger
 
 logger = get_logger("EmbeddingPipeline")
@@ -50,6 +50,138 @@ class EmbeddingPipeline:
             self.encoder.save(local_model_path)
             logger.info(f"Model saved locally to: {local_model_path}")
 
+    def theme_based_embedding(
+        self, 
+        original_themes: List[ThemeDiscoveryResult], 
+        master_context: MasterThemeSynthesisResult,
+        output_dir: str = "outputs/02_embedding"
+    ) -> Dict[str, List[str]]:
+        """
+        Embeds original and master themes to calculate similarity and map original themes to their most similar master theme.
+        """
+        import json
+        logger.info("Executing theme-based embedding and master theme mapping...")
+
+        # 1. Group original themes by title (case-insensitive for key, retaining original casing from first occurrence)
+        theme_groups: Dict[str, List[Tuple[str, str]]] = {}  # normalized_title -> list of (description, reasoning)
+        first_casing_map: Dict[str, str] = {}     # normalized_title -> original_casing
+        theme_counts: Dict[str, int] = {}          # normalized_title -> count
+
+        for tr in original_themes:
+            if not tr.themes:
+                continue
+            for t in tr.themes:
+                title = t.title.strip() if t.title else ""
+                if not title:
+                    continue
+                norm_title = title.lower()
+                
+                if norm_title not in theme_groups:
+                    theme_groups[norm_title] = []
+                    first_casing_map[norm_title] = title
+                    theme_counts[norm_title] = 0
+                
+                theme_groups[norm_title].append((t.description or "", t.reasoning or ""))
+                theme_counts[norm_title] += 1
+
+        if not theme_groups:
+            logger.warning("No original themes found for theme-based embedding mapping.")
+            return {}
+
+        # Construct original theme concatenated texts and map them back to original casings
+        unique_original_titles = []
+        original_texts = []
+        original_title_counts = []
+
+        for norm_title, items in theme_groups.items():
+            orig_title = first_casing_map[norm_title]
+            unique_original_titles.append(orig_title)
+            original_title_counts.append(theme_counts[norm_title])
+
+            # Concatenate all descriptions and reasonings
+            descriptions = [desc.strip() for desc, _ in items if desc.strip()]
+            reasonings = [reason.strip() for _, reason in items if reason.strip()]
+
+            desc_concat = " ".join(descriptions)
+            reasoning_concat = " ".join(reasonings)
+            
+            combined_text = f"Title: {orig_title}. Description: {desc_concat}. Reasoning: {reasoning_concat}."
+            original_texts.append(combined_text)
+
+        # 2. Embed the text for each value field of concatenated text
+        logger.info(f"Embedding {len(original_texts)} unique consolidated original theme texts...")
+        original_embeddings = self.encoder.encode(
+            original_texts, 
+            batch_size=2048,
+            convert_to_numpy=True
+        )
+
+        # 3. Combine each individual master theme from distilled themes + the master domain text into a single string.
+        master_domain = master_context.master_domain or ""
+        master_themes = master_context.master_themes or []
+
+        if not master_themes:
+            logger.warning("No master themes found in master context.")
+            return {}
+
+        master_strings = [
+            f"Theme: {mt}. Domain: {master_domain}."
+            for mt in master_themes
+        ]
+
+        logger.info(f"Embedding {len(master_strings)} combined master themes...")
+        master_embeddings = self.encoder.encode(
+            master_strings,
+            batch_size=2048,
+            convert_to_numpy=True
+        )
+
+        # 4. Perform a similarity measurement to identify clusters of the most similar original themes that map to a master theme.
+        # Initialize the mapping structure
+        mapping: Dict[str, List[str]] = {mt: [] for mt in master_themes}
+
+        # Helper to compute cosine similarity
+        def get_cosine_similarity(v1, v2):
+            dot_val = np.dot(v1, v2)
+            norm1 = np.linalg.norm(v1)
+            norm2 = np.linalg.norm(v2)
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            return float(dot_val / (norm1 * norm2))
+
+        for orig_idx, orig_title in enumerate(unique_original_titles):
+            orig_emb = original_embeddings[orig_idx]
+            best_score = -1.0
+            best_master = master_themes[0]  # Fallback
+
+            for mast_idx, master_theme in enumerate(master_themes):
+                mast_emb = master_embeddings[mast_idx]
+                sim = get_cosine_similarity(orig_emb, mast_emb)
+                if sim > best_score:
+                    best_score = sim
+                    best_master = master_theme
+
+            # 5. Return this mapping and store the key: value pair of master theme : [list of original themes].
+            # For instances where an original title was duplicated, return that title x number of times present into the list.
+            count = original_title_counts[orig_idx]
+            mapping[best_master].extend([orig_title] * count)
+
+        # Sort each list of original themes alphabetically
+        for mt in mapping:
+            mapping[mt] = sorted(mapping[mt])
+
+        # 6. Save this file to a .json object in the embeddings output folder
+        os.makedirs(output_dir, exist_ok=True)
+        file_path = os.path.join(output_dir, "theme_mapping_clusters.json")
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(mapping, f, indent=4, ensure_ascii=False)
+            logger.info(f"Theme-based embedding clusters saved to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save theme mapping clusters to JSON: {e}")
+
+        return mapping
+
     def extract_and_group(self, triples: List[RawTriple]) -> Dict[str, List[str]]:
         """
         Separates a list of raw triples into distinct lists of subjects, predicates, and objects based on configured compression fields.
@@ -85,7 +217,13 @@ class EmbeddingPipeline:
         logger.info(f"Generating vectors. Unique items: {len(unique_items)}")
         
         # 1. Math Encoding completely
-        embeddings_matrix = self.encoder.encode(unique_items, convert_to_numpy=True)
+        embeddings_matrix = self.encoder.encode(
+            unique_items, 
+            batch_size=2048,
+            device='cuda',
+            convert_to_numpy=True,
+            show_progress_bar=True
+        )
         
         # 2. PCA Weighted statically perfectly. 
         # Duplicating rows physically to reflect absolute frequencies strictly perfectly.

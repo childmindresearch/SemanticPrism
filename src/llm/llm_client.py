@@ -38,10 +38,10 @@ class SemanticLLMClient:
     def model_name(self):
         return self.provider.model_name
 
-    async def safe_api_call_async(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int = 8192):
-        actual_ctx = num_ctx
+    async def safe_api_call_async(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int = None):
+        actual_ctx = num_ctx if num_ctx is not None else self.config['llm'].get('fixed_num_ctx', 8192)
         if isinstance(self.provider, LocalLLMProvider):
-            actual_ctx = self.provider.get_context_size(num_ctx)
+            actual_ctx = self.provider.get_context_size(actual_ctx)
         self.context_history.append(actual_ctx)
         
         if self.verbose:
@@ -64,10 +64,10 @@ class SemanticLLMClient:
                 self.provider.release_vram()
             return None
 
-    def safe_api_call_sync(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int = 8192):
-        actual_ctx = num_ctx
+    def safe_api_call_sync(self, system_prompt: str, user_prompt: str, response_model, num_ctx: int = None):
+        actual_ctx = num_ctx if num_ctx is not None else self.config['llm'].get('fixed_num_ctx', 8192)
         if isinstance(self.provider, LocalLLMProvider):
-            actual_ctx = self.provider.get_context_size(num_ctx)
+            actual_ctx = self.provider.get_context_size(actual_ctx)
         self.context_history.append(actual_ctx)
         
         if self.verbose:
