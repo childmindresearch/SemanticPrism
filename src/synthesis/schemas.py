@@ -10,3 +10,8 @@ class GeneratedSchema(BaseModel):
     isolated_facts: List[str] = Field(description="Key unique properties abstracted from the topological array.")
     protocols_code: str = Field(default="", description="Strictly typed Protocol/Mixin interface blocks. Output empty string if none apply.")
     concrete_models_code: str = Field(default="", description="Strictly typed Pydantic code blocks for concrete representation. Output empty string if none apply.")
+
+class OrphanEnumSchema(BaseModel):
+    """Represents isolated constants and enums synthesized from micro-components."""
+    summary: str = Field(description="A concise summary of the isolated concepts represented.")
+    enums_code: str = Field(default="", description="Strictly typed Python Enums, Literal types, and Constants.")

@@ -272,6 +272,7 @@ class SemanticPrismOrchestrator:
                 overlap_threshold = 0.80
                 leiden_resolution = 1.0
                 min_community_size = 4
+                synthesis_strategy = "standard"
                 if os.path.exists(self.config_path):
                     try:
                         with open(self.config_path, "r") as f:
@@ -279,15 +280,20 @@ class SemanticPrismOrchestrator:
                             overlap_threshold = cfg.get("topology", {}).get("inheritance_overlap_threshold", 0.80)
                             leiden_resolution = cfg.get("topology", {}).get("leiden_resolution", 1.0)
                             min_community_size = cfg.get("topology", {}).get("min_community_size", 4)
+                            synthesis_strategy = cfg.get("synthesis", {}).get("strategy", "standard")
                     except Exception as ecf:
                         logger.warning(f"Could not load custom topology parameters from config: {ecf}")
 
-                # Leiden Community Detection and Hierarchy extraction
-                partition = self.topology.detect_communities(graph, resolution=leiden_resolution)
-                hierarchy = self.topology.extract_hierarchy(graph, partition, min_size=min_community_size)
+                if synthesis_strategy == "hub_and_spoke":
+                    hierarchy_payload = self.topology.build_hub_and_spoke_hierarchy(graph, min_size=min_community_size, resolution=leiden_resolution)
+                    partition = self.topology.detect_communities(graph, resolution=leiden_resolution)
+                else:
+                    partition = self.topology.detect_communities(graph, resolution=leiden_resolution)
+                    hierarchy = self.topology.extract_hierarchy(graph, partition, min_size=min_community_size)
+                    hierarchy_payload = {"strategy": "standard", "communities": hierarchy}
                 
                 self._save_state(partition, "outputs/05_topology/modularity_partition.json")
-                self._save_state(hierarchy, "outputs/05_topology/extracted_hierarchy.json")
+                self._save_state(hierarchy_payload, "outputs/05_topology/extracted_hierarchy.json")
                 self.visualizer.visualize_topology(graph, partition, "outputs/05_topology/03_topology_communities_graph.html", "Phase 5: Global Modularity Map")
                 
                 # Bipartite Hypergraph Topology expansion and spectral matrices
@@ -318,7 +324,7 @@ class SemanticPrismOrchestrator:
             logger.info("==================================================")
             try:
                 theme_inheritance_map = hypergraph_res.get("theme_inheritance_map", {})
-                resolved_schemas = await self.synthesizer.generate_schemas(hierarchy, master_domain, theme_inheritance_map)
+                resolved_schemas = await self.synthesizer.generate_schemas(hierarchy_payload, master_domain, theme_inheritance_map, strategy=synthesis_strategy)
                 file_path = self.synthesizer.build_global_context(resolved_schemas)
             except Exception as e:
                 logger.error(f"Generative schema synthesis failed: {e}")

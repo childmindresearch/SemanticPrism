@@ -113,13 +113,20 @@ class HypernymPipeline:
     def _find_semantic_center(self, cluster: List[str]) -> str:
         """
         Calculates the geometric centroid of a cluster of strings using embeddings and returns the string closest to the mean vector based on cosine distance.
+        Uses frequency counts as weights for calculating the center of usage density.
         """
         if len(cluster) == 1:
             return cluster[0]
             
         embeddings = self.encoder.encode(cluster, convert_to_numpy=True)
-        # Identify central Euclidean coordinate properly cleanly optimally natively
-        mean_vector = np.mean(embeddings, axis=0, keepdims=True)
+        
+        # Retrieve weights from global registry
+        from src.core.logger import FREQUENCY_REGISTRY
+        frequencies = [FREQUENCY_REGISTRY.get(item, 1) for item in cluster]
+        
+        # Identify central Euclidean coordinate using frequency counts as weights
+        mean_vector = np.average(embeddings, axis=0, weights=frequencies).reshape(1, -1)
+        
         # Map Cosine distance formally
         distances = cosine_distances(mean_vector, embeddings)[0]
         # Locate item index.

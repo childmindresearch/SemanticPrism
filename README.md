@@ -21,16 +21,15 @@ The pipeline is split into explicit modular stages: Extraction, Syntactic Normal
 ### 3. Embedding Pipeline (`embedding.py`)
 **Purpose**: Projects normalized strings into a dense vector space to reduce redundancy by grouping semantically identical components.
 **Components**:
-- **Vector Encoding**: Generates embeddings for extracted subjects, objects, and predicates via local models.
-- **Weighted PCA & Eigengap Analysis**: Duplicates embedding rows by item frequency and dynamically performs optimal dimensionality reduction.
-- **Agglomerative Clustering**: Groups embeddings mathematically using `cosine` distance and `average` linkage to propose semantic clusters.
+- **Theme-based Embedding**: Embeds the original themes via `SentenceTransformers` and maps them mathematically to the consolidated master themes using Cosine Similarity thresholds.
+- **Triple Vector Clustering**: Isolates the triples into physical component arrays (Subjects, Predicates, Objects), embeds them into dense vectors, applies explicit L2 normalization onto a spherical manifold, and groups conceptually identical elements using Agglomerative Clustering.
 
 ### 4. Hypernym Pipeline (`hypernyms.py`)
 **Purpose**: Merges mathematical centroids with LLM validation protocols to enforce hierarchical taxonomic structures (moving from specific entities to abstract superclasses).
 **Components**:
 - **Contextual Validation**: Evaluates the logical coherence of mathematically proposed clusters and splits rejected sets.
 - **Geometric Centroid Calculation**: Computes the mean embedding vector for a verified cluster and maps it to the specific string with the minimum cosine distance.
-- **Taxonomic Lifting**: Uses Chain-of-Thought reasoning to assign a formal abstract superclass label (hypernym) that accurately represents the cluster.
+- **Taxonomic Lifting**: Uses Chain-of-Thought reasoning to assign a formal abstract superclass label (hypernym) that accurately represents the cluster. If the LLM rejects the abstraction, it gracefully falls back to using the geometric centroid.
 
 ### 5. Taxonomic Resolution Mapping (`nlp_mapping.py`)
 **Purpose**: Condenses the specific localized triple topology into a higher-order abstracted topology.
@@ -41,16 +40,21 @@ The pipeline is split into explicit modular stages: Extraction, Syntactic Normal
 **Purpose**: Constructs mathematically defined networks, partitions them into modular semantic communities, and builds n-ary hypergraph representations for spectral analysis.
 **Components**:
 - **Directed Graph Construction**: Builds a NetworkX `DiGraph` from the mapped triples, tracking cumulative edge weights $w(u, v) = \sum_{i} 1$.
-- **N-ary Hypergraph Grouping**: Groups triples around their `theme_association`, securely tracking local neighborhoods (Identity Guard) to map a bipartite graph connecting entities to thematic hyperedges.
-- **Spectral Matrices**: Computes the hypergraph Incidence Matrix ($H$) and Laplacian ($L = D_v - H H^T$) via `numpy` to map high-level entity-theme interactions mathematically.
 - **Leiden Community Detection**: Optimizes the `ModularityVertexPartition` to reliably compute modularity partitions for the directed graphs and runs Louvain detection on the bipartite structure.
-- **Hierarchy Extraction**: Restructures the graph into isolated subgraphs representing distinct semantic communities.
+- **Hierarchical Extraction Strategy**: 
+  - *Standard*: Retains dense communities and explicitly prunes/discards micro-communities.
+  - *Hub-and-Spoke*: Identifies the network's super-hub node (highest degree), isolates it as a master component, clusters the remaining subgraph, and pushes micro-communities into an "orphan" pool.
+- **N-ary Hypergraph Grouping**: Groups triples around their `theme_association`, securely tracking local neighborhoods (Identity Guard) to map a bipartite graph connecting entities to thematic hyperedges.
+- **Spectral Matrices**: Computes the hypergraph Incidence Matrix ($H$) and Laplacian ($L = D_v - H H^T$) via `numpy` to map high-level entity-theme interactions and inheritance mapping mathematically.
 
 ### 7. Synthesis Engine (`synthesizer.py`)
 **Purpose**: Transforms abstract mathematical network communities into structured, executable programmatic models.
 **Components**:
-- **Type-Safe Schema Generation**: Converts the graph edges and nodes of each isolated community into programmatic Pydantic class abstractions representing the ontological structures.
-- **Output Export**: Aggregates models and writes the global JSON context (`semantic_prism_master_graph.json`) and executable Python file (`semantic_models.py`).
+- **LLM Schema Generation**: Passes each identified structural community (alongside the master hub and orphans) to the LLM to dynamically synthesize strictly typed Pydantic `BaseModel`s and duck-typed `Protocol` interfaces.
+- **Output Export**: Assembles the generated Python blocks and physically writes the `.py` files. 
+  - Standard communities become standalone schema files.
+  - Master hubs export to `master_context.py`.
+  - Orphaned micro-components are dumped into `global_enums.py` as pure Enums/Literals.
 
 ## LLM vs. Offline Computation
 
@@ -66,7 +70,7 @@ The system strictly divides non-deterministic interpretation (LLM) and determini
 **Offline Computation-Reliant Operations:**
 - **Iterative Checkpoint Logging**: Writing diagnostic data footprints safely.
 - **Vector Encoding**: Generating numerical representations via SentenceTransformers.
-- **Dimensionality Reduction**: Principal Component Analysis (PCA).
+- **Spherical Manifold Mapping**: L2-normalization onto a spherical manifold.
 - **Clustering**: Agglomerative clustering.
 - **Centroid Calculation**: Mean vector and cosine distance operations.
 - **Taxonomic Resolution Mapping**: Deterministic dictionary string replacement.
@@ -76,10 +80,8 @@ The system strictly divides non-deterministic interpretation (LLM) and determini
 
 ## Applied Mathematical and Topological Formulas
 
-**1. Dimensionality Reduction (PCA & Eigengap Analysis)**
-- **Formula/Application**: Principal Component Analysis (PCA) is applied to an embedding matrix scaled by the absolute frequency count of identical strings. 
-- **Eigengap Heuristic**: The explained variance ratio (eigenvalues) is calculated. The algorithm determines the optimal number of components by finding the maximum gap between adjacent eigenvalues (`argmax(eigenvalues[:-1] - eigenvalues[1:])`).
-- **Cumulative Variance Threshold**: If the retained variance from the eigengap is below 0.5, a cumulative variance threshold of 0.85 is utilized as a fallback.
+**1. Spherical Manifold Mapping**
+- **L2-Normalization**: The dense vectors are mathematically normalized ($v / ||v||_2$) onto a spherical manifold, optimizing the stability and reliability of downstream cosine distance grouping.
 
 **2. Distance Metrics and Clustering**
 - **Formula/Application**: Agglomerative clustering is executed using `cosine` distance and `average` linkage. It stops grouping when the distance between merged clusters exceeds a configured `similarity_threshold`.

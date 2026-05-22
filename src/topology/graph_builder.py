@@ -129,6 +129,65 @@ class TopologyEngine:
                 
         return filtered_hierarchy
 
+    def build_hub_and_spoke_hierarchy(self, graph: nx.DiGraph, min_size: int = 1, resolution: float = 1.0) -> Dict[str, Any]:
+        """
+        Extracts the highest degree node as the master hub, then performs Leiden clustering on the remaining nodes.
+        Micro-communities are collected as orphans instead of being discarded.
+        """
+        logger.info("Executing Hub-and-Spoke topology extraction natively.")
+        
+        if graph.number_of_nodes() == 0:
+            return {"strategy": "hub_and_spoke", "master_hub": {}, "communities": {}, "orphans": []}
+            
+        # 1. Identify Super Hub
+        degrees = dict(graph.degree())
+        hub_node = max(degrees, key=degrees.get)
+        logger.info(f"Identified Super-Hub node mathematically: {hub_node} (Degree: {degrees[hub_node]})")
+        
+        hub_edges = list(graph.in_edges(hub_node, data=True)) + list(graph.out_edges(hub_node, data=True))
+        master_hub = {
+            "node": hub_node,
+            "degree": degrees[hub_node],
+            "relationships": [{"source": u, "target": v, "data": d} for u, v, d in hub_edges]
+        }
+        
+        # 2. Isolate Hub
+        subgraph = graph.copy()
+        subgraph.remove_node(hub_node)
+        
+        # 3. Cluster remaining
+        partition = self.detect_communities(subgraph, resolution=resolution)
+        
+        hierarchy = {}
+        for idx in set(partition.values()):
+            comm_key = f"Community_{idx}"
+            hierarchy[comm_key] = {"nodes": [], "edges": []}
+            
+        for node, comm_id in partition.items():
+            hierarchy[f"Community_{comm_id}"]["nodes"].append(node)
+            
+        for u, v, data in subgraph.edges(data=True):
+            cu = partition.get(u)
+            cv = partition.get(v)
+            if cu == cv and cu is not None:
+                hierarchy[f"Community_{cu}"]["edges"].append({"source": u, "target": v, "data": data})
+                
+        communities = {}
+        orphans = []
+        for comm_key, comm_data in hierarchy.items():
+            if len(comm_data["nodes"]) >= min_size:
+                communities[comm_key] = comm_data
+            else:
+                orphans.append(comm_data)
+                
+        logger.info(f"Hub-and-Spoke extraction complete. Communities: {len(communities)}, Orphan batches: {len(orphans)}")
+        return {
+            "strategy": "hub_and_spoke",
+            "master_hub": master_hub,
+            "communities": communities,
+            "orphans": orphans
+        }
+
     def build_hypergraph_topology(self, triples: List[RawTriple], overlap_threshold: float = 0.80) -> Dict[str, Any]:
         """
         Implements: 1. Identity Guard, 2. N-ary Grouping, 

@@ -1,4 +1,4 @@
- <ORGANIZATION> CLINICAL EVALUATION REPORT
+<ORGANIZATION> CLINICAL EVALUATION REPORT
 
 Date of Evaluation: October 14, 2025
 Date of Report: October 28, 2025
@@ -8,61 +8,64 @@ Grade: 3rd Grade
 Clinician: <PERSON>, Psy.D.
 
 REASON FOR REFERRAL
-<PERSON> was referred to <ORGANIZATION> by their parents for a comprehensive diagnostic evaluation. Concerns include persistent difficulties with sustained attention, frequent "daydreaming" in class, and significant emotional reactivity when transitioning between preferred and non-preferred tasks. Their teacher at <ORGANIZATION> School noted that while <PERSON> is academically capable, they often fail to complete independent work and struggle with social cues during recess.
+<PERSON> was referred to <ORGANIZATION> by their parents for a comprehensive diagnostic evaluation. Concerns include persistent difficulties with sustained attention, frequent "daydreaming" in class, and significant emotional reactivity when transitioning between preferred and non-preferred tasks. Their teacher at <ORGANIZATION> School noted that while <PERSON> is academically capable, they often fail to complete independent work and struggle with social cues during recess. Recently, <PERSON> has begun to exhibit significant performance anxiety, completely shutting down during timed math assessments and refusing to participate in class read-alouds.
 
 ASSESSMENT PROCEDURES
 The following assessment tools and data sources were utilized:
-
 Clinical Interview: With parents and <PERSON>.
-
 Conners 4: Parent and Teacher Rating Scales.
-
 Behavior Assessment System for Children (BASC-3): Parent and Teacher Forms.
-
 Wechsler Intelligence Scale for Children (WISC-V): Selected subtests.
-
+Multidimensional Anxiety Scale for Children (MASC-2): Self-Report.
 Review of Records: Previous report cards and pediatrician notes.
 
-CLINICAL OBSERVATIONS
-<PERSON> presented as a cooperative and engaging child. They established age-appropriate eye contact but frequently shifted in their seat, occasionally standing up to look at items on the clinician's shelf. When tasks became challenging, <PERSON> exhibited "avoidant" behaviors, such as asking for water breaks or changing the subject. They showed a tendency toward "all-or-nothing" thinking (e.g., "I’m bad at math because I missed this one").
+CLINICAL OBSERVATIONS & BEHAVIORAL EXAMPLES
+<PERSON> presented as a cooperative and engaging child. They established age-appropriate eye contact but frequently shifted in their seat, occasionally standing up to look at items on the clinician's shelf. When tasks became challenging, <PERSON> exhibited "avoidant" behaviors, such as asking for water breaks, sharpening their pencil unnecessarily, or changing the subject to discuss their favorite video games. 
+
+They showed a significant tendency toward "all-or-nothing" thinking (e.g., "I’m bad at math because I missed this one"). During the block design subtest, when they could not complete the final design within the time limit, <PERSON> pushed the blocks off the table, crossed their arms, and refused to speak for five minutes, visibly tearful. 
+
+Parents report similar incidents at home. Homework time frequently escalates into tearful breakdowns. <PERSON> will often stare at a blank worksheet for twenty minutes, paralyzed by the fear of making a mistake. When parents attempt to help, <PERSON> becomes defensive and yells, "You're confusing me on purpose!" 
+
+Socially, <PERSON> wants to have friends but struggles with the reciprocal nature of play. They often try to dictate the rules of imaginary games and become highly distressed when peers deviate from their script, leading to frequent peer conflicts.
 
 TEST RESULTS & DATA INTEGRATION
+
 Cognitive and Academic Functioning
-Preliminary results from the WISC-V suggest that <PERSON> possesses High Average verbal reasoning skills. However, their Working Memory and Processing Speed scores fell within the Low Average range. This "bottleneck" effect explains why <PERSON> understands complex concepts but struggles to get them down on paper.
+Preliminary results from the WISC-V suggest that <PERSON> possesses High Average verbal reasoning skills (Verbal Comprehension Index = 115). However, their Working Memory and Processing Speed scores fell within the Low Average range. This "bottleneck" effect explains why <PERSON> understands complex concepts but struggles to get them down on paper. The discrepancy between their intellectual capacity and their output efficiency acts as a primary catalyst for their performance anxiety.
 
 Behavioral and Emotional Functioning
-Data from the BASC-3 and Conners 4 indicate clinically significant elevations in the following areas:
+Data from the BASC-3, Conners 4, and MASC-2 indicate clinically significant elevations in several core areas:
 
-Inattention: Both parents and teachers report that <PERSON> loses track of instructions and requires frequent redirection.
-
+Inattention: Both parents and teachers report that <PERSON> loses track of instructions and requires frequent redirection. Teachers note that <PERSON> often "zones out" during lectures and misses crucial transitional cues.
 Emotional Reactivity: Scores suggest <PERSON> experiences "big feelings" more intensely than peers, often resulting in tearfulness or shut-down behaviors when frustrated.
-
-Executive Functioning: Deficits were noted in planning, organizing, and initiating tasks.
+Executive Functioning: Deficits were noted in planning, organizing, and initiating tasks. <PERSON> cannot organize their desk, frequently loses assignments, and struggles to estimate how long a task will take.
+Anxiety/Worry: The MASC-2 revealed clinically significant elevations in Social Anxiety and Perfectionism. <PERSON> is chronically worried about peer judgment and academic failure.
 
 DIAGNOSTIC IMPRESSION
 Based on the current evaluation, <PERSON> meets the diagnostic criteria for the following:
 
-Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2): Evidenced by a persistent pattern of inattention and hyperactivity that interferes with functioning in two or more settings.
+1. Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2)
+Evidenced by a persistent pattern of inattention and hyperactivity/impulsivity that interferes with functioning in two or more settings. The inattentive symptoms are primarily driving academic underperformance, while impulsivity drives social friction.
 
-Generalized Anxiety Disorder (F41.1): Characterized by excessive worry regarding academic performance and social rejection, contributing to their emotional reactivity.
+2. Generalized Anxiety Disorder (F41.1)
+Characterized by excessive worry regarding academic performance, peer relationships, and social rejection, contributing to their emotional reactivity and task-avoidance behaviors.
 
 SUMMARY AND RECOMMENDATIONS
-<PERSON> is a bright and creative child whose primary challenges stem from executive functioning deficits and anxiety. To support their development, the following is recommended:
+<PERSON> is a bright and creative child whose primary challenges stem from severe executive functioning deficits colliding with generalized anxiety. To support their development, the following is highly recommended:
 
 School-Based Supports
-Individualized Education Program (IEP) or 504 Plan: To provide accommodations such as extended time on tests and preferential seating away from distractions.
-
-Task Breakdown: Assignments should be broken into smaller, manageable "chunks" with frequent check-ins.
-
-Visual Schedules: Utilize a visual timer or checklist to help <PERSON> navigate transitions.
+Individualized Education Program (IEP) or 504 Plan: To provide accommodations addressing both ADHD and Anxiety.
+Extended Time & Quiet Environment: Provide 1.5x extended time on all assessments in a quiet, distraction-free room to alleviate performance anxiety.
+Task Breakdown: Assignments should be broken into smaller, manageable "chunks" with frequent check-ins to prevent paralysis by overwhelming scope.
+Visual Schedules & Priming: Utilize a visual timer and prime <PERSON> 5 minutes before transitions to prevent emotional dysregulation.
+Scribe/Alternative Output: Allow oral responses or typed responses for lengthy writing assignments to bypass processing speed bottlenecks.
 
 Therapeutic Interventions
-Cognitive Behavioral Therapy (CBT): To help <PERSON> identify and challenge "anxious thoughts" and develop coping strategies for frustration.
-
-Parent Management Training (PMT): To assist parents in implementing consistent behavioral structures and positive reinforcement at home.
+Cognitive Behavioral Therapy (CBT): To help <PERSON> identify and challenge "anxious thoughts" and cognitive distortions ("all-or-nothing" thinking). Therapy should focus on developing distress tolerance and coping strategies for frustration.
+Parent Management Training (PMT): To assist parents in implementing consistent behavioral structures, positive reinforcement, and specialized responses to anxiety-driven defiance without escalating conflicts at home.
 
 Medical Consultation
-It is recommended that the family share this report with <PERSON>’s pediatrician or a child psychiatrist to discuss the potential role of pharmacological support for ADHD symptoms.
+It is strongly recommended that the family share this report with <PERSON>’s pediatrician or a child psychiatrist to discuss the potential role of pharmacological support for ADHD symptoms and anxiety management.
 
 Signature:
 <PERSON>, Psy.D.

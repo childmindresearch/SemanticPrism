@@ -1,79 +1,140 @@
 # SemanticPrism Primary Configuration
+# Organized sequentially based on the pipeline execution logic.
 
+# ==============================================================================
+# 0. PIPELINE / ORCHESTRATION 
+# ==============================================================================
 pipeline:
+  # Toggles asynchronous execution for LLM operations.
+  # Utilized in: src/synthesis/synthesizer.py (SynthesisEngine), src/extraction/extractor.py (ExtractionPipeline), src/nlp/hypernyms.py (HypernymPipeline)
   use_async: true
+  
+  # Maximum concurrent LLM requests when use_async is true.
+  # Utilized in: src/synthesis/synthesizer.py (SynthesisEngine), src/extraction/extractor.py (ExtractionPipeline), src/nlp/hypernyms.py (HypernymPipeline)
   max_concurrent_llm_calls: 2
+  
+  # Toggles NLP lexical normalization on raw text before embedding/clustering.
+  # Utilized in: src/extraction/normalize_text.py (execute_normalization_phase)
   normalize_text: true
 
+# ==============================================================================
+# 1. LARGE LANGUAGE MODEL (LLM) CONFIGURATION
+# ==============================================================================
 llm:
+  # Enables verbose logging of LLM prompts and responses.
+  # Utilized in: src/llm/llm_client.py (LLMClient)
   verbose: true
-  context_source: "dynamic"       # "dynamic" (auto calculate via manager) or "config" (static map)
-  fixed_num_ctx: 8000
-  manage_vram: false              # Actively purges and drops active model bindings safely.
-  timeout_seconds: 600.0         # Connection timeout for concurrent LLM processing
-
-  api_backend: "ollama"
-  base_url: "http://localhost:11434/v1"
-  api_key: "ollama"
-  model_name: "gemma4:26b"
-  # #model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
-  # model_name: "huggingface.co/google/gemma-3-12b-it-qat-q4_0-gguf:latest"
   
-  #api_backend: "vertexai"
-  #google_credentials_path: ""
-  #vertex_project: ""
-  #vertex_location: "us-central1"
-  #vertex_endpoint: ""
-  #base_url: ""
+  # Controls how the context window is managed. 
+  # Options: "dynamic" (auto calculate via manager) or "config" (static map).
+  # Utilized in: src/llm/local_llm.py (LocalLLM)
+  context_source: "dynamic"
+  
+  # Hardcoded token limit for context window if context_source is not dynamic.
+  # Utilized in: src/llm/llm_client.py (LLMClient), src/llm/local_llm.py (LocalLLM)
+  fixed_num_ctx: 8000
+  
+  # Actively purges and drops active model bindings safely from VRAM after execution.
+  # Utilized in: src/llm/local_llm.py (LocalLLM)
+  manage_vram: false
+  
+  # Connection timeout limit (in seconds) for concurrent LLM processing.
+  # Utilized in: src/llm/local_llm.py (LocalLLM)
+  timeout_seconds: 600.0
+  
+  # LLM API Backend target. Examples: "ollama", "openai", "vertex".
+  # Utilized in: src/llm/llm_client.py (LLMClient), src/llm/local_llm.py (LocalLLM)
+  api_backend: "ollama"
+  
+  # The base URL endpoint for API requests.
+  # Utilized in: src/llm/public_llm.py (PublicLLM), src/llm/local_llm.py (LocalLLM)
+  base_url: "http://localhost:11434/v1"
+  
+  # Authentication key if required by the API.
+  # Utilized in: src/llm/local_llm.py (LocalLLM)
+  api_key: "ollama"
+  
+  # Explicit string identifier for the model being invoked.
+  # Utilized in: src/llm/local_llm.py (LocalLLM), src/helpers/context_manager.py (ContextManager), src/orchestrator/pipeline.py (SemanticPrismOrchestrator), src/extraction/extractor.py (ExtractionPipeline)
+  model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
 
-
+# ==============================================================================
+# 2. EXTRACTION (Phase 1)
+# ==============================================================================
 extraction:
+  # Fallback explicit logic domain if LLM master domain extraction fails.
+  # Utilized in: src/extraction/extractor.py (ExtractionPipeline), src/nlp/hypernyms.py (HypernymPipeline)
   domain: "Unknown"
+  
+  # Maximum word count per chunk for the initial theme discovery logic.
+  # Utilized in: src/extraction/extractor.py (ExtractionPipeline)
   theme_chunk_max_words: 6000
+  
+  # Maximum word count per chunk for SVO logical triple extraction.
+  # Utilized in: src/extraction/extractor.py (ExtractionPipeline)
   triple_chunk_max_words: 6000
 
+# ==============================================================================
+# 3. REFINEMENT & EMBEDDING (Phase 2 & 3)
+# ==============================================================================
 refinement:
-  embedding_model: "BAAI/bge-large-en-v1.5"
+  # The SentenceTransformer model path/name used for local vector generation.
+  # Utilized in: src/nlp/hypernyms.py (HypernymPipeline)
+  embedding_model: "BAAI/bge-m3"
   
-  # Cosine Distance tolerance for Agglomerative Clustering (0.0 to 2.0). 
+  # Cosine Distance tolerance for Agglomerative Clustering (0.0 to 2.0).
   # 0.05 = Extremely strict (only perfect synonyms merge)
   # 0.15 = Strict (~85% conceptual overlap required)
   # 0.40 = Loose (merges loosely related concepts)
+  # Utilized in: src/embedding/embedding.py (EmbeddingPipeline)
   similarity_threshold: 0.4
   
-  compression_mode: "isolated"
+  # Which components of raw triples to isolate, compress, and structurally analyze.
+  # Utilized in: src/embedding/embedding.py (EmbeddingPipeline)
   compress_fields: 
     - "subject"
     - "object"
     - "predicate"
   
-  # PCA Dimensionality Reduction target (0.0 to 1.0).
-  # Controls how much original semantic information is preserved when compressing math vectors.
-  # 0.80 = Aggressive compression (faster clustering, loses semantic nuance)
+  # Variance retention target. Controls fidelity in mathematical vector mapping.
+  # 0.80 = Aggressive compression (faster clustering, loses nuance)
   # 0.95 = High fidelity (preserves 95% of variance, excellent balance)
   # 0.99 = Minimal compression (preserves nearly all nuance, slower math)
+  # Utilized in: src/embedding/embedding.py (EmbeddingPipeline)
   spectral_variance_retention: 0.95
-  hypernym_resolution: "semantic_centroid"
-  community_detection: "louvain"
 
+# ==============================================================================
+# 4. TOPOLOGY GRAPHING (Phase 4 & 5)
+# ==============================================================================
 topology:
   # The minimum percentage of nodes that must overlap between two themes 
   # for one to mathematically inherit from the other (e.g., 0.80 = 80% overlap).
-  inheritance_overlap_threshold: 0.66
+  inheritance_overlap_threshold: 0.75
   
   # Resolution parameter for the Leiden algorithm (RBConfigurationVertexPartition).
   # Controls the granularity of the detected communities.
-  # 1.0 = Default modularity behavior.
+  # 1.0 = Default modularity behavior. 
   # < 1.0 = Produces fewer, larger communities (e.g., 0.5 merges smaller clusters).
   # > 1.0 = Produces many small, highly granular communities.
   leiden_resolution: 1.0
   
   # The minimum number of nodes a community must have to be processed for schema synthesis.
-  # If a detected cluster has fewer nodes than this threshold, it is considered a "micro-community" and pruned.
-  min_community_size: 8
+  # Any community smaller than this threshold is pruned and treated as a "micro-community".
+  min_community_size: 2
 
+# ==============================================================================
+# 5. GENERATIVE SCHEMA SYNTHESIS (Phase 6)
+# ==============================================================================
+synthesis:
+  # Topological graph resolution and schema code-generation strategy.
+  # "standard": Runs standard Leiden community detection and prunes micro-components.
+  # "hub_and_spoke": Extracts highest degree node as a global master interface, clusters the rest, and collects micro-components into global Enums/Literals.
+  strategy: "standard"
+
+# ==============================================================================
+# 6. PIPELINE OUTPUT LOCATIONS
+# ==============================================================================
 output:
+  # Relative path directory where compiled Python schemas and interfaces will be saved.
+  # Utilized in: src/synthesis/synthesizer.py (SynthesisEngine)
   schemas_dir: "outputs/schemas"
-  graphs_dir: "outputs/graphs"
-  checkpoints_dir: "outputs/checkpoints"
-  logs_dir: "outputs/logs"

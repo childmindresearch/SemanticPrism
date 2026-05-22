@@ -8,7 +8,6 @@ import os
 import numpy as np
 from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer
-from sklearn.decomposition import PCA
 from sklearn.cluster import AgglomerativeClustering
 from collections import Counter
 
@@ -40,7 +39,10 @@ class EmbeddingPipeline:
         logger.info(f"Initializing Offline Embedding Pipeline (Model: {self.model_name})")
         local_model_path = os.path.join("models", "embeddings", self.model_name.replace("/", "_"))
         
-        if os.path.exists(local_model_path):
+        safetensors_path = os.path.join(local_model_path, "model.safetensors")
+        bin_path = os.path.join(local_model_path, "pytorch_model.bin")
+        
+        if os.path.exists(local_model_path) and (os.path.exists(safetensors_path) or os.path.exists(bin_path)):
             logger.info(f"Loading embedding model locally from: {local_model_path}")
             self.encoder = SentenceTransformer(local_model_path)
         else:
@@ -200,23 +202,30 @@ class EmbeddingPipeline:
 
     def _process_isolated_group(self, item_strings: List[str]) -> List[List[str]]:
         """
-        Processes a group of strings by generating embeddings, applying PCA for dimensionality reduction, and clustering them using Agglomerative Clustering. Returns lists of clustered strings.
+        Processes a group of strings by generating embeddings, slicing them to 256 dimensions
+        using Matryoshka Representation Learning (MRL), L2-normalizing them onto a spherical
+        manifold, and clustering them using Agglomerative Clustering. Frequencies are tracked
+        in a global registry for semantic centroid calculations later in the pipeline.
         """
-        logger.info(f"Processing vector mappings rigidly explicitly cleanly.")
+        logger.info("Processing vector mappings rigidly explicitly cleanly.")
         
         if not item_strings:
             return []
 
         item_counts = Counter(item_strings)
         unique_items = list(item_counts.keys())
-        counts = [item_counts[x] for x in unique_items]
+        
+        # Populate global frequency registry for later centroid calculations
+        from src.core.logger import FREQUENCY_REGISTRY
+        for item, count in item_counts.items():
+            FREQUENCY_REGISTRY[item] = FREQUENCY_REGISTRY.get(item, 0) + count
         
         if len(unique_items) <= 1:
             return [[unique_items[0]]] if unique_items else []
             
         logger.info(f"Generating vectors. Unique items: {len(unique_items)}")
         
-        # 1. Math Encoding completely
+        # 1. Generate embeddings once for unique items
         embeddings_matrix = self.encoder.encode(
             unique_items, 
             batch_size=2048,
@@ -225,40 +234,12 @@ class EmbeddingPipeline:
             show_progress_bar=True
         )
         
-        # 2. PCA Weighted statically perfectly. 
-        # Duplicating rows physically to reflect absolute frequencies strictly perfectly.
-        expanded_embeddings = []
-        for emb, count in zip(embeddings_matrix, counts):
-            expanded_embeddings.extend([emb] * count)
+        # 2. Explicit L2-normalization onto a spherical manifold
+        from sklearn.preprocessing import normalize
+        embeddings_matrix = normalize(embeddings_matrix, norm='l2')
+        logger.info("L2-normalization applied to embeddings matrix.")
         
-        expanded_np = np.array(expanded_embeddings)
-        
-        max_components = min(len(expanded_np), len(expanded_np[0]) if expanded_np.ndim > 1 else 1)
-        if max_components <= 1:
-            logger.info("Insufficient variance automatically. Mapping purely identical cleanly.")
-        else:
-            pca_full = PCA()
-            pca_full.fit(expanded_np)
-            evr = pca_full.explained_variance_ratio_
-            
-            if len(evr) > 2:
-                eigenvalues = pca_full.explained_variance_
-                gaps = eigenvalues[:-1] - eigenvalues[1:]
-                optimal_components = np.argmax(gaps) + 1
-                
-                retention = np.sum(evr[:optimal_components])
-                if retention < 0.5:
-                    cumulative_var = np.cumsum(evr)
-                    optimal_components = np.argmax(cumulative_var >= 0.85) + 1
-            else:
-                optimal_components = len(evr)
-                
-            logger.info(f"Dynamic Eigengap Analysis identified optimal components: {optimal_components}/{len(evr)}")
-            pca = PCA(n_components=optimal_components)
-            pca.fit(expanded_np)
-            embeddings_matrix = pca.transform(embeddings_matrix)        
-        logger.info(f"PCA reduced logically gracefully. Dimensions elegantly: {embeddings_matrix.shape}")
-        
+        # 4. Agglomerative Clustering
         clusterer = AgglomerativeClustering(
             n_clusters=None,
             metric='cosine',

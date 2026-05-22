@@ -9,6 +9,8 @@ import sys
 import os
 from datetime import datetime
 
+FREQUENCY_REGISTRY = {}
+
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """
     Returns a configured logger with standard uniform formatting.

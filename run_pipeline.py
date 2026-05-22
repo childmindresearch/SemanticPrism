@@ -6,7 +6,7 @@ from src.orchestrator.pipeline import SemanticPrismOrchestrator
 async def main():
     print("✅ Core imports loaded successfully.")
     
-    target_dir = "inputs/reports"
+    target_dir = "inputs/testdocs"
     files = glob.glob(os.path.join(target_dir, "*.txt")) + glob.glob(os.path.join(target_dir, "*.md"))
 
     raw_documents = []
