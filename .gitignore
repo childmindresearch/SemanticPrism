@@ -54,3 +54,7 @@ models/
 *.pth
 *.ckpt
 *.h5
+
+# Logs
+logs/
+*.log
