@@ -31,9 +31,9 @@ Define the following strings as constants.
 
 ---
 
-## 4. Agent Definitions (`src/synthesis/synthesizer.py`)
+## 4. Agent Definitions (`src/agents/synthesis_agents.py`)
 
-Instantiate two specific `pydantic_ai.Agent` objects at the module level. Ensure the model string is passed dynamically from `config.yaml`.
+Instantiate the five specific `pydantic_ai.Agent` objects in a centralized agents file. Ensure the model string is passed dynamically from `config.yaml`.
 
 ### Agent 1: Orphan Enum Agent
 *   **System Prompt:** `prompts.ORPHAN_SYNTHESIS_SYSTEM_PROMPT`.
