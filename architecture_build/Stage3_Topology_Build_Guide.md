@@ -17,10 +17,12 @@ Implement the following Pydantic models to strictly enforce the output structure
     *   Fields: `node_id` (str), `degree_centrality` (float), `pagerank` (float), `is_hub` (bool), `is_orphan` (bool).
 2.  **`CommunityPartition`**: 
     *   Fields: `community_id` (int), `nodes` (List[str]).
-3.  **`ThemeInheritance`**:
+3.  **`StructuralCluster`**:
+    *   Fields: `cluster_id` (int), `nodes` (List[str]).
+4.  **`ThemeInheritance`**:
     *   Fields: `parent_theme` (str), `child_theme` (str), `overlap_score` (float).
-4.  **`TopologyResult`**: 
-    *   Fields: `global_hubs` (List[str]), `communities` (List[CommunityPartition]), `orphans` (List[str]), `node_metrics` (Dict[str, NodeMetrics]), `theme_inheritance` (List[ThemeInheritance]).
+5.  **`TopologyResult`**: 
+    *   Fields: `global_hubs` (List[str]), `communities` (List[CommunityPartition]), `structural_clusters` (List[StructuralCluster]), `orphans` (List[str]), `node_metrics` (Dict[str, NodeMetrics]), `theme_inheritance` (List[ThemeInheritance]).
 
 ---
 
@@ -45,18 +47,25 @@ Create a master class `TopologyPipeline` to execute the sequence logically. It m
 2.  **Leiden Clustering:** Run the Leiden Modularity algorithm on the pruned sub-graph using the `leiden_resolution` defined in `config.yaml`.
 3.  **Format Partitions:** Convert the algorithm output into a list of `CommunityPartition` objects.
 
-### Step 3.4: Hypergraph Theme Inheritance (Set-Based)
+### Step 3.4: Node2Vec Structural Equivalence (Role Clustering)
+*Context: Leiden groups nodes that are directly connected (Workflows). Node2Vec groups nodes that play the exact same structural role in the graph, even if they never connect (Ontological Categories like 'Assessments' or 'Symptoms').*
+1.  **Graph Embeddings:** Run Node2Vec on the graph to generate high-dimensional vectors for every node based on random walks.
+2.  **Dynamic K-Search:** Loop through K=2 up to `config['topology']['max_structural_clusters']`. Run K-Means clustering for each K and calculate the **Silhouette Score**.
+3.  **Optimization:** Select the K that mathematically maximizes the Silhouette Score (representing perfectly decoupled categories).
+4.  **Format Partitions:** Convert the optimal clusters into a list of `StructuralCluster` objects.
+
+### Step 3.5: Hypergraph Theme Inheritance (Set-Based)
 *Replaces legacy matrix Laplacian math with highly efficient native Python sets to calculate semantic inheritance.*
 1.  **Map Entities to Themes:** Group all nodes (entities) associated with each Theme. Store as `theme_sets = {"ThemeA": set(nodes), "ThemeB": set(nodes)}`.
 2.  **Calculate Overlap:** For every pair of themes (A, B), calculate the percentage of entities in B that also exist in A using a set intersection: `overlap_score = len(theme_sets[A].intersection(theme_sets[B])) / len(theme_sets[B])`.
 3.  **Enforce Threshold:** If `overlap_score >= config['topology']['inheritance_overlap_threshold']`, create a `ThemeInheritance` record indicating that B logically inherits from A.
 4.  **Append to Output:** Attach the resulting `ThemeInheritance` relationships to the `TopologyResult`.
 
-### Step 3.5: Data Persistence
-1.  **Assemble Final Payload:** Instantiate the master `TopologyResult` object using the hubs, orphans, communities, metrics, and theme inheritance logic generated above.
+### Step 3.6: Data Persistence
+1.  **Assemble Final Payload:** Instantiate the master `TopologyResult` object using the hubs, orphans, communities, structural clusters, metrics, and theme inheritance logic generated above.
 2.  **Save State:** Serialize the `TopologyResult` to JSON and save it to `outputs/03_topology/topology_partitions.json`. 
 
-### Step 3.6: PyVis Native Visualizations
+### Step 3.7: PyVis Native Visualizations
 *Store all interactive HTML graphs exclusively in the global `outputs/visuals/` directory.*
 1.  **Standard Topology Visual:** Iterate through the `TopologyResult`. Color `global_hubs` Red (large scale), `orphans` Gray (small scale), and `communities` distinct categorical colors. Add original edges. Save HTML to `outputs/visuals/interactive_topology_graph.html`.
 2.  **Hypergraph Visual:** Create a secondary `pyvis.network.Network` to visualize the N-ary inheritance structure. Add Themes as central parent nodes (Colored Blue, extremely large scale). Add their associated entities as child nodes connected to their respective Themes. Highlight the `ThemeInheritance` relationships with heavy directed arrows between the Theme nodes. Save HTML to `outputs/visuals/interactive_hypergraph.html`.

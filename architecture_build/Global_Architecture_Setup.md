@@ -21,10 +21,13 @@ SemanticPrism/
 ├── models/
 │   └── embeddings/         # Locally cached HuggingFace sentence-transformers
 ├── src/
-│   ├── extraction/         # Phase 1: Pydantic AI Agents, chunking, and text normalization
+│   ├── agents/             # Centralized Pydantic AI agent definitions and VRAM manager
+│   ├── config.py           # Global config loader overriding settings via .env
+│   ├── extraction/         # Phase 1: Chunking, discovery, and triple extraction
 │   ├── refinement/         # Phase 2: Embedding matrices, clustering, and LLM taxonomic lifting
-│   ├── topology/           # Phase 3: NetworkX, Leiden modularity, Hypergraph spectral math
-│   └── synthesis/          # Phase 4: Pydantic AI Agents for Python code generation
+│   ├── topology/           # Phase 3: NetworkX, Leiden, Node2Vec, and Spectral math
+│   └── synthesis/          # Phase 4: Dual-Agent generation for Python code synthesis
+├── .env                    # Ignored environment file for API keys
 ├── config.yaml             # The single source of truth for global hyperparameters
 ├── run_pipeline.py         # Master script executing the phases sequentially
 └── requirements.txt        # Python dependencies
@@ -42,31 +45,32 @@ The orchestrator must load `config.yaml` on boot and pass the relevant settings 
 
 llm:
   # Connection details for Pydantic AI Agents
-  provider: "openai" # e.g., 'openai', 'ollama', 'vertex'
-  model_name: "gpt-4o"
-  base_url: "http://localhost:11434/v1" # Relevant if using local proxies
-  api_key_env_var: "OPENAI_API_KEY"
+  provider: "google" # e.g., 'google', 'ollama', 'openai'
+  model_name: "gemini-3.1-flash-lite"
+  base_url: "" # Relevant if using local proxies
+  api_key: ""  # Loaded automatically from .env
   temperature: 0.0
+  manage_vram: false # Set to true to purge Ollama memory between batches
 
 extraction:
   domain: "General Complex Logic" # Fallback explicit domain if agent discovery fails
   theme_chunk_max_words: 6000
-  triple_chunk_max_words: 4000
-  normalize_text: true
+  triple_chunk_max_words: 600
 
 refinement:
-  embedding_model: "BAAI/bge-m3" # HuggingFace model string
-  similarity_threshold: 0.25     # Distance tolerance for agglomerative clustering
-  spectral_variance_retention: 0.95
+  max_async_calls: 2
+  embedding_model: "all-MiniLM-L6-v2" # HuggingFace model string
+  clustering_threshold: 0.5           # Agglomerative semantic distance threshold
 
 topology:
-  inheritance_overlap_threshold: 0.75 # Minimum entity overlap % to subclass a theme
-  leiden_resolution: 1.0              # Granularity control for Leiden clustering
-  min_community_size: 3               # Pruning floor for disconnected orphans
+  max_structural_clusters: 10         # Bound for Node2Vec Silhouette Score search
 
 synthesis:
-  strategy: "hub_and_spoke"           # "standard" or "hub_and_spoke"
+  clustering_strategy: "node2vec"     # Options: "leiden" or "node2vec"
 ```
+
+### Environment Security & `.env`
+Do not place raw API keys inside the `config.yaml`. The `src/config.py` logic automatically loads the `.env` file via `python-dotenv` and overlays the `GEMINI_API_KEY` (or relevant key) onto the configuration dict at runtime, ensuring your keys are never accidentally pushed to version control.
 
 ## 3. Data Lifecycle & State Management
 

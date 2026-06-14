@@ -28,14 +28,21 @@ The build is separated into four distinct `.md` guides. You must execute and ver
 *   **Key Mechanic:** "Taxonomic Lifting". If the mathematical cluster is confusing, an LLM selects the best "Hypernym" to represent the cluster. It saves a 1:1 `taxonomic_map.json` forward dictionary, then mutates and saves the SVOs to `refined_triplets.json`.
 
 ### Stage 3: Topology (`Stage3_Topology_Build_Guide.md`)
-*   **The Goal:** Pure mathematics. Map the topological structure of the data.
-*   **The Process:** Builds a NetworkX directed graph. Uses PageRank to mathematically locate massive "Death Star" Global Hubs. Prunes out isolated 1-degree "Orphans". Uses Leiden Modularity to partition the remaining graph into distinct semantic Communities.
-*   **Key Mechanic:** Calculates `ThemeInheritance` using native Python set-intersection overlaps (e.g., "Do 80% of the concepts in B exist in A? Then B subclasses A"). Outputs interactive PyVis HTML graphs and a `topology_partitions.json` file.
+*   **The Goal:** Pure mathematics. Map the topological structure of the data to discover Workflows and Categories.
+*   **The Process:** Builds a NetworkX directed graph. Uses PageRank to mathematically locate massive "Death Star" Global Hubs. Prunes out isolated 1-degree "Orphans". 
+*   **Key Clustering Mechanics:**
+    *   **Leiden Modularity:** Groups nodes based on proximity (who talks to whom) to discover chronological/procedural **Clinical Workflows**.
+    *   **Node2Vec Structural Equivalence:** Generates random walks to map embeddings and uses Silhouette Score K-Means to group nodes based on their *role*, discovering pure **Ontological Categories**.
+*   **Theme Inheritance:** Calculates inheritance using native Python set-intersection overlaps (e.g., "Do 80% of the concepts in B exist in A? Then B subclasses A"). Outputs interactive PyVis HTML graphs and a `topology_partitions.json` file.
 
 ### Stage 4: Synthesis (`Stage4_Synthesis_Build_Guide.md`)
-*   **The Goal:** Generate the final Python codebase.
-*   **The Process:** Runs a **Dual-Pass Generation Loop**. First, it processes the communities using the normalized hypernyms. Second, it uses the 1:1 `taxonomic_map.json` to filter the original data and pass the raw SVO text to the Schema Agent.
-*   **Key Mechanic:** Outputs side-by-side schemas into `schemas/normalized/` and `schemas/raw/` for comparative analysis. Uses mathematical `ThemeInheritance` to natively write Object-Oriented subclassing (`class SpecificCommunity(GeneralHub):`).
+*   **The Goal:** Generate the final, deployable Python codebase.
+*   **The Process:** Executes a strictly 4-Phase pipeline:
+    1.  **Orphan Aggregation:** Bundles loose nodes into Python `Enum` types.
+    2.  **Dual-Pass Schema Generation:** Dynamically routes either Leiden or Node2Vec clusters to distinct Pydantic-AI Agents, running both a "Raw" and "Normalized" pass for comparison.
+    3.  **Global Consolidation:** Merges fragmented schemas to deduplicate overlapping classes.
+    4.  **Comprehensive Ontology:** Merges the raw master, normalized master, and Enums into a single, 100% standalone `comprehensive_ontology.py` script.
+*   **Key Mechanic:** Dynamically routes configuration logic to distinct agents with hyper-focused prompts, ensuring the LLM doesn't hallucinate "Workflows" when given "Categories". Uses mathematical `ThemeInheritance` to natively write Object-Oriented subclassing (`class SpecificCommunity(GeneralHub):`).
 
 ## 4. The Pydantic Synthesis Skill (`Pydantic_Synthesis_Skill.md`)
 Because the final output of this entire pipeline is *Python Code intended for another LLM to use*, that code must be bulletproof. This document provides the LLM with strict rules for code generation:

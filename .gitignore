@@ -44,3 +44,13 @@ inputs/testdocs/*
 
 # Ignore MacOS
 .DS_Store
+
+# Machine Learning Models & Embeddings
+models/
+.cache/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.h5
