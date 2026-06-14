@@ -1,0 +1,13 @@
+pydantic
+pydantic-ai
+PyYAML
+sentence-transformers
+scikit-learn
+numpy
+networkx
+cdlib
+leidenalg
+pyvis
+ruff
+node2vec
+python-dotenv

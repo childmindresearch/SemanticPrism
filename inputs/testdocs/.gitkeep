@@ -1,0 +1,1 @@
+# Keep inputs directory tracked by git, but ignore its contents (via .gitignore)

@@ -1,0 +1,40 @@
+directories:
+  inputs: "inputs/testdocs"
+  outputs: "outputs"
+
+llm:
+  # --- GEMINI TESTING BLOCK ---
+  provider: "google"
+  model_name: "gemini-3.1-flash-lite"
+  base_url: ""
+  api_key: "" # Load from .env file
+  temperature: 0.0
+  manage_vram: false
+  
+  # --- OLLAMA ORIGINAL BLOCK (Uncomment and delete Gemini block to revert) ---
+  # provider: "ollama"
+  # model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
+  # base_url: "http://localhost:11434/v1"
+  # api_key: ""
+  # temperature: 0.0
+  # manage_vram: true
+
+extraction:
+  domain: "General Complex Logic"
+  theme_chunk_max_words: 6000
+  triple_chunk_max_words: 600
+
+refinement:
+  max_async_calls: 2
+  embedding_model: "all-MiniLM-L6-v2"
+  # Agglomerative Clustering Distance Threshold
+  # Adjust this value to control how tightly or loosely nodes are grouped during taxonomic lifting.
+  # Lower values (e.g., 0.5): Tighter, more precise clusters. Results in more numerous, granular categories.
+  # Higher values (e.g., 0.9): Broader, looser clusters. Results in fewer, higher-level abstract categories.
+  clustering_threshold: 0.5
+
+topology:
+  max_structural_clusters: 10
+
+synthesis:
+  clustering_strategy: "node2vec" # Options: "leiden" or "node2vec"
