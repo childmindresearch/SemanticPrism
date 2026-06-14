@@ -36,8 +36,6 @@ share/python-wheels/
 
 # Project Specific Data & Outputs
 outputs/
-inputs/testdocs/*
-!inputs/testdocs/.gitkeep
 
 # Ignore graph visualization caches
 *.html
