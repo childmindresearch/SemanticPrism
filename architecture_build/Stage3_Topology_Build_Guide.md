@@ -68,7 +68,9 @@ Create a master class `TopologyPipeline` to execute the sequence logically. It m
 ### Step 3.7: PyVis Native Visualizations
 *Store all interactive HTML graphs exclusively in the global `outputs/visuals/` directory.*
 1.  **Standard Topology Visual:** Iterate through the `TopologyResult`. Color `global_hubs` Red (large scale), `orphans` Gray (small scale), and `communities` distinct categorical colors. Add original edges. Save HTML to `outputs/visuals/interactive_topology_graph.html`.
-2.  **Hypergraph Visual:** Create a secondary `pyvis.network.Network` to visualize the N-ary inheritance structure. Add Themes as central parent nodes (Colored Blue, extremely large scale). Add their associated entities as child nodes connected to their respective Themes. Highlight the `ThemeInheritance` relationships with heavy directed arrows between the Theme nodes. Save HTML to `outputs/visuals/interactive_hypergraph.html`.
+2.  **Separated Topology Visual:** Generate a duplicate of the Standard Topology network but initialize it with the parameter `heading="Standard Topology Graph (Separated)"` and configure physics using `.repulsion(node_distance=200, spring_length=250)` to add separation. Save HTML to `outputs/visuals/interactive_topology_graph_separated.html`.
+3.  **Hypergraph Visual:** Create a secondary `pyvis.network.Network` to visualize the N-ary inheritance structure. Add Themes as central parent nodes (Colored Blue, extremely large scale). Add their associated entities as child nodes connected to their respective Themes. Highlight the `ThemeInheritance` relationships with heavy directed arrows between the Theme nodes. Save HTML to `outputs/visuals/interactive_hypergraph.html`.
+4.  **Separated Hypergraph Visual:** Generate a duplicate of the Hypergraph network but initialize it with the parameter `heading="Hypergraph Theme Inheritance (Separated)"` and configure physics using `.repulsion(node_distance=200, spring_length=250)` to add separation. Save HTML to `outputs/visuals/interactive_hypergraph_separated.html`.
 
 ---
 

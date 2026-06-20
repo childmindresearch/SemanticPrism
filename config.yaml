@@ -1,40 +1,83 @@
+pipeline:
+  use_async: true
+
 directories:
   inputs: "inputs/testdocs"
   outputs: "outputs"
 
 llm:
   # --- GEMINI TESTING BLOCK ---
-  provider: "google"
-  model_name: "gemini-3.1-flash-lite"
-  base_url: ""
-  api_key: "" # Load from .env file
-  temperature: 0.0
-  manage_vram: false
+  # provider: "google"
+  # model_name: "gemini-3.1-flash-lite"
+  # base_url: ""
+  # api_key: "" # Load from .env file
+  # temperature: 0.0
+  # manage_vram: false
   
   # --- OLLAMA ORIGINAL BLOCK (Uncomment and delete Gemini block to revert) ---
-  # provider: "ollama"
-  # model_name: "mistral-nemo:12b-instruct-2407-q4_K_M"
-  # base_url: "http://localhost:11434/v1"
-  # api_key: ""
-  # temperature: 0.0
-  # manage_vram: true
+  provider: "ollama"
+  model_name: "gemma4:26b"
+  base_url: "http://127.0.0.1:11434/v1"
+  api_key: ""
+  temperature: 0.0
+  manage_vram: true
 
 extraction:
   domain: "General Complex Logic"
-  theme_chunk_max_words: 6000
-  triple_chunk_max_words: 600
+  max_async_calls: 2
+  theme_chunk_max_words: 4000
+  triple_chunk_max_words: 800
+  # Context Window Cap (in tokens) to optimize KV cache and prevent GPU memory overflow.
+  # Note: A higher chunk size (theme_chunk_max_words or triple_chunk_max_words) or a higher
+  # max_async_calls will increase VRAM consumption. Ensure:
+  # (context_window_cap * max_async_calls * bytes_per_token_KV) fits in GPU VRAM.
+  context_window_cap: 8192
+  # Stage-specific model overrides
+  llm:
+    provider: "ollama"
+    model_name: "SemP10k-gemma:latest" # "gemma4:26b"
+    base_url: "http://127.0.0.1:11434/v1"
+    api_key: ""
+    temperature: 0.0
 
 refinement:
-  max_async_calls: 2
+  max_async_calls: 6
+  batch_size: 25
+  timeout: 300.0
   embedding_model: "all-MiniLM-L6-v2"
   # Agglomerative Clustering Distance Threshold
   # Adjust this value to control how tightly or loosely nodes are grouped during taxonomic lifting.
   # Lower values (e.g., 0.5): Tighter, more precise clusters. Results in more numerous, granular categories.
   # Higher values (e.g., 0.9): Broader, looser clusters. Results in fewer, higher-level abstract categories.
-  clustering_threshold: 0.5
+  clustering_threshold: 0.6
+  # Context Window Cap (in tokens) for lightweight term normalization.
+  # Since batch_size is small and terms are short, a smaller context cap (e.g., 2048)
+  # optimizes cache reuse and reduces memory usage.
+  context_window_cap: 2048
+  # Stage-specific model overrides
+  llm:
+    provider: "ollama"
+    model_name: "SemP10k-gemma:latest" # "gemma4:26b"
+    base_url: "http://127.0.0.1:11434/v1"
+    api_key: ""
+    temperature: 0.0
 
 topology:
   max_structural_clusters: 10
 
 synthesis:
+  max_async_calls: 3
   clustering_strategy: "node2vec" # Options: "leiden" or "node2vec"
+  min_cluster_size: 3
+  # Context Window Cap (in tokens) for schema generation and consolidation.
+  # Consolidation parses multiple Python file schemas, which can grow large.
+  # Set higher (e.g., 16384) to prevent truncation of target schemas.
+  context_window_cap: 16384
+  # Stage-specific model overrides
+  llm:
+    provider: "ollama"
+    model_name: "SemPrism-gemma:latest" # "gemma4:26b"
+    base_url: "http://127.0.0.1:11434/v1"
+    api_key: ""
+    temperature: 0.0
+

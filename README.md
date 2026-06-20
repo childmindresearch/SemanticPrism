@@ -32,14 +32,32 @@ The pipeline is driven by configuration settings in `config.yaml` and executes a
 ---
 
 ### Stage 3: Topology (`src/topology/graph_builder.py`)
-**Purpose:** To map the normalized triplets into a `NetworkX` graph to discover hidden structural patterns and groupings.
+**Purpose:** To map the normalized triplets into a `NetworkX` graph to discover hidden structural patterns, role groups, and communities.
 
-- **Spectral Centrality:** Calculates PageRank and Degree Centrality to isolate "Global Hubs" (core concepts) and "Orphans" (highly specific edge cases).
-  - *Why:* Removing Hubs and Orphans prevents the graph from collapsing into one massive hairball, allowing distinct clusters to emerge.
-- **Leiden Modularity (Community Detection):** Groups nodes based on proximity and connectivity (who talks to whom).
-  - *Why:* This clustering strategy successfully discovers chronological or procedural **Clinical Workflows** (e.g., tying a Symptom to an Assessment to an Intervention).
-- **Node2Vec Structural Equivalence:** Generates random walks to map the graph into vector embeddings, then dynamically uses the Silhouette Score to group nodes into K-Means clusters based on their *role* in the network.
-  - *Why:* This clustering strategy mathematically discovers pure **Ontological Categories** (e.g., grouping all Assessments together, all Symptoms together) regardless of whether they appear in the same sentence.
+#### Detailed Approach
+1.  **Network Graph Construction**: Ingests the normalized S-V-O triplets from Stage 2 and constructs directed and undirected graphs using NetworkX.
+2.  **Spectral Centrality (Hubs & Orphans)**: Computes PageRank and Degree Centrality scores. The top $N\%$ of nodes sorted by PageRank (where $N$ is determined by the `spectral_variance_retention` parameter in `config.yaml`, default `0.05` or 5%) are isolated as **Global Hubs**. Nodes with degree $\le 1$ that are not hubs are isolated as **Orphans**.
+3.  **Graph Pruning**: Hubs and Orphans are temporarily removed from the clustering subgraph. This prevents highly central "hairballs" and isolated "leafs" from blurring cluster boundaries.
+4.  **Leiden Modularity Community Detection**: Runs the Leiden modularity clustering algorithm on the pruned subgraph to group nodes based on local connectivity and proximity.
+5.  **Node2Vec Structural Equivalence**: Embeds the pruned graph structure into a 64-dimensional vector space using random walks. The pipeline then dynamically searches for the optimal number of clusters ($K$) using the Silhouette Score and groups the nodes using K-Means.
+6.  **Theme Inheritance**: Evaluates hypergraph overlap scores between the semantic theme node sets to determine child-parent relationships.
+
+#### Output File (`outputs/03_topology/topology_partitions.json`)
+The pipeline serializes the `TopologyResult` Pydantic model into this file. It contains:
+*   **`global_hubs`** (List of Strings): Core central concepts.
+*   **`orphans`** (List of Strings): Low-connectivity leaf concepts.
+*   **`communities`** (List of CommunityPartition): Leiden modularity community partitions.
+*   **`structural_clusters`** (List of StructuralCluster): Node2Vec K-Means cluster partitions.
+*   **`node_metrics`** (Dict of Node ID to NodeMetrics): Centrality scores, hub/orphan status, and directed edge collections for each node.
+*   **`theme_inheritance`** (List of ThemeInheritance): Theme overlap scores representing inheritance hierarchies.
+
+#### What the Results Indicate
+*   **Global Hubs**: Indicate core domain definitions or master entities (e.g., `patient` or `therapy`). They act as the primary structural routing nodes in the domain.
+*   **Orphans**: Indicate highly specific details, individual values, or leaf nodes (e.g., a specific psychometric score or a localized behavior) that do not connect widely.
+*   **Leiden Communities**: Discover procedural or event-driven **Clinical Workflows** (nodes grouped because they are connected sequentially, like clinical symptoms leading to a test, leading to a diagnosis, leading to an intervention).
+*   **Node2Vec Clusters**: Discover functional **Ontological Categories** (nodes grouped because they play similar roles in the network structure, such as grouping all diagnostic instruments together, or all symptoms together, regardless of whether they connect directly).
+
+---
 
 ---
 
@@ -54,6 +72,32 @@ The pipeline is driven by configuration settings in `config.yaml` and executes a
   - *Why:* To mathematically deduplicate the data and ensure a clean schema inheritance tree.
 - **Phase 4: Comprehensive Ontology:** Merges the raw master schemas, the normalized master schemas, and the Enums into one final file.
   - *Why:* To produce `comprehensive_ontology.py`—a 100% portable, standalone SDK that can be handed directly to an extraction LLM out of the box.
+
+## Interactive Visualizations (Stage 3)
+
+The Stage 3 Topology pipeline generates 7 interactive HTML visualization files under `outputs/visuals/` to explore community and structural patterns in the domain knowledge graph:
+
+1.  **Standard Topology Visual** (`interactive_topology_graph.html`)
+    *   *Description:* A complete rendering of all Subject-Predicate-Object relationships in the knowledge network.
+    *   *Details Included:* Nodes are colored by their Leiden community partition. Global hubs are styled as **red stars**, orphans as **gray circles**, and standard entities as standard circles. Tooltips display node roles (Hub, Orphan, or Entity), Leiden community ID, and degree centrality.
+2.  **Hypergraph Visual** (`interactive_hypergraph.html`)
+    *   *Description:* A macro-representation showing high-level semantic theme associations and their inheritance patterns.
+    *   *Details Included:* Blue star-shaped nodes represent discovered themes (hyperedges), connected by thin lines to their member entity nodes. Directional arrows between theme nodes represent parent-child theme inheritance hierarchies, with the overlap score displayed on the edges.
+3.  **Isolated Communities** (`interactive_communities_only.html`)
+    *   *Description:* A clean, isolated layout of Leiden communities (representing workflows/events) with inter-community noise removed.
+    *   *Details Included:* Only intra-community edges are rendered. The top 3 central nodes in each community are highlighted as **stars with thick borders** (core representatives), while other nodes are standard circles. Tooltips display community role and a summary of the community's core representative terms.
+4.  **Collapsed Communities** (`interactive_collapsed_communities.html`)
+    *   *Description:* A high-level macro view that collapses entire Leiden communities (filtered to size >= 3) into single nodes.
+    *   *Details Included:* Node size is scaled by the number of entities in that community. The labels display the community ID and lists the mapped master themes from `theme_mapping_clusters.json` along with deduplicated counts showing how many times each theme is represented by nodes in that community. Tooltips show total node count, representative terms, and the detailed theme breakdowns.
+5.  **Dual Perspective** (`interactive_dual_perspective.html`)
+    *   *Description:* A combined visualization overlaying Leiden modularity communities with Node2Vec structural equivalence clusters.
+    *   *Details Included:* Colors map to Leiden community IDs (representing workflows), while node shapes map to Node2Vec cluster IDs (representing structural roles: `dot`, `square`, `triangle`, `diamond`, `star`, etc.). Tooltips show node name, Leiden community ID, Node2Vec cluster shape ID, and PageRank centrality. Renders all edges between the community nodes.
+6.  **Node2Vec 2D Embedding Space** (`interactive_node2vec_embeddings.html`)
+    *   *Description:* An interactive Plotly 2D scatter plot representing the high-dimensional node embeddings in vector space.
+    *   *Details Included:* Maps the 64-dimensional Node2Vec vectors to a 2D coordinate grid using PCA. Points represent nodes, colored by their K-Means structural cluster assignment. Hover tooltips show node names.
+7.  **Role-Based Network Graph** (`interactive_structural_clusters_only.html`)
+    *   *Description:* A PyVis network graph showing structural equivalences and roles by isolating Node2Vec cluster partitions.
+    *   *Details Included:* Nodes are colored by their Node2Vec cluster assignment. Core representative nodes (highest PageRank within the cluster) are styled as stars, and cluster members as dots. Only intra-cluster edges are rendered with customized spacing physics.
 
 ## Getting Started & Configuration
 

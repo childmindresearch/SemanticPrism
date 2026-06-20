@@ -5,37 +5,48 @@ This module centralizes the initialization and configuration of Pydantic AI agen
 
 from typing import Set, Optional
 import os
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, ModelSettings
 from dataclasses import dataclass
-from pydantic_ai.models.ollama import OllamaModel
 
 from src.extraction import schemas
 from src.extraction import prompts
 from src.config import settings
 
-# Determine AI Model Provider Details from global settings
-provider = settings['llm']['provider']
-model_name = settings['llm']['model_name']
-base_url = settings['llm'].get('base_url')
+# Determine Stage-Specific or Global LLM configuration
+llm_config = settings.get('extraction', {}).get('llm')
+if not llm_config:
+    llm_config = settings.get('llm', {})
+
+provider = llm_config.get('provider')
+model_name = llm_config.get('model_name')
+base_url = llm_config.get('base_url')
 
 # Configure model backend
 if provider == 'ollama':
-    from pydantic_ai.providers.ollama import OllamaProvider
-    custom_provider = OllamaProvider(base_url=base_url)
-    pydantic_model = OllamaModel(model_name, provider=custom_provider)
+    if base_url:
+        os.environ['OLLAMA_BASE_URL'] = base_url
+    pydantic_model = f"ollama:{model_name}"
 else:
-    api_key = settings['llm'].get('api_key', '')
+    api_key = llm_config.get('api_key', '')
     if api_key:
         if provider == 'google':
             os.environ['GOOGLE_API_KEY'] = api_key
         # Add other providers here if necessary in the future
     pydantic_model = f"{provider}:{model_name}"
 
+# Setup stage-specific context limit and model settings
+extraction_cap = settings.get('extraction', {}).get('context_window_cap', 8192)
+model_settings = ModelSettings(
+    max_tokens=extraction_cap,
+    extra_body={"options": {"num_ctx": extraction_cap}} if provider == 'ollama' else {}
+)
+
 # Agent 1: Extracts localized themes from individual text chunks.
 theme_agent = Agent(
     model=pydantic_model,
     output_type=schemas.ThemeDiscoveryResult,
     system_prompt=prompts.THEME_DISCOVERY_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -44,6 +55,7 @@ master_theme_agent = Agent(
     model=pydantic_model,
     output_type=schemas.MasterThemeSynthesisResult,
     system_prompt=prompts.MASTER_THEME_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -58,7 +70,17 @@ triple_agent = Agent(
     deps_type=TripleContext,
     output_type=schemas.TripleExtractionResult,
     system_prompt=prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT,
-    retries=3
+    model_settings=model_settings,
+    retries=0
+)
+
+# Agent 3b: Reformats failed/malformed JSON outputs to fit the desired schema.
+triple_reformat_agent = Agent(
+    model=pydantic_model,
+    output_type=schemas.TripleExtractionResult,
+    system_prompt=prompts.TRIPLE_REFORMAT_SYSTEM_PROMPT,
+    model_settings=model_settings,
+    retries=1
 )
 
 @triple_agent.system_prompt

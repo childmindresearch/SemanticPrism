@@ -4,30 +4,40 @@ This module centralizes the initialization and configuration of Pydantic AI agen
 """
 
 import os
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai import Agent, RunContext, ModelSettings
 
 from src.refinement import schemas
 from src.refinement import prompts
 from src.config import settings
 
-# Determine AI Model Provider Details from global settings
-provider = settings['llm']['provider']
-model_name = settings['llm']['model_name']
-base_url = settings['llm'].get('base_url')
+# Determine Stage-Specific or Global LLM configuration
+llm_config = settings.get('refinement', {}).get('llm')
+if not llm_config:
+    llm_config = settings.get('llm', {})
+
+provider = llm_config.get('provider')
+model_name = llm_config.get('model_name')
+base_url = llm_config.get('base_url')
 
 # Configure model backend
 if provider == 'ollama':
-    from pydantic_ai.providers.ollama import OllamaProvider
-    custom_provider = OllamaProvider(base_url=base_url)
-    pydantic_model = OllamaModel(model_name, provider=custom_provider)
+    if base_url:
+        os.environ['OLLAMA_BASE_URL'] = base_url
+    pydantic_model = f"ollama:{model_name}"
 else:
-    api_key = settings['llm'].get('api_key', '')
+    api_key = llm_config.get('api_key', '')
     if api_key:
         if provider == 'google':
             os.environ['GOOGLE_API_KEY'] = api_key
         # Add other providers here if necessary in the future
     pydantic_model = f"{provider}:{model_name}"
+
+# Setup stage-specific context limit and model settings
+refinement_cap = settings.get('refinement', {}).get('context_window_cap', 2048)
+model_settings = ModelSettings(
+    max_tokens=refinement_cap,
+    extra_body={"options": {"num_ctx": refinement_cap}} if provider == 'ollama' else {}
+)
 
 # Agent 1a: Subject Normalization
 subject_norm_agent = Agent(
@@ -35,6 +45,7 @@ subject_norm_agent = Agent(
     deps_type=str,
     output_type=schemas.NormalizedStrings,
     system_prompt=prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -48,6 +59,7 @@ predicate_norm_agent = Agent(
     deps_type=str,
     output_type=schemas.NormalizedStrings,
     system_prompt=prompts.PREDICATE_NORMALIZATION_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -61,6 +73,7 @@ object_norm_agent = Agent(
     deps_type=str,
     output_type=schemas.NormalizedStrings,
     system_prompt=prompts.OBJECT_NORMALIZATION_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -74,6 +87,7 @@ lift_agent = Agent(
     deps_type=str,
     output_type=schemas.TaxonomicVerification,
     system_prompt=prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 

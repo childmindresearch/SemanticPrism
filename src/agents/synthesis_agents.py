@@ -3,33 +3,89 @@ SemanticPrism Stage 4: Synthesis Agents
 This module centralizes the initialization and configuration of Pydantic AI agents for the synthesis phase.
 """
 
-from typing import List
+from typing import List, Any
 import os
 import json
 from dataclasses import dataclass
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.ollama import OllamaModel
+from contextvars import ContextVar
+from pydantic_ai import Agent, RunContext, ModelSettings
+from pydantic_ai.models import Model, infer_model
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 
 from src.synthesis import schemas
 from src.synthesis import prompts
 from src.config import settings
 
-# Determine AI Model Provider Details
-provider = settings['llm']['provider']
-model_name = settings['llm']['model_name']
-base_url = settings['llm'].get('base_url')
+# Determine Stage-Specific or Global LLM configuration
+llm_config = settings.get('synthesis', {}).get('llm')
+if not llm_config:
+    llm_config = settings.get('llm', {})
 
+provider = llm_config.get('provider')
+model_name = llm_config.get('model_name')
+base_url = llm_config.get('base_url')
+
+# Configure model backend
 if provider == 'ollama':
-    from pydantic_ai.providers.ollama import OllamaProvider
-    custom_provider = OllamaProvider(base_url=base_url)
-    pydantic_model = OllamaModel(model_name, provider=custom_provider)
+    if base_url:
+        os.environ['OLLAMA_BASE_URL'] = base_url
+    pydantic_model = f"ollama:{model_name}"
 else:
-    api_key = settings['llm'].get('api_key', '')
+    api_key = llm_config.get('api_key', '')
     if api_key:
         if provider == 'google':
             os.environ['GOOGLE_API_KEY'] = api_key
         # Add other providers here if necessary in the future
     pydantic_model = f"{provider}:{model_name}"
+
+# Setup context-local history variable and logger wrapper
+last_llm_responses: ContextVar[List[Any]] = ContextVar("last_llm_responses", default=[])
+
+class LoggingModel(Model):
+    def __init__(self, wrapped: Model):
+        self.wrapped = wrapped
+
+    @property
+    def model_name(self) -> str:
+        return self.wrapped.model_name
+
+    @property
+    def system(self) -> str:
+        return self.wrapped.system
+
+    @property
+    def base_url(self) -> str | None:
+        return self.wrapped.base_url
+
+    async def request(self, messages: list[ModelMessage], model_settings: Any, model_request_parameters: Any) -> ModelResponse:
+        response = await self.wrapped.request(messages, model_settings, model_request_parameters)
+        
+        extracted = []
+        for part in response.parts:
+            if isinstance(part, TextPart):
+                extracted.append(part.content)
+            elif isinstance(part, ToolCallPart):
+                extracted.append(part.args)
+            else:
+                extracted.append(str(part))
+                
+        current_history = last_llm_responses.get()
+        current_history.append(extracted)
+        
+        return response
+
+    async def request_stream(self, messages: list[ModelMessage], model_settings: Any, model_request_parameters: Any, run_context: Any = None) -> Any:
+        return self.wrapped.request_stream(messages, model_settings, model_request_parameters, run_context)
+
+resolved_model = infer_model(pydantic_model)
+pydantic_model = LoggingModel(resolved_model)
+
+# Setup stage-specific context limit and model settings
+synthesis_cap = settings.get('synthesis', {}).get('context_window_cap', 16384)
+model_settings = ModelSettings(
+    max_tokens=synthesis_cap,
+    extra_body={"options": {"num_ctx": synthesis_cap}} if provider == 'ollama' else {}
+)
 
 @dataclass
 class OrphanContext:
@@ -46,6 +102,7 @@ orphan_agent = Agent(
     deps_type=OrphanContext,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.ORPHAN_SYNTHESIS_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -59,6 +116,7 @@ leiden_schema_agent = Agent(
     deps_type=SynthesisContext,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -72,6 +130,7 @@ node2vec_schema_agent = Agent(
     deps_type=SynthesisContext,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -84,6 +143,7 @@ consolidation_agent = Agent(
     model=pydantic_model,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.CONSOLIDATION_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )
 
@@ -92,5 +152,6 @@ comprehensive_ontology_agent = Agent(
     model=pydantic_model,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.FINAL_ONTOLOGY_SYSTEM_PROMPT,
+    model_settings=model_settings,
     retries=3
 )

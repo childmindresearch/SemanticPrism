@@ -42,6 +42,26 @@ class RefinementPipeline:
         self.config = config
         self.context = context
         self.embedding_model = None
+        
+        # Setup Output and Log Directories
+        base_out_dir = self.config.get('directories', {}).get('outputs', 'outputs')
+        self.use_async = self.config.get('pipeline', {}).get('use_async', False)
+        self.log_dir = Path(base_out_dir) / "logs"
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Clear previous run logs to prevent continuous expansion
+        log_file = self.log_dir / "stage_02_refinement_errors.json"
+        if log_file.exists():
+            log_file.unlink()
+
+    def _log_error(self, record: Dict[str, Any]):
+        """Helper to append error records to stage_02_refinement_errors.json."""
+        try:
+            log_path = self.log_dir / "stage_02_refinement_errors.json"
+            with open(log_path, "a") as f:
+                f.write(json.dumps(record) + "\n")
+        except Exception as e:
+            print(f"[Refinement] Failed to write error log: {e}")
 
     def _nlp_preprocess(self, text: str) -> str:
         """Native cleaning."""
@@ -62,11 +82,20 @@ class RefinementPipeline:
             models_dir = Path("models/embeddings")
             models_dir.mkdir(parents=True, exist_ok=True)
             
-            self.embedding_model = SentenceTransformer(
-                model_name, 
-                cache_folder=str(models_dir),
-                local_files_only=True  # Guarantees 100% offline execution
-            )
+            try:
+                self.embedding_model = SentenceTransformer(
+                    model_name, 
+                    cache_folder=str(models_dir),
+                    local_files_only=True  # Guarantees 100% offline execution if cached
+                )
+            except Exception as e:
+                print(f"[Refinement] Local model '{model_name}' not found or failed to load offline ({e}).")
+                print(f"[Refinement] Attempting online download from HuggingFace...")
+                self.embedding_model = SentenceTransformer(
+                    model_name, 
+                    cache_folder=str(models_dir),
+                    local_files_only=False
+                )
 
     def execute(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str]):
         print("[Refinement] Starting Stage 2 Pipeline...")
@@ -93,24 +122,55 @@ class RefinementPipeline:
             self.context.term_frequencies[t.object] += 1
 
         normalization_map = {}
-        batch_size = 15
+        batch_size = self.config.get('refinement', {}).get('batch_size', 15)
         max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
+        refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
         
-        async def process_batch(batch: list, sem: asyncio.Semaphore, agent):
+        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int):
             async with sem:
+                print(f"      -> Running API call for batch {batch_idx}/{total_batches}...")
                 user_prompt = prompts.LLM_PREPROCESSING_USER_PROMPT.format(
                     master_themes=', '.join(master_themes),
                     batch_json=json.dumps(batch)
                 )
                 try:
-                    result = await agent.run(
-                        user_prompt,
-                        deps=self.context.master_domain
-                    )
+                    # Read timeout from config (default to 300.0s). Set to 0 or null to disable timeouts entirely.
+                    timeout_val = self.config.get('refinement', {}).get('timeout', 300.0)
+                    if timeout_val and timeout_val > 0:
+                        result = await asyncio.wait_for(
+                            agent.run(
+                                user_prompt,
+                                deps=self.context.master_domain
+                            ),
+                            timeout=timeout_val
+                        )
+                    else:
+                        result = await agent.run(
+                            user_prompt,
+                            deps=self.context.master_domain
+                        )
                     for pair in result.output.tokens:
                         normalization_map[pair.original] = pair.normalized
+                except asyncio.TimeoutError:
+                    print(f"      -> Timeout error on API call for batch {batch_idx}/{total_batches}")
+                    error_record = {
+                        "phase": "lexical_normalization",
+                        "batch_index": batch_idx,
+                        "total_batches": total_batches,
+                        "error": "TimeoutError: API call exceeded configured limit"
+                    }
+                    self._log_error(error_record)
+                    for term in batch:
+                        normalization_map[term] = term
                 except Exception as e:
-                    print(f"[Refinement] Error normalizing batch: {e}")
+                    print(f"      -> Error normalizing batch {batch_idx}/{total_batches}: {e}")
+                    error_record = {
+                        "phase": "lexical_normalization",
+                        "batch_index": batch_idx,
+                        "total_batches": total_batches,
+                        "error": str(e)
+                    }
+                    self._log_error(error_record)
                     for term in batch:
                         normalization_map[term] = term
 
@@ -118,25 +178,53 @@ class RefinementPipeline:
             term_list = sorted(list(term_set))
             sem = asyncio.Semaphore(max_async)
             tasks = []
-            total_batches = (len(term_list) + batch_size - 1) // batch_size
+            
+            # Estimate maximum allowed tokens for prompt JSON payload
+            from src.utils.token_helper import estimate_tokens
+            from src.refinement import prompts as ref_prompts
+            
+            base_prompt_tokens = estimate_tokens(
+                prompts.LLM_PREPROCESSING_USER_PROMPT.format(
+                    master_themes=', '.join(master_themes),
+                    batch_json="[]"
+                )
+            )
+            # Normalize with sys prompt size and output buffer (500 tokens)
+            sys_prompt_tokens = estimate_tokens(ref_prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+            max_json_tokens = refinement_cap - base_prompt_tokens - sys_prompt_tokens - 500
+            if max_json_tokens < 100:
+                max_json_tokens = 100
+                
+            # Dynamic batch grouping
+            batches = []
+            current_batch = []
+            for term in term_list:
+                hypothetical_batch = current_batch + [term]
+                hypothetical_tokens = estimate_tokens(json.dumps(hypothetical_batch))
+                if hypothetical_tokens > max_json_tokens or len(current_batch) >= batch_size:
+                    if current_batch:
+                        batches.append(current_batch)
+                        current_batch = [term]
+                    else:
+                        batches.append([term])
+                        current_batch = []
+                else:
+                    current_batch.append(term)
+            if current_batch:
+                batches.append(current_batch)
+                
+            total_batches = len(batches)
             
             async def wrapped_process(batch, sem, agent, batch_idx):
-                print(f"      -> Starting batch {batch_idx}/{total_batches} ({len(batch)} terms)...")
+                print(f"      -> Enqueued batch {batch_idx}/{total_batches} ({len(batch)} terms)...")
                 try:
-                    # Apply a timeout to prevent infinite hangs
-                    await asyncio.wait_for(process_batch(batch, sem, agent), timeout=60.0)
+                    await process_batch(batch, sem, agent, batch_idx, total_batches)
                     print(f"      -> Completed batch {batch_idx}/{total_batches}")
-                except asyncio.TimeoutError:
-                    print(f"      -> Timeout error on batch {batch_idx}/{total_batches}")
-                    for term in batch:
-                        normalization_map[term] = term
                 except Exception as e:
-                    print(f"      -> Error on batch {batch_idx}/{total_batches}: {e}")
+                    print(f"      -> Unexpected error on batch {batch_idx}/{total_batches}: {e}")
 
-            for i in range(0, len(term_list), batch_size):
-                batch = term_list[i:i+batch_size]
-                batch_idx = (i // batch_size) + 1
-                tasks.append(wrapped_process(batch, sem, agent, batch_idx))
+            for idx, batch in enumerate(batches, start=1):
+                tasks.append(wrapped_process(batch, sem, agent, idx))
                 
             if tasks:
                 await asyncio.gather(*tasks)
@@ -235,42 +323,150 @@ class RefinementPipeline:
             for term, label in zip(terms_list, cluster_labels):
                 clusters[label].append(term)
                 
-            for label, cluster_terms in clusters.items():
-                if len(cluster_terms) == 1:
-                    taxonomic_map[cluster_terms[0]] = cluster_terms[0]
-                    continue
-                    
-                idx = [terms_list.index(t) for t in cluster_terms]
-                cluster_vecs = term_embeddings_l2[idx]
-                weights = np.array([self.context.term_frequencies.get(t, 1) for t in cluster_terms])
-                
-                centroid = np.average(cluster_vecs, axis=0, weights=weights)
-                distances = cosine_distances([centroid], cluster_vecs)[0]
-                closest_indices = np.argsort(distances)[:3]
-                fallback_candidates = [cluster_terms[i] for i in closest_indices]
-                
-                payload = {
-                    "cluster_terms": cluster_terms,
-                    "top_3_centroid_fallbacks": fallback_candidates
-                }
-                
-                user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
-                    payload_json=json.dumps(payload)
-                )
-                try:
-                    result = lift_agent.run_sync(
-                        user_prompt,
-                        deps=self.context.master_domain
-                    )
-                    
-                    mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+            if self.use_async:
+                async def lift_cluster_async(label, cluster_terms, sem):
+                    async with sem:
+                        if len(cluster_terms) == 1:
+                            taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                            return
+                            
+                        idx = [terms_list.index(t) for t in cluster_terms]
+                        cluster_vecs = term_embeddings_l2[idx]
+                        weights = np.array([self.context.term_frequencies.get(t, 1) for t in cluster_terms])
                         
-                    for t in cluster_terms:
-                        taxonomic_map[t] = mapped_term
-                except Exception as e:
-                    print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
-                    for t in cluster_terms:
-                        taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+                        centroid = np.average(cluster_vecs, axis=0, weights=weights)
+                        distances = cosine_distances([centroid], cluster_vecs)[0]
+                        closest_indices = np.argsort(distances)[:3]
+                        fallback_candidates = [cluster_terms[i] for i in closest_indices]
+                        
+                        payload = {
+                            "cluster_terms": cluster_terms,
+                            "top_3_centroid_fallbacks": fallback_candidates
+                        }
+                        
+                        # Validate cluster payload size
+                        from src.utils.token_helper import estimate_tokens
+                        from src.refinement import prompts as ref_prompts
+                        
+                        base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
+                        sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+                        max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
+                        
+                        if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
+                            # Trim cluster terms to fit, preserving candidates
+                            trimmed_terms = list(fallback_candidates)
+                            for term in cluster_terms:
+                                if term not in trimmed_terms:
+                                    test_payload = {
+                                        "cluster_terms": trimmed_terms + [term],
+                                        "top_3_centroid_fallbacks": fallback_candidates
+                                    }
+                                    if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
+                                        trimmed_terms.append(term)
+                                    else:
+                                        break
+                            cluster_terms = trimmed_terms
+                            payload = {
+                                "cluster_terms": cluster_terms,
+                                "top_3_centroid_fallbacks": fallback_candidates
+                            }
+                        
+                        user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
+                            payload_json=json.dumps(payload)
+                        )
+                        try:
+                            result = await lift_agent.run(
+                                user_prompt,
+                                deps=self.context.master_domain
+                            )
+                            mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                            for t in cluster_terms:
+                                taxonomic_map[t] = mapped_term
+                        except Exception as e:
+                            print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                            error_record = {
+                                "phase": f"taxonomic_lifting_{label_prefix}",
+                                "cluster_label": label,
+                                "error": str(e)
+                            }
+                            self._log_error(error_record)
+                            for t in cluster_terms:
+                                taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+
+                async def run_lifting():
+                    sem = asyncio.Semaphore(max_async)
+                    tasks = [lift_cluster_async(label, cluster_terms, sem) for label, cluster_terms in clusters.items()]
+                    await asyncio.gather(*tasks)
+
+                asyncio.run(run_lifting())
+            else:
+                for label, cluster_terms in clusters.items():
+                    if len(cluster_terms) == 1:
+                        taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                        continue
+                    
+                    idx = [terms_list.index(t) for t in cluster_terms]
+                    cluster_vecs = term_embeddings_l2[idx]
+                    weights = np.array([self.context.term_frequencies.get(t, 1) for t in cluster_terms])
+                    
+                    centroid = np.average(cluster_vecs, axis=0, weights=weights)
+                    distances = cosine_distances([centroid], cluster_vecs)[0]
+                    closest_indices = np.argsort(distances)[:3]
+                    fallback_candidates = [cluster_terms[i] for i in closest_indices]
+                    
+                    payload = {
+                        "cluster_terms": cluster_terms,
+                        "top_3_centroid_fallbacks": fallback_candidates
+                    }
+                    
+                    # Validate cluster payload size
+                    from src.utils.token_helper import estimate_tokens
+                    from src.refinement import prompts as ref_prompts
+                    
+                    base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
+                    sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+                    max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
+                    
+                    if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
+                        # Trim cluster terms to fit, preserving candidates
+                        trimmed_terms = list(fallback_candidates)
+                        for term in cluster_terms:
+                            if term not in trimmed_terms:
+                                test_payload = {
+                                    "cluster_terms": trimmed_terms + [term],
+                                    "top_3_centroid_fallbacks": fallback_candidates
+                                }
+                                if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
+                                    trimmed_terms.append(term)
+                                else:
+                                    break
+                        cluster_terms = trimmed_terms
+                        payload = {
+                            "cluster_terms": cluster_terms,
+                            "top_3_centroid_fallbacks": fallback_candidates
+                        }
+                    
+                    user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
+                        payload_json=json.dumps(payload)
+                    )
+                    try:
+                        result = lift_agent.run_sync(
+                            user_prompt,
+                            deps=self.context.master_domain
+                        )
+                        mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                        for t in cluster_terms:
+                            taxonomic_map[t] = mapped_term
+                    except Exception as e:
+                        print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                        error_record = {
+                            "phase": f"taxonomic_lifting_{label_prefix}",
+                            "cluster_label": label,
+                            "error": str(e)
+                        }
+                        self._log_error(error_record)
+                        for t in cluster_terms:
+                            taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
 
         unique_subjects_norm = list(set([t.subject for t in normalized_triples]))
         unique_objects_norm = list(set([t.object for t in normalized_triples]))

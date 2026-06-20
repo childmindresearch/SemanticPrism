@@ -61,3 +61,7 @@ TRIPLE_EXTRACTION_USER_PROMPT = """{themes_context}Extract the triplets from the
 <source_text>
 {text_content}
 </source_text>"""
+
+# SYSTEM PROMPT: Guides the agent to reformat failed/malformed JSON outputs while ensuring strict accuracy.
+TRIPLE_REFORMAT_SYSTEM_PROMPT = """You are an expert JSON repair assistant. You receive malformed JSON output and specific schema validation errors. Your job is to correct the format and structure of the JSON to strictly match the requested schema.
+CRITICAL: Maintain strict accuracy. Do not add or hallucinate any facts, subjects, predicates, or objects that were not present in the malformed input. Only repair formatting syntax and schema properties. Discard any elements that cannot be reformatted to fit the schema without hallucinating information."""

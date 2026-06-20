@@ -35,10 +35,37 @@ class ConfigLoader:
                 
             # Automatically override the API key from the environment
             env_key = os.getenv("GEMINI_API_KEY")
-            if env_key and "llm" in cls._config:
-                cls._config["llm"]["api_key"] = env_key
+            if env_key:
+                if "llm" in cls._config:
+                    cls._config["llm"]["api_key"] = env_key
+                for stage in ["extraction", "refinement", "synthesis"]:
+                    if (
+                        stage in cls._config 
+                        and isinstance(cls._config[stage], dict) 
+                        and "llm" in cls._config[stage]
+                        and isinstance(cls._config[stage]["llm"], dict)
+                    ):
+                        cls._config[stage]["llm"]["api_key"] = env_key
                 
         return cls._config
 
 # Expose a global, read-only dictionary that any file can import
 settings = ConfigLoader.get_config()
+
+# Monkey patch pydantic_ai to fix Ollama Nil-Content Bug for tool calls.
+# Pydantic-AI sets content=None when a model response contains only tool calls.
+# Ollama's OpenAI compatibility layer fails with a 400 Bad Request error if content is null/nil.
+# By forcing content to be an empty string, we keep Ollama happy.
+try:
+    from pydantic_ai.models.openai import OpenAIChatModel
+    _original = OpenAIChatModel._MapModelResponseContext._into_message_param
+    def _patched(self):
+        result = _original(self)
+        if result is not None:
+            if result.get("content") is None and result.get("tool_calls"):
+                result["content"] = ""
+        return result
+    OpenAIChatModel._MapModelResponseContext._into_message_param = _patched
+except Exception:
+    pass
+

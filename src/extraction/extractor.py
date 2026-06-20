@@ -5,13 +5,14 @@ This module orchestrates the Pydantic AI agents to process raw text, extract the
 
 import json
 import os
+import asyncio
 
 from typing import List, Set, Optional, Tuple
 from pathlib import Path
 
 from . import schemas
 from . import prompts
-from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext
+from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent
 from src.config import settings
 
 class PipelineRunContext:
@@ -23,6 +24,7 @@ class PipelineRunContext:
         self.all_discovered_themes: List[schemas.Theme] = []
         self.master_themes: Optional[schemas.MasterThemeSynthesisResult] = None
         self.raw_triples: List[dict] = []
+        self.processed_documents = set()
 
 class ExtractionPipeline:
     """
@@ -53,6 +55,66 @@ class ExtractionPipeline:
             if log_path.exists():
                 log_path.unlink()
 
+        # Concurrency settings
+        self.use_async = settings.get('pipeline', {}).get('use_async', False)
+        self.max_async = settings.get('extraction', {}).get('max_async_calls', 1)
+        self.context_cap = settings.get('extraction', {}).get('context_window_cap', 8192)
+
+    def _ensure_fit(self, chunk: str, template: str, system_prompt: str) -> str:
+        """Estimates token footprint and slices/truncates chunk to fit within the extraction context window cap."""
+        from src.utils.token_helper import estimate_tokens
+        # Casing buffer of 1000 tokens for output generation + some prompt overhead
+        base_tokens = estimate_tokens(system_prompt) + estimate_tokens(template.replace("{text_content}", ""))
+        available = self.context_cap - base_tokens - 1000
+        
+        if available <= 0:
+            available = max(100, self.context_cap - 1000)
+            
+        chunk_tokens = estimate_tokens(chunk)
+        if chunk_tokens <= available:
+            return chunk
+            
+        # Truncate
+        approx_chars = int(available * 4)
+        truncated = chunk[:approx_chars]
+        while estimate_tokens(truncated) > available and len(truncated) > 10:
+            truncated = truncated[:-max(10, int(len(truncated) * 0.1))]
+            
+        print(f"[Extraction] Warning: Input text chunk truncated from {chunk_tokens} to {estimate_tokens(truncated)} tokens to stay under context cap of {self.context_cap}.")
+        return truncated
+
+    def _extract_malformed_text(self, messages, exception: Exception) -> str:
+        """Extracts the raw malformed output string from the agent's message history or exception."""
+        from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+        for msg in reversed(messages):
+            if isinstance(msg, ModelResponse):
+                tool_calls = [p for p in msg.parts if isinstance(p, ToolCallPart)]
+                if tool_calls:
+                    args = tool_calls[0].args
+                    return json.dumps(args, indent=2) if isinstance(args, dict) else str(args)
+                text_parts = [p for p in msg.parts if isinstance(p, TextPart)]
+                if text_parts:
+                    return text_parts[0].content
+                    
+        if hasattr(exception, 'body') and exception.body:
+            return exception.body
+        if hasattr(exception, 'message') and exception.message:
+            return exception.message
+        return str(exception)
+
+    def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str):
+        """Helper to log extraction failures and validation errors systematically."""
+        error_record = {
+            "phase": phase,
+            "source_document": source_doc,
+            "start_word": start_idx,
+            "end_word": end_idx,
+            "error_message": str(error),
+            "malformed_output": malformed
+        }
+        with open(self.log_dir / "stage_01_triple_extraction_errors.json", "a") as f:
+            f.write(json.dumps(error_record) + "\n")
+
     def chunk_text(self, text: str, max_words: int) -> List[Tuple[str, int, int]]:
         """
         Splits raw text into manageable chunks.
@@ -80,14 +142,53 @@ class ExtractionPipeline:
             
         return chunks
 
+    async def _discover_themes_async(self, text: str, source_doc: str):
+        """Async implementation of theme discovery using asyncio.gather and Semaphore."""
+        theme_chunks = self.chunk_text(text, self.theme_chunk_size)
+        sem = asyncio.Semaphore(self.max_async)
+        
+        async def process_chunk(chunk, start_idx, end_idx):
+            async with sem:
+                chunk = self._ensure_fit(chunk, prompts.THEME_DISCOVERY_USER_PROMPT, prompts.THEME_DISCOVERY_SYSTEM_PROMPT)
+                user_prompt = prompts.THEME_DISCOVERY_USER_PROMPT.format(text_content=chunk)
+                try:
+                    result = await theme_agent.run(user_prompt)
+                    return result.output.themes
+                except Exception as e:
+                    error_record = {
+                        "source_document": source_doc,
+                        "start_word": start_idx,
+                        "end_word": end_idx,
+                        "error": str(e)
+                    }
+                    with open(self.log_dir / "stage_01_theme_discovery_errors.json", "a") as f:
+                        f.write(json.dumps(error_record) + "\n")
+                    return []
+
+        tasks = [process_chunk(chunk, start, end) for chunk, start, end in theme_chunks]
+        results = await asyncio.gather(*tasks)
+        
+        for theme_list in results:
+            for theme in theme_list:
+                self.context.all_discovered_themes.append(theme)
+                
+        # Checkpoint: Save all accumulated themes
+        with open(self.out_dir / "all_themes.json", "w") as f:
+            json.dump([t.model_dump() for t in self.context.all_discovered_themes], f, indent=2)
+
     def discover_themes(self, text: str, source_doc: str):
         """
         Phase 1: Extracts themes from text chunks and aggregates them globally.
         Checkpoints to disk as 'all_themes.json'.
         """
+        if self.use_async:
+            asyncio.run(self._discover_themes_async(text, source_doc))
+            return
+
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
         
         for chunk, start_idx, end_idx in theme_chunks:
+            chunk = self._ensure_fit(chunk, prompts.THEME_DISCOVERY_USER_PROMPT, prompts.THEME_DISCOVERY_SYSTEM_PROMPT)
             user_prompt = prompts.THEME_DISCOVERY_USER_PROMPT.format(text_content=chunk)
             
             try:
@@ -150,11 +251,74 @@ class ExtractionPipeline:
                 else:
                     print(f"Master theme synthesis attempt {attempt + 1} failed, retrying...")
 
+    async def _extract_triples_async(self, text: str, source_doc: str):
+        """Async implementation of triple extraction using asyncio.gather and Semaphore."""
+        self.context.processed_documents.add(source_doc)
+        triple_chunks = self.chunk_text(text, self.triple_chunk_size)
+        sem = asyncio.Semaphore(self.max_async)
+        
+        async def process_chunk(chunk, start_idx, end_idx):
+            async with sem:
+                # Package state context for the agent
+                deps = TripleContext(
+                    master_themes=self.context.master_themes
+                )
+                themes_context_str = f"Discovered Themes:\n{self.context.master_themes.model_dump_json()}\n\n" if self.context.master_themes else ""
+                template = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(themes_context=themes_context_str, text_content="{text_content}")
+                chunk = self._ensure_fit(chunk, template, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
+                user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
+                    themes_context=themes_context_str,
+                    text_content=chunk
+                )
+                from pydantic_ai import capture_run_messages
+                
+                with capture_run_messages() as messages:
+                    try:
+                        result = await triple_agent.run(user_prompt, deps=deps)
+                        print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples)")
+                        return result.output.triples
+                    except Exception as e:
+                        malformed_text = self._extract_malformed_text(messages, e)
+                        self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+
+                        print(f"      -> Initial extraction failed for {source_doc} [{start_idx}-{end_idx}]. Retrying with custom JSON reformatter...")
+
+                        reformat_prompt = (
+                            f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                            f"Validation error message/details:\n{str(e)}\n\n"
+                            f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
+                        )
+                        try:
+                            ref_result = await triple_reformat_agent.run(reformat_prompt)
+                            print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                            return ref_result.output.triples
+                        except Exception as reformat_err:
+                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                            print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
+                            return []
+
+        tasks = [process_chunk(chunk, start, end) for chunk, start, end in triple_chunks]
+        results = await asyncio.gather(*tasks)
+        
+        for triples in results:
+            for t in triples:
+                t_dict = t.model_dump()
+                t_dict["source_document"] = source_doc
+                self.context.raw_triples.append(t_dict)
+                
+        # Checkpoint: Save triplets
+        self.save_triplets()
+
     def extract_triples(self, text: str, source_doc: str):
         """
         Phase 3: Extracts SVO triplets using global Master Themes and coreference context.
         Checkpoints to disk as 'original_triplets.json'.
         """
+        self.context.processed_documents.add(source_doc)
+        if self.use_async:
+            asyncio.run(self._extract_triples_async(text, source_doc))
+            return
+
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)
         
         for chunk, start_idx, end_idx in triple_chunks:
@@ -165,28 +329,44 @@ class ExtractionPipeline:
             
             # Prepare textual context for the user prompt
             themes_context_str = f"Discovered Themes:\n{self.context.master_themes.model_dump_json()}\n\n" if self.context.master_themes else ""
+            template = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(themes_context=themes_context_str, text_content="{text_content}")
+            chunk = self._ensure_fit(chunk, template, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
             
             user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
                 themes_context=themes_context_str,
                 text_content=chunk
             )
             
-            try:
-                # Execute extraction
-                triple_result = triple_agent.run_sync(user_prompt, deps=deps)
-            except Exception as e:
-                error_record = {
-                    "source_document": source_doc,
-                    "start_word": start_idx,
-                    "end_word": end_idx,
-                    "error": str(e)
-                }
-                with open(self.log_dir / "stage_01_triple_extraction_errors.json", "a") as f:
-                    f.write(json.dumps(error_record) + "\n")
-                continue
+            from pydantic_ai import capture_run_messages
+            
+            with capture_run_messages() as messages:
+                try:
+                    # Execute extraction
+                    triple_result = triple_agent.run_sync(user_prompt, deps=deps)
+                    triples_list = triple_result.output.triples
+                    print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples)")
+                except Exception as e:
+                    malformed_text = self._extract_malformed_text(messages, e)
+                    self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+
+                    print(f"-> Initial extraction failed for {source_doc} [{start_idx}-{end_idx}]. Retrying with custom JSON reformatter...")
+
+                    reformat_prompt = (
+                        f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                        f"Validation error message/details:\n{str(e)}\n\n"
+                        f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
+                    )
+                    try:
+                        ref_result = triple_reformat_agent.run_sync(reformat_prompt)
+                        print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                        triples_list = ref_result.output.triples
+                    except Exception as reformat_err:
+                        self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                        print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
+                        continue
             
             # Update state with new entities and save triplets
-            for t in triple_result.output.triples:
+            for t in triples_list:
                 t_dict = t.model_dump()
                 t_dict["source_document"] = source_doc # Guarantee source mapping natively
                 self.context.raw_triples.append(t_dict)
@@ -195,6 +375,22 @@ class ExtractionPipeline:
             self.save_triplets()
 
     def save_triplets(self):
-        """Helper to save the current state of raw_triples."""
+        """Helper to save the current state of raw_triples and document counts."""
+        # Save JSON
         with open(self.out_dir / "original_triplets.json", "w") as f:
             json.dump(self.context.raw_triples, f, indent=2)
+            
+        # Count per document and save CSV
+        counts = {doc: 0 for doc in self.context.processed_documents}
+        for t in self.context.raw_triples:
+            doc = t.get("source_document", "unknown")
+            counts[doc] = counts.get(doc, 0) + 1
+            
+        csv_path = self.out_dir / "triplet_counts.csv"
+        try:
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("document_name,triplet_count\n")
+                for doc, count in sorted(counts.items()):
+                    f.write(f"{doc},{count}\n")
+        except Exception as e:
+            print(f"Warning: Failed to save triplet counts CSV: {e}")
