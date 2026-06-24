@@ -1,6 +1,6 @@
 pipeline:
   use_async: true
-  resume_mode: "skip" # Options: "skip" or "overwrite"
+  resume_mode: "overwrite" # Options: "skip" or "overwrite"
 
 directories:
   inputs: "inputs/testdocs"

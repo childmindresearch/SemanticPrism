@@ -56,7 +56,7 @@ Focus strictly on minimizing false positives. Do not hallucinate entities not st
 
 CRITICAL JSON INSTRUCTION: You must output the ENTIRE array of triples. Do NOT abbreviate, summarize, or use ellipses ("...") to skip items. You must write out every single JSON object in full."""
 
-TRIPLE_EXTRACTION_USER_PROMPT = """{themes_context}Extract the triplets from the following text and tentatively assign them to the themes above (if applicable):
+TRIPLE_EXTRACTION_USER_PROMPT = """Extract the triplets from the following text and tentatively assign them to the themes:
 
 <source_text>
 {text_content}

@@ -105,7 +105,12 @@ class ExtractionPipeline:
                     return json.dumps(args, indent=2) if isinstance(args, dict) else str(args)
                 text_parts = [p for p in msg.parts if isinstance(p, TextPart)]
                 if text_parts:
-                    return text_parts[0].content
+                    content = text_parts[0].content
+                    if "```" in content:
+                        lines = content.splitlines()
+                        cleaned = [l for l in lines if not l.strip().startswith("```")]
+                        content = "\n".join(cleaned)
+                    return content.strip()
                     
         if hasattr(exception, 'body') and exception.body:
             return exception.body
@@ -300,44 +305,44 @@ class ExtractionPipeline:
                 deps = TripleContext(
                     master_themes=self.context.master_themes
                 )
-                themes_context_str = f"Discovered Themes:\n{self.context.master_themes.model_dump_json()}\n\n" if self.context.master_themes else ""
-                template = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(themes_context=themes_context_str, text_content="{text_content}")
-                chunk = self._ensure_fit(chunk, template, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
+                chunk = self._ensure_fit(chunk, prompts.TRIPLE_EXTRACTION_USER_PROMPT, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
                 user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
-                    themes_context=themes_context_str,
                     text_content=chunk
                 )
                 from pydantic_ai import capture_run_messages
                 
-                max_attempts = 2
-                for attempt in range(1, max_attempts + 1):
-                    with capture_run_messages() as messages:
+                with capture_run_messages() as messages:
+                    try:
+                        result = await triple_agent.run(user_prompt, deps=deps)
+                        print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples)")
+                        return result.output.triples
+                    except Exception as e:
+                        malformed_text = self._extract_malformed_text(messages, e)
+                        self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+
+                        from pydantic_ai.messages import ModelResponse
+                        has_response = any(isinstance(msg, ModelResponse) for msg in messages)
+                        if not has_response:
+                            print(f"      -> Extraction failed due to a connection/system error. Raising immediately.")
+                            raise e
+
+                        print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
+
+                        themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
+                        reformat_prompt = (
+                            f"Discovered Themes Context:\n{themes_str}\n\n"
+                            f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                            f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema, "
+                            f"aligning any theme_association values to the themes provided above."
+                        )
                         try:
-                            result = await triple_agent.run(user_prompt, deps=deps)
-                            print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples) on attempt {attempt}")
-                            return result.output.triples
-                        except Exception as e:
-                            malformed_text = self._extract_malformed_text(messages, e)
-                            self._log_extraction_error(f"initial_triple_extraction_failed_attempt_{attempt}", source_doc, start_idx, end_idx, e, malformed_text)
-
-                            if attempt < max_attempts:
-                                print(f"      -> Initial extraction attempt {attempt} failed. Retrying standard extraction...")
-                                continue
-
-                            print(f"      -> Initial extraction failed after {max_attempts} attempts. Retrying with custom JSON reformatter...")
-
-                            reformat_prompt = (
-                                f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
-                                f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
-                            )
-                            try:
-                                ref_result = await triple_reformat_agent.run(reformat_prompt)
-                                print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
-                                return ref_result.output.triples
-                            except Exception as reformat_err:
-                                self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
-                                print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
-                                return []
+                            ref_result = await triple_reformat_agent.run(reformat_prompt)
+                            print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                            return ref_result.output.triples
+                        except Exception as reformat_err:
+                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                            print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
+                            return []
 
         tasks = [process_chunk(chunk, start, end) for chunk, start, end in triple_chunks]
         results = await asyncio.gather(*tasks)
@@ -374,51 +379,47 @@ class ExtractionPipeline:
                 master_themes=self.context.master_themes
             )
             
-            # Prepare textual context for the user prompt
-            themes_context_str = f"Discovered Themes:\n{self.context.master_themes.model_dump_json()}\n\n" if self.context.master_themes else ""
-            template = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(themes_context=themes_context_str, text_content="{text_content}")
-            chunk = self._ensure_fit(chunk, template, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
+            chunk = self._ensure_fit(chunk, prompts.TRIPLE_EXTRACTION_USER_PROMPT, prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT)
             
             user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
-                themes_context=themes_context_str,
                 text_content=chunk
             )
             
             from pydantic_ai import capture_run_messages
             
-            max_attempts = 2
             triples_list = []
-            for attempt in range(1, max_attempts + 1):
-                with capture_run_messages() as messages:
+            with capture_run_messages() as messages:
+                try:
+                    # Execute extraction
+                    triple_result = triple_agent.run_sync(user_prompt, deps=deps)
+                    triples_list = triple_result.output.triples
+                    print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples)")
+                except Exception as e:
+                    malformed_text = self._extract_malformed_text(messages, e)
+                    self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+
+                    from pydantic_ai.messages import ModelResponse
+                    has_response = any(isinstance(msg, ModelResponse) for msg in messages)
+                    if not has_response:
+                        print(f"-> Extraction failed due to a connection/system error. Raising immediately.")
+                        raise e
+
+                    print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
+
+                    themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
+                    reformat_prompt = (
+                        f"Discovered Themes Context:\n{themes_str}\n\n"
+                        f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                        f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema, "
+                        f"aligning any theme_association values to the themes provided above."
+                    )
                     try:
-                        # Execute extraction
-                        triple_result = triple_agent.run_sync(user_prompt, deps=deps)
-                        triples_list = triple_result.output.triples
-                        print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples) on attempt {attempt}")
-                        break
-                    except Exception as e:
-                        malformed_text = self._extract_malformed_text(messages, e)
-                        self._log_extraction_error(f"initial_triple_extraction_failed_attempt_{attempt}", source_doc, start_idx, end_idx, e, malformed_text)
-
-                        if attempt < max_attempts:
-                            print(f"-> Initial extraction attempt {attempt} failed. Retrying standard extraction...")
-                            continue
-
-                        print(f"-> Initial extraction failed after {max_attempts} attempts. Retrying with custom JSON reformatter...")
-
-                        reformat_prompt = (
-                            f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
-                            f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
-                        )
-                        try:
-                            ref_result = triple_reformat_agent.run_sync(reformat_prompt)
-                            print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
-                            triples_list = ref_result.output.triples
-                            break
-                        except Exception as reformat_err:
-                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
-                            print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
-                            break
+                        ref_result = triple_reformat_agent.run_sync(reformat_prompt)
+                        print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                        triples_list = ref_result.output.triples
+                    except Exception as reformat_err:
+                        self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                        print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
             
             # Update state with new entities and save triplets
             for t in triples_list:

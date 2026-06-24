@@ -74,5 +74,9 @@ class TripleExtractionResult(BaseModel):
             except Exception:
                 # Silently discard the corrupted/incomplete hallucination structurally 
                 pass
+                
+        if len(v) > 0 and len(valid_chunk) == 0:
+            raise ValueError("All extracted triples in the list failed schema validation constraints.")
+            
         return valid_chunk
 
