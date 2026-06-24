@@ -11,3 +11,5 @@ pyvis
 ruff
 node2vec
 python-dotenv
+polars
+pyarrow

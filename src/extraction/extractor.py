@@ -42,6 +42,12 @@ class ExtractionPipeline:
         self.out_dir = Path(base_out_dir) / "01_extraction"
         self.out_dir.mkdir(parents=True, exist_ok=True)
         
+        self.themes_dir = self.out_dir / "themes"
+        self.themes_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.triples_dir = self.out_dir / "triples"
+        self.triples_dir.mkdir(parents=True, exist_ok=True)
+        
         self.log_dir = Path(base_out_dir) / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         
@@ -59,6 +65,11 @@ class ExtractionPipeline:
         self.use_async = settings.get('pipeline', {}).get('use_async', False)
         self.max_async = settings.get('extraction', {}).get('max_async_calls', 1)
         self.context_cap = settings.get('extraction', {}).get('context_window_cap', 8192)
+
+    def sanitize_filename(self, name: str) -> str:
+        """Sanitizes document identifiers to be filesystem-safe."""
+        import re
+        return re.sub(r'[\\/:*?"<>|]', '_', name)
 
     def _ensure_fit(self, chunk: str, template: str, system_prompt: str) -> str:
         """Estimates token footprint and slices/truncates chunk to fit within the extraction context window cap."""
@@ -168,24 +179,28 @@ class ExtractionPipeline:
         tasks = [process_chunk(chunk, start, end) for chunk, start, end in theme_chunks]
         results = await asyncio.gather(*tasks)
         
+        doc_themes = []
         for theme_list in results:
             for theme in theme_list:
+                doc_themes.append(theme)
                 self.context.all_discovered_themes.append(theme)
                 
-        # Checkpoint: Save all accumulated themes
-        with open(self.out_dir / "all_themes.json", "w") as f:
-            json.dump([t.model_dump() for t in self.context.all_discovered_themes], f, indent=2)
+        # Save individual themes file for this document
+        safe_name = self.sanitize_filename(source_doc)
+        with open(self.themes_dir / f"{safe_name}_themes.json", "w") as f:
+            json.dump([t.model_dump() for t in doc_themes], f, indent=2)
 
     def discover_themes(self, text: str, source_doc: str):
         """
         Phase 1: Extracts themes from text chunks and aggregates them globally.
-        Checkpoints to disk as 'all_themes.json'.
+        Persists them per-document to themes directory.
         """
         if self.use_async:
             asyncio.run(self._discover_themes_async(text, source_doc))
             return
 
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
+        doc_themes = []
         
         for chunk, start_idx, end_idx in theme_chunks:
             chunk = self._ensure_fit(chunk, prompts.THEME_DISCOVERY_USER_PROMPT, prompts.THEME_DISCOVERY_SYSTEM_PROMPT)
@@ -206,11 +221,33 @@ class ExtractionPipeline:
             
             # Record themes and append to global context
             for theme in result.output.themes:
+                doc_themes.append(theme)
                 self.context.all_discovered_themes.append(theme)
                 
-        # Checkpoint: Save all accumulated themes
+        # Save individual themes file for this document
+        safe_name = self.sanitize_filename(source_doc)
+        with open(self.themes_dir / f"{safe_name}_themes.json", "w") as f:
+            json.dump([t.model_dump() for t in doc_themes], f, indent=2)
+
+    def aggregate_themes(self) -> List[schemas.Theme]:
+        """Loads and consolidates all individual themes from the themes directory."""
+        all_themes = []
+        for fpath in sorted(self.themes_dir.glob("*_themes.json")):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    themes_data = json.load(f)
+                    all_themes.extend(themes_data)
+            except Exception as e:
+                print(f"Warning: Failed to load theme file {fpath.name}: {e}")
+                
+        # Update pipeline context
+        self.context.all_discovered_themes = [schemas.Theme(**t) for t in all_themes]
+        
+        # Write unified master themes list
         with open(self.out_dir / "all_themes.json", "w") as f:
-            json.dump([t.model_dump() for t in self.context.all_discovered_themes], f, indent=2)
+            json.dump(all_themes, f, indent=2)
+            
+        return self.context.all_discovered_themes
 
     def synthesize_master_themes(self):
         """
@@ -300,19 +337,23 @@ class ExtractionPipeline:
         tasks = [process_chunk(chunk, start, end) for chunk, start, end in triple_chunks]
         results = await asyncio.gather(*tasks)
         
+        doc_triples = []
         for triples in results:
             for t in triples:
                 t_dict = t.model_dump()
                 t_dict["source_document"] = source_doc
+                doc_triples.append(t_dict)
                 self.context.raw_triples.append(t_dict)
                 
-        # Checkpoint: Save triplets
-        self.save_triplets()
+        # Save individual triples file for this document
+        safe_name = self.sanitize_filename(source_doc)
+        with open(self.triples_dir / f"{safe_name}_triplets.json", "w") as f:
+            json.dump(doc_triples, f, indent=2)
 
     def extract_triples(self, text: str, source_doc: str):
         """
         Phase 3: Extracts SVO triplets using global Master Themes and coreference context.
-        Checkpoints to disk as 'original_triplets.json'.
+        Persists them per-document to triples directory.
         """
         self.context.processed_documents.add(source_doc)
         if self.use_async:
@@ -320,6 +361,7 @@ class ExtractionPipeline:
             return
 
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)
+        doc_triples = []
         
         for chunk, start_idx, end_idx in triple_chunks:
             # Package state context for the agent
@@ -369,20 +411,42 @@ class ExtractionPipeline:
             for t in triples_list:
                 t_dict = t.model_dump()
                 t_dict["source_document"] = source_doc # Guarantee source mapping natively
+                doc_triples.append(t_dict)
                 self.context.raw_triples.append(t_dict)
                 
-            # Checkpoint: Save pristine, unmodified triples to disk incrementally per chunk
-            self.save_triplets()
+        # Save individual triples file for this document
+        safe_name = self.sanitize_filename(source_doc)
+        with open(self.triples_dir / f"{safe_name}_triplets.json", "w") as f:
+            json.dump(doc_triples, f, indent=2)
 
-    def save_triplets(self):
-        """Helper to save the current state of raw_triples and document counts."""
-        # Save JSON
+    def aggregate_triplets(self) -> List[dict]:
+        """Loads and consolidates all individual triplets from the triples directory."""
+        all_triples = []
+        processed_docs = set()
+        
+        for fpath in sorted(self.triples_dir.glob("*_triplets.json")):
+            try:
+                with open(fpath, "r", encoding="utf-8") as f:
+                    triples_data = json.load(f)
+                    all_triples.extend(triples_data)
+                    for t in triples_data:
+                        doc = t.get("source_document")
+                        if doc:
+                            processed_docs.add(doc)
+            except Exception as e:
+                print(f"Warning: Failed to load triplet file {fpath.name}: {e}")
+                
+        # Update pipeline context
+        self.context.raw_triples = all_triples
+        self.context.processed_documents = processed_docs
+        
+        # Save aggregated master JSON
         with open(self.out_dir / "original_triplets.json", "w") as f:
-            json.dump(self.context.raw_triples, f, indent=2)
+            json.dump(all_triples, f, indent=2)
             
         # Count per document and save CSV
-        counts = {doc: 0 for doc in self.context.processed_documents}
-        for t in self.context.raw_triples:
+        counts = {doc: 0 for doc in processed_docs}
+        for t in all_triples:
             doc = t.get("source_document", "unknown")
             counts[doc] = counts.get(doc, 0) + 1
             
@@ -394,3 +458,5 @@ class ExtractionPipeline:
                     f.write(f"{doc},{count}\n")
         except Exception as e:
             print(f"Warning: Failed to save triplet counts CSV: {e}")
+            
+        return all_triples

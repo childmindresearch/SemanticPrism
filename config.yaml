@@ -1,9 +1,17 @@
 pipeline:
   use_async: true
+  resume_mode: "skip" # Options: "skip" or "overwrite"
 
 directories:
   inputs: "inputs/testdocs"
   outputs: "outputs"
+
+ingestion:
+  source_type: "directory" # Options: "directory" or "parquet"
+  parquet:
+    filename: "inputs/test_data.parquet"
+    id_field: "doc_id"
+    text_field: "text"
 
 llm:
   # --- GEMINI TESTING BLOCK ---
