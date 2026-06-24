@@ -112,11 +112,7 @@ class ExtractionPipeline:
                         content = "\n".join(cleaned)
                     return content.strip()
                     
-        if hasattr(exception, 'body') and exception.body:
-            return exception.body
-        if hasattr(exception, 'message') and exception.message:
-            return exception.message
-        return str(exception)
+        return ""
 
     def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str):
         """Helper to log extraction failures and validation errors systematically."""
@@ -322,8 +318,9 @@ class ExtractionPipeline:
 
                         from pydantic_ai.messages import ModelResponse
                         has_response = any(isinstance(msg, ModelResponse) for msg in messages)
-                        if not has_response:
-                            print(f"      -> Extraction failed due to a connection/system error. Raising immediately.")
+                        is_traceback = any(term in malformed_text.lower() for term in ["validation error", "field required", "input_value="])
+                        if not has_response or not malformed_text or is_traceback:
+                            print(f"      -> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                             raise e
 
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
@@ -400,8 +397,9 @@ class ExtractionPipeline:
 
                     from pydantic_ai.messages import ModelResponse
                     has_response = any(isinstance(msg, ModelResponse) for msg in messages)
-                    if not has_response:
-                        print(f"-> Extraction failed due to a connection/system error. Raising immediately.")
+                    is_traceback = any(term in malformed_text.lower() for term in ["validation error", "field required", "input_value="])
+                    if not has_response or not malformed_text or is_traceback:
+                        print(f"-> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                         raise e
 
                     print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
