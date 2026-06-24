@@ -121,12 +121,14 @@ class RefinementPipeline:
             self.context.term_frequencies[t.predicate] += 1
             self.context.term_frequencies[t.object] += 1
 
-        normalization_map = {}
         batch_size = self.config.get('refinement', {}).get('batch_size', 15)
         max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
         refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
         
-        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int):
+        out_dir = Path("outputs/02_refinement")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int, target_map: dict):
             async with sem:
                 print(f"      -> Running API call for batch {batch_idx}/{total_batches}...")
                 user_prompt = prompts.LLM_PREPROCESSING_USER_PROMPT.format(
@@ -150,7 +152,7 @@ class RefinementPipeline:
                             deps=self.context.master_domain
                         )
                     for pair in result.output.tokens:
-                        normalization_map[pair.original] = pair.normalized
+                        target_map[pair.original] = pair.normalized
                 except asyncio.TimeoutError:
                     print(f"      -> Timeout error on API call for batch {batch_idx}/{total_batches}")
                     error_record = {
@@ -161,7 +163,7 @@ class RefinementPipeline:
                     }
                     self._log_error(error_record)
                     for term in batch:
-                        normalization_map[term] = term
+                        target_map[term] = term
                 except Exception as e:
                     print(f"      -> Error normalizing batch {batch_idx}/{total_batches}: {e}")
                     error_record = {
@@ -172,9 +174,9 @@ class RefinementPipeline:
                     }
                     self._log_error(error_record)
                     for term in batch:
-                        normalization_map[term] = term
+                        target_map[term] = term
 
-        async def run_all_batches(term_set: set, agent):
+        async def run_all_batches(term_set: set, agent, target_map: dict):
             term_list = sorted(list(term_set))
             sem = asyncio.Semaphore(max_async)
             tasks = []
@@ -218,7 +220,7 @@ class RefinementPipeline:
             async def wrapped_process(batch, sem, agent, batch_idx):
                 print(f"      -> Enqueued batch {batch_idx}/{total_batches} ({len(batch)} terms)...")
                 try:
-                    await process_batch(batch, sem, agent, batch_idx, total_batches)
+                    await process_batch(batch, sem, agent, batch_idx, total_batches, target_map)
                     print(f"      -> Completed batch {batch_idx}/{total_batches}")
                 except Exception as e:
                     print(f"      -> Unexpected error on batch {batch_idx}/{total_batches}: {e}")
@@ -229,33 +231,34 @@ class RefinementPipeline:
             if tasks:
                 await asyncio.gather(*tasks)
 
+        subject_map = {}
+        predicate_map = {}
+        object_map = {}
+
         async def process_all_terms():
             print("   -> Normalizing Subjects...")
-            await run_all_batches(unique_subjects, subject_norm_agent)
+            await run_all_batches(unique_subjects, subject_norm_agent, subject_map)
+            with open(out_dir / "subject_normalization_map.json", "w") as f:
+                json.dump(subject_map, f, indent=2)
+                
             print("   -> Normalizing Predicates...")
-            await run_all_batches(unique_predicates, predicate_norm_agent)
+            await run_all_batches(unique_predicates, predicate_norm_agent, predicate_map)
+            with open(out_dir / "predicate_normalization_map.json", "w") as f:
+                json.dump(predicate_map, f, indent=2)
+                
             print("   -> Normalizing Objects...")
-            await run_all_batches(unique_objects, object_norm_agent)
+            await run_all_batches(unique_objects, object_norm_agent, object_map)
+            with open(out_dir / "object_normalization_map.json", "w") as f:
+                json.dump(object_map, f, indent=2)
             
         # Execute all normalization passes inside a single shared event loop
         asyncio.run(process_all_terms())
 
-        # Re-map triples
-        for t in normalized_triples:
-            mapped_subj = normalization_map.get(t.subject, t.subject)
-            t.subject = mapped_subj if mapped_subj and str(mapped_subj).strip() else t.subject
-            
-            mapped_pred = normalization_map.get(t.predicate, t.predicate)
-            t.predicate = mapped_pred if mapped_pred and str(mapped_pred).strip() else t.predicate
-            
-            mapped_obj = normalization_map.get(t.object, t.object)
-            t.object = mapped_obj if mapped_obj and str(mapped_obj).strip() else t.object
-
-        out_dir = Path("outputs/02_refinement")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        
-        with open(out_dir / "normalized_triplets.json", "w") as f:
-            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
+        # Consolidate global normalization map for backwards compatibility
+        normalization_map = {}
+        normalization_map.update(subject_map)
+        normalization_map.update(predicate_map)
+        normalization_map.update(object_map)
 
         with open(out_dir / "normalization_map.json", "w") as f:
             json.dump(normalization_map, f, indent=2)
@@ -264,14 +267,279 @@ class RefinementPipeline:
         print("[Refinement] Purging VRAM before embedding initialization...")
         purge_vram()
 
-        # 2. Theme-Based Embedding Mapping
-        print("[Refinement] Step 2: Theme-Based Embedding Mapping")
+        # 2. SVO Vector Clustering
+        print("[Refinement] Step 2: SVO Vector Clustering")
         self._load_embedding_model()
+
+        # Calculate normalized frequencies for weighting centroids
+        normalized_frequencies = defaultdict(int)
+        for t in raw_triples:
+            pre_subj = self._nlp_preprocess(t.subject)
+            norm_subj = subject_map.get(pre_subj, pre_subj)
+            normalized_frequencies[norm_subj] += 1
+            
+            pre_pred = self._nlp_preprocess(t.predicate)
+            norm_pred = predicate_map.get(pre_pred, pre_pred)
+            normalized_frequencies[norm_pred] += 1
+            
+            pre_obj = self._nlp_preprocess(t.object)
+            norm_obj = object_map.get(pre_obj, pre_obj)
+            normalized_frequencies[norm_obj] += 1
+
+        taxonomic_map = {}
+        threshold = self.config.get('refinement', {}).get('clustering_threshold', 0.4)
+
+        def cluster_field(terms_list: List[str], label_prefix: str):
+            if not terms_list:
+                return [], None, None
+                
+            term_embeddings = self.embedding_model.encode(terms_list)
+            term_embeddings_l2 = normalize(term_embeddings, norm='l2')
+            
+            clustering = AgglomerativeClustering(
+                metric='cosine', 
+                linkage='average', 
+                distance_threshold=threshold, 
+                n_clusters=None
+            )
+            
+            if len(terms_list) > 1:
+                cluster_labels = clustering.fit_predict(term_embeddings_l2)
+            else:
+                cluster_labels = [0]
+                
+            clusters_dict = defaultdict(list)
+            for term, label in zip(terms_list, cluster_labels):
+                clusters_dict[label].append(term)
+                
+            cluster_records = []
+            for label, cluster_members in clusters_dict.items():
+                if len(cluster_members) == 1:
+                    centroid = term_embeddings_l2[terms_list.index(cluster_members[0])]
+                    centroid_term = cluster_members[0]
+                else:
+                    idx = [terms_list.index(t) for t in cluster_members]
+                    cluster_vecs = term_embeddings_l2[idx]
+                    weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_members])
+                    
+                    centroid = np.average(cluster_vecs, axis=0, weights=weights)
+                    distances = cosine_distances([centroid], cluster_vecs)[0]
+                    closest_idx = np.argmin(distances)
+                    centroid_term = cluster_members[closest_idx]
+                    
+                cluster_records.append({
+                    "cluster_number": int(label),
+                    "centroid_term": centroid_term,
+                    "centroid_vector": centroid.tolist(),
+                    "members": sorted(cluster_members)
+                })
+                
+            cluster_records.sort(key=lambda c: c["cluster_number"])
+            return cluster_records, term_embeddings_l2, terms_list
+
+        unique_subjects_norm = sorted(list(set(subject_map.values())))
+        unique_predicates_norm = sorted(list(set(predicate_map.values())))
+        unique_objects_norm = sorted(list(set(object_map.values())))
+
+        print("   -> Clustering Subjects...")
+        subj_clusters, subj_embeddings_l2, subj_terms = cluster_field(unique_subjects_norm, "Subject")
+        with open(out_dir / "subject_clusters.json", "w") as f:
+            json.dump(subj_clusters, f, indent=2)
+
+        print("   -> Clustering Predicates...")
+        pred_clusters, pred_embeddings_l2, pred_terms = cluster_field(unique_predicates_norm, "Predicate")
+        with open(out_dir / "predicate_clusters.json", "w") as f:
+            json.dump(pred_clusters, f, indent=2)
+
+        print("   -> Clustering Objects...")
+        obj_clusters, obj_embeddings_l2, obj_terms = cluster_field(unique_objects_norm, "Object")
+        with open(out_dir / "object_clusters.json", "w") as f:
+            json.dump(obj_clusters, f, indent=2)
+
+        # 3. Taxonomic Lifting
+        print("[Refinement] Step 3: Taxonomic Lifting")
+
+        async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix):
+            async with sem:
+                cluster_terms = cluster["members"]
+                label = cluster["cluster_number"]
+                if len(cluster_terms) == 1:
+                    taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                    return
+                    
+                idx = [terms_list.index(t) for t in cluster_terms]
+                cluster_vecs = term_embeddings_l2[idx]
+                weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
+                
+                centroid = np.average(cluster_vecs, axis=0, weights=weights)
+                distances = cosine_distances([centroid], cluster_vecs)[0]
+                closest_indices = np.argsort(distances)[:3]
+                fallback_candidates = [cluster_terms[i] for i in closest_indices]
+                
+                payload = {
+                    "cluster_terms": cluster_terms,
+                    "top_3_centroid_fallbacks": fallback_candidates
+                }
+                
+                # Validate cluster payload size
+                from src.utils.token_helper import estimate_tokens
+                from src.refinement import prompts as ref_prompts
+                
+                base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
+                sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+                max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
+                
+                if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
+                    trimmed_terms = list(fallback_candidates)
+                    for term in cluster_terms:
+                        if term not in trimmed_terms:
+                            test_payload = {
+                                "cluster_terms": trimmed_terms + [term],
+                                "top_3_centroid_fallbacks": fallback_candidates
+                            }
+                            if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
+                                trimmed_terms.append(term)
+                            else:
+                                break
+                    cluster_terms = trimmed_terms
+                    payload = {
+                        "cluster_terms": cluster_terms,
+                        "top_3_centroid_fallbacks": fallback_candidates
+                    }
+                
+                user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
+                    payload_json=json.dumps(payload)
+                )
+                try:
+                    result = await lift_agent.run(
+                        user_prompt,
+                        deps=self.context.master_domain
+                    )
+                    mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                    for t in cluster_terms:
+                        taxonomic_map[t] = mapped_term
+                except Exception as e:
+                    print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                    error_record = {
+                        "phase": f"taxonomic_lifting_{label_prefix}",
+                        "cluster_label": label,
+                        "error": str(e)
+                    }
+                    self._log_error(error_record)
+                    for t in cluster_terms:
+                        taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+
+        def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix):
+            cluster_terms = cluster["members"]
+            label = cluster["cluster_number"]
+            if len(cluster_terms) == 1:
+                taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                return
+                
+            idx = [terms_list.index(t) for t in cluster_terms]
+            cluster_vecs = term_embeddings_l2[idx]
+            weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
+            
+            centroid = np.average(cluster_vecs, axis=0, weights=weights)
+            distances = cosine_distances([centroid], cluster_vecs)[0]
+            closest_indices = np.argsort(distances)[:3]
+            fallback_candidates = [cluster_terms[i] for i in closest_indices]
+            
+            payload = {
+                "cluster_terms": cluster_terms,
+                "top_3_centroid_fallbacks": fallback_candidates
+            }
+            
+            # Validate cluster payload size
+            from src.utils.token_helper import estimate_tokens
+            from src.refinement import prompts as ref_prompts
+            
+            base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
+            sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+            max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
+            
+            if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
+                trimmed_terms = list(fallback_candidates)
+                for term in cluster_terms:
+                    if term not in trimmed_terms:
+                        test_payload = {
+                            "cluster_terms": trimmed_terms + [term],
+                            "top_3_centroid_fallbacks": fallback_candidates
+                        }
+                        if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
+                            trimmed_terms.append(term)
+                        else:
+                            break
+                cluster_terms = trimmed_terms
+                payload = {
+                    "cluster_terms": cluster_terms,
+                    "top_3_centroid_fallbacks": fallback_candidates
+                }
+            
+            user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
+                payload_json=json.dumps(payload)
+            )
+            try:
+                result = lift_agent.run_sync(
+                    user_prompt,
+                    deps=self.context.master_domain
+                )
+                mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                for t in cluster_terms:
+                    taxonomic_map[t] = mapped_term
+            except Exception as e:
+                print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                error_record = {
+                    "phase": f"taxonomic_lifting_{label_prefix}",
+                    "cluster_label": label,
+                    "error": str(e)
+                }
+                self._log_error(error_record)
+                for t in cluster_terms:
+                    taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+
+        if self.use_async:
+            async def run_lifting():
+                sem = asyncio.Semaphore(max_async)
+                tasks = []
+                for cluster in subj_clusters:
+                    tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject"))
+                for cluster in obj_clusters:
+                    tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object"))
+                await asyncio.gather(*tasks)
+            asyncio.run(run_lifting())
+        else:
+            for cluster in subj_clusters:
+                lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject")
+            for cluster in obj_clusters:
+                lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object")
+
+        # Apply both Lexical Normalization and Taxonomic Lifting maps to raw triples
+        normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
+        for t in normalized_triples:
+            pre_subj = self._nlp_preprocess(t.subject)
+            pre_pred = self._nlp_preprocess(t.predicate)
+            pre_obj = self._nlp_preprocess(t.object)
+            
+            norm_subj = subject_map.get(pre_subj, pre_subj)
+            norm_pred = predicate_map.get(pre_pred, pre_pred)
+            norm_obj = object_map.get(pre_obj, pre_obj)
+            
+            t.subject = taxonomic_map.get(norm_subj, norm_subj)
+            t.predicate = norm_pred
+            t.object = taxonomic_map.get(norm_obj, norm_obj)
+            
+        with open(out_dir / "refined_triplets.json", "w") as f:
+            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
+            
+        with open(out_dir / "taxonomic_map.json", "w") as f:
+            json.dump(taxonomic_map, f, indent=2)
+
+        # 4. Theme-Based Embedding Mapping
+        print("[Refinement] Step 4: Theme-Based Embedding Mapping")
         
-        # Prepare original themes texts
         orig_theme_texts = []
         for theme in original_themes:
-            # Assume ThemeDiscoveryResult structure or dict
             title = theme.title if hasattr(theme, 'title') else theme.get('title', '')
             desc = theme.description if hasattr(theme, 'description') else theme.get('description', '')
             reasoning = theme.reasoning if hasattr(theme, 'reasoning') else theme.get('reasoning', '')
@@ -279,216 +547,20 @@ class RefinementPipeline:
             
         master_theme_texts = [f"{self.context.master_domain} {mt}" for mt in master_themes]
         
-        # L2 Normalize embeddings directly during encoding for rigorous cosine math
         orig_embeddings = self.embedding_model.encode(orig_theme_texts, normalize_embeddings=True)
         master_embeddings = self.embedding_model.encode(master_theme_texts, normalize_embeddings=True)
         
         theme_mapping = defaultdict(list)
-        
-        # Calculate full similarity matrix at once
         similarity_matrix = cosine_similarity(orig_embeddings, master_embeddings)
         
         for i in range(len(orig_theme_texts)):
-            # Find index of the master theme with the highest similarity score
             best_idx = np.argmax(similarity_matrix[i])
-            
-            # theme title
             orig_title = original_themes[i].title if hasattr(original_themes[i], 'title') else original_themes[i].get('title', f"theme_{i}")
             theme_mapping[master_themes[best_idx]].append(orig_title)
 
         with open(out_dir / "theme_mapping_clusters.json", "w") as f:
             json.dump(theme_mapping, f, indent=2)
 
-        # 3 & 4. Triple Vector Clustering and Taxonomic Lifting (Isolated by SVO)
-        print("[Refinement] Step 3 & 4: SVO Vector Clustering and Taxonomic Lifting")
-        
-        taxonomic_map = {}
-        threshold = self.config.get('refinement', {}).get('clustering_threshold', 0.4)
-
-        def cluster_and_lift(terms_list: List[str], label_prefix: str):
-            if not terms_list:
-                return
-            
-            term_embeddings = self.embedding_model.encode(terms_list)
-            term_embeddings_l2 = normalize(term_embeddings, norm='l2')
-            
-            clustering = AgglomerativeClustering(metric='cosine', linkage='average', distance_threshold=threshold, n_clusters=None)
-            
-            if len(terms_list) > 1:
-                cluster_labels = clustering.fit_predict(term_embeddings_l2)
-            else:
-                cluster_labels = [0]
-                
-            clusters = defaultdict(list)
-            for term, label in zip(terms_list, cluster_labels):
-                clusters[label].append(term)
-                
-            if self.use_async:
-                async def lift_cluster_async(label, cluster_terms, sem):
-                    async with sem:
-                        if len(cluster_terms) == 1:
-                            taxonomic_map[cluster_terms[0]] = cluster_terms[0]
-                            return
-                            
-                        idx = [terms_list.index(t) for t in cluster_terms]
-                        cluster_vecs = term_embeddings_l2[idx]
-                        weights = np.array([self.context.term_frequencies.get(t, 1) for t in cluster_terms])
-                        
-                        centroid = np.average(cluster_vecs, axis=0, weights=weights)
-                        distances = cosine_distances([centroid], cluster_vecs)[0]
-                        closest_indices = np.argsort(distances)[:3]
-                        fallback_candidates = [cluster_terms[i] for i in closest_indices]
-                        
-                        payload = {
-                            "cluster_terms": cluster_terms,
-                            "top_3_centroid_fallbacks": fallback_candidates
-                        }
-                        
-                        # Validate cluster payload size
-                        from src.utils.token_helper import estimate_tokens
-                        from src.refinement import prompts as ref_prompts
-                        
-                        base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
-                        sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
-                        max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
-                        
-                        if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
-                            # Trim cluster terms to fit, preserving candidates
-                            trimmed_terms = list(fallback_candidates)
-                            for term in cluster_terms:
-                                if term not in trimmed_terms:
-                                    test_payload = {
-                                        "cluster_terms": trimmed_terms + [term],
-                                        "top_3_centroid_fallbacks": fallback_candidates
-                                    }
-                                    if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
-                                        trimmed_terms.append(term)
-                                    else:
-                                        break
-                            cluster_terms = trimmed_terms
-                            payload = {
-                                "cluster_terms": cluster_terms,
-                                "top_3_centroid_fallbacks": fallback_candidates
-                            }
-                        
-                        user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
-                            payload_json=json.dumps(payload)
-                        )
-                        try:
-                            result = await lift_agent.run(
-                                user_prompt,
-                                deps=self.context.master_domain
-                            )
-                            mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
-                            for t in cluster_terms:
-                                taxonomic_map[t] = mapped_term
-                        except Exception as e:
-                            print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
-                            error_record = {
-                                "phase": f"taxonomic_lifting_{label_prefix}",
-                                "cluster_label": label,
-                                "error": str(e)
-                            }
-                            self._log_error(error_record)
-                            for t in cluster_terms:
-                                taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
-
-                async def run_lifting():
-                    sem = asyncio.Semaphore(max_async)
-                    tasks = [lift_cluster_async(label, cluster_terms, sem) for label, cluster_terms in clusters.items()]
-                    await asyncio.gather(*tasks)
-
-                asyncio.run(run_lifting())
-            else:
-                for label, cluster_terms in clusters.items():
-                    if len(cluster_terms) == 1:
-                        taxonomic_map[cluster_terms[0]] = cluster_terms[0]
-                        continue
-                    
-                    idx = [terms_list.index(t) for t in cluster_terms]
-                    cluster_vecs = term_embeddings_l2[idx]
-                    weights = np.array([self.context.term_frequencies.get(t, 1) for t in cluster_terms])
-                    
-                    centroid = np.average(cluster_vecs, axis=0, weights=weights)
-                    distances = cosine_distances([centroid], cluster_vecs)[0]
-                    closest_indices = np.argsort(distances)[:3]
-                    fallback_candidates = [cluster_terms[i] for i in closest_indices]
-                    
-                    payload = {
-                        "cluster_terms": cluster_terms,
-                        "top_3_centroid_fallbacks": fallback_candidates
-                    }
-                    
-                    # Validate cluster payload size
-                    from src.utils.token_helper import estimate_tokens
-                    from src.refinement import prompts as ref_prompts
-                    
-                    base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
-                    sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
-                    max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
-                    
-                    if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
-                        # Trim cluster terms to fit, preserving candidates
-                        trimmed_terms = list(fallback_candidates)
-                        for term in cluster_terms:
-                            if term not in trimmed_terms:
-                                test_payload = {
-                                    "cluster_terms": trimmed_terms + [term],
-                                    "top_3_centroid_fallbacks": fallback_candidates
-                                }
-                                if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
-                                    trimmed_terms.append(term)
-                                else:
-                                    break
-                        cluster_terms = trimmed_terms
-                        payload = {
-                            "cluster_terms": cluster_terms,
-                            "top_3_centroid_fallbacks": fallback_candidates
-                        }
-                    
-                    user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
-                        payload_json=json.dumps(payload)
-                    )
-                    try:
-                        result = lift_agent.run_sync(
-                            user_prompt,
-                            deps=self.context.master_domain
-                        )
-                        mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
-                        for t in cluster_terms:
-                            taxonomic_map[t] = mapped_term
-                    except Exception as e:
-                        print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
-                        error_record = {
-                            "phase": f"taxonomic_lifting_{label_prefix}",
-                            "cluster_label": label,
-                            "error": str(e)
-                        }
-                        self._log_error(error_record)
-                        for t in cluster_terms:
-                            taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
-
-        unique_subjects_norm = list(set([t.subject for t in normalized_triples]))
-        unique_objects_norm = list(set([t.object for t in normalized_triples]))
-
-        print("   -> Clustering and Lifting Subjects...")
-        cluster_and_lift(unique_subjects_norm, "Subject")
-        
-        print("   -> Clustering and Lifting Objects...")
-        cluster_and_lift(unique_objects_norm, "Object")
-
-        # Re-Map Triples
-        for t in normalized_triples:
-            t.subject = taxonomic_map.get(t.subject, t.subject)
-            t.object = taxonomic_map.get(t.object, t.object)
-            # Note: t.predicate is NOT mapped here because predicates are verbs/edges and should not be taxonomically lifted into nouns.
-            
-        with open(out_dir / "refined_triplets.json", "w") as f:
-            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
-            
-        with open(out_dir / "taxonomic_map.json", "w") as f:
-            json.dump(taxonomic_map, f, indent=2)
-            
         print("[Refinement] Pipeline complete. Purging VRAM.")
         purge_vram()
         return normalized_triples
