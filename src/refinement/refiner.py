@@ -286,7 +286,6 @@ class RefinementPipeline:
             norm_obj = object_map.get(pre_obj, pre_obj)
             normalized_frequencies[norm_obj] += 1
 
-        taxonomic_map = {}
         threshold = self.config.get('refinement', {}).get('clustering_threshold', 0.4)
 
         def cluster_field(terms_list: List[str], label_prefix: str):
@@ -359,12 +358,16 @@ class RefinementPipeline:
         # 3. Taxonomic Lifting
         print("[Refinement] Step 3: Taxonomic Lifting")
 
-        async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix):
+        subject_taxonomic_map = {}
+        predicate_taxonomic_map = {}
+        object_taxonomic_map = {}
+
+        async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
             async with sem:
                 cluster_terms = cluster["members"]
                 label = cluster["cluster_number"]
                 if len(cluster_terms) == 1:
-                    taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                    target_map[cluster_terms[0]] = cluster_terms[0]
                     return
                     
                 idx = [terms_list.index(t) for t in cluster_terms]
@@ -417,7 +420,7 @@ class RefinementPipeline:
                     )
                     mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
                     for t in cluster_terms:
-                        taxonomic_map[t] = mapped_term
+                        target_map[t] = mapped_term
                 except Exception as e:
                     print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
                     error_record = {
@@ -427,13 +430,13 @@ class RefinementPipeline:
                     }
                     self._log_error(error_record)
                     for t in cluster_terms:
-                        taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+                        target_map[t] = fallback_candidates[0] if fallback_candidates else t
 
-        def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix):
+        def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
             cluster_terms = cluster["members"]
             label = cluster["cluster_number"]
             if len(cluster_terms) == 1:
-                taxonomic_map[cluster_terms[0]] = cluster_terms[0]
+                target_map[cluster_terms[0]] = cluster_terms[0]
                 return
                 
             idx = [terms_list.index(t) for t in cluster_terms]
@@ -486,7 +489,7 @@ class RefinementPipeline:
                 )
                 mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
                 for t in cluster_terms:
-                    taxonomic_map[t] = mapped_term
+                    target_map[t] = mapped_term
             except Exception as e:
                 print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
                 error_record = {
@@ -496,23 +499,55 @@ class RefinementPipeline:
                 }
                 self._log_error(error_record)
                 for t in cluster_terms:
-                    taxonomic_map[t] = fallback_candidates[0] if fallback_candidates else t
+                    target_map[t] = fallback_candidates[0] if fallback_candidates else t
 
         if self.use_async:
             async def run_lifting():
                 sem = asyncio.Semaphore(max_async)
                 tasks = []
                 for cluster in subj_clusters:
-                    tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject"))
+                    tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map))
+                for cluster in pred_clusters:
+                    tasks.append(lift_cluster_async(cluster, sem, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map))
                 for cluster in obj_clusters:
-                    tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object"))
+                    tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map))
                 await asyncio.gather(*tasks)
             asyncio.run(run_lifting())
         else:
             for cluster in subj_clusters:
-                lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject")
+                lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map)
+            for cluster in pred_clusters:
+                lift_cluster_sync(cluster, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map)
             for cluster in obj_clusters:
-                lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object")
+                lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map)
+
+        # Write individual taxonomic maps to disk
+        with open(out_dir / "subject_taxonomic_map.json", "w") as f:
+            json.dump(subject_taxonomic_map, f, indent=2)
+
+        with open(out_dir / "predicate_taxonomic_map.json", "w") as f:
+            json.dump(predicate_taxonomic_map, f, indent=2)
+
+        with open(out_dir / "object_taxonomic_map.json", "w") as f:
+            json.dump(object_taxonomic_map, f, indent=2)
+
+        # Consolidate global taxonomic map for backwards compatibility
+        taxonomic_map = {}
+        taxonomic_map.update(subject_taxonomic_map)
+        taxonomic_map.update(predicate_taxonomic_map)
+        taxonomic_map.update(object_taxonomic_map)
+
+        with open(out_dir / "taxonomic_map.json", "w") as f:
+            json.dump(taxonomic_map, f, indent=2)
+
+        # Build case-insensitive maps for final triple re-mapping lookups
+        lower_subj_norm = {k.lower(): v for k, v in subject_map.items()}
+        lower_pred_norm = {k.lower(): v for k, v in predicate_map.items()}
+        lower_obj_norm = {k.lower(): v for k, v in object_map.items()}
+        
+        lower_subj_tax = {k.lower(): v for k, v in subject_taxonomic_map.items()}
+        lower_pred_tax = {k.lower(): v for k, v in predicate_taxonomic_map.items()}
+        lower_obj_tax = {k.lower(): v for k, v in object_taxonomic_map.items()}
 
         # Apply both Lexical Normalization and Taxonomic Lifting maps to raw triples
         normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
@@ -521,13 +556,13 @@ class RefinementPipeline:
             pre_pred = self._nlp_preprocess(t.predicate)
             pre_obj = self._nlp_preprocess(t.object)
             
-            norm_subj = subject_map.get(pre_subj, pre_subj)
-            norm_pred = predicate_map.get(pre_pred, pre_pred)
-            norm_obj = object_map.get(pre_obj, pre_obj)
+            norm_subj = lower_subj_norm.get(pre_subj.lower(), pre_subj)
+            norm_pred = lower_pred_norm.get(pre_pred.lower(), pre_pred)
+            norm_obj = lower_obj_norm.get(pre_obj.lower(), pre_obj)
             
-            t.subject = taxonomic_map.get(norm_subj, norm_subj)
-            t.predicate = norm_pred
-            t.object = taxonomic_map.get(norm_obj, norm_obj)
+            t.subject = lower_subj_tax.get(norm_subj.lower(), norm_subj)
+            t.predicate = lower_pred_tax.get(norm_pred.lower(), norm_pred)
+            t.object = lower_obj_tax.get(norm_obj.lower(), norm_obj)
             
         with open(out_dir / "refined_triplets.json", "w") as f:
             json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
