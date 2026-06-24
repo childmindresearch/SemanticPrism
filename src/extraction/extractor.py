@@ -309,30 +309,35 @@ class ExtractionPipeline:
                 )
                 from pydantic_ai import capture_run_messages
                 
-                with capture_run_messages() as messages:
-                    try:
-                        result = await triple_agent.run(user_prompt, deps=deps)
-                        print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples)")
-                        return result.output.triples
-                    except Exception as e:
-                        malformed_text = self._extract_malformed_text(messages, e)
-                        self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
-
-                        print(f"      -> Initial extraction failed for {source_doc} [{start_idx}-{end_idx}]. Retrying with custom JSON reformatter...")
-
-                        reformat_prompt = (
-                            f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
-                            f"Validation error message/details:\n{str(e)}\n\n"
-                            f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
-                        )
+                max_attempts = 2
+                for attempt in range(1, max_attempts + 1):
+                    with capture_run_messages() as messages:
                         try:
-                            ref_result = await triple_reformat_agent.run(reformat_prompt)
-                            print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
-                            return ref_result.output.triples
-                        except Exception as reformat_err:
-                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
-                            print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
-                            return []
+                            result = await triple_agent.run(user_prompt, deps=deps)
+                            print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples) on attempt {attempt}")
+                            return result.output.triples
+                        except Exception as e:
+                            malformed_text = self._extract_malformed_text(messages, e)
+                            self._log_extraction_error(f"initial_triple_extraction_failed_attempt_{attempt}", source_doc, start_idx, end_idx, e, malformed_text)
+
+                            if attempt < max_attempts:
+                                print(f"      -> Initial extraction attempt {attempt} failed. Retrying standard extraction...")
+                                continue
+
+                            print(f"      -> Initial extraction failed after {max_attempts} attempts. Retrying with custom JSON reformatter...")
+
+                            reformat_prompt = (
+                                f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                                f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
+                            )
+                            try:
+                                ref_result = await triple_reformat_agent.run(reformat_prompt)
+                                print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                                return ref_result.output.triples
+                            except Exception as reformat_err:
+                                self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                                print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
+                                return []
 
         tasks = [process_chunk(chunk, start, end) for chunk, start, end in triple_chunks]
         results = await asyncio.gather(*tasks)
@@ -381,31 +386,39 @@ class ExtractionPipeline:
             
             from pydantic_ai import capture_run_messages
             
-            with capture_run_messages() as messages:
-                try:
-                    # Execute extraction
-                    triple_result = triple_agent.run_sync(user_prompt, deps=deps)
-                    triples_list = triple_result.output.triples
-                    print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples)")
-                except Exception as e:
-                    malformed_text = self._extract_malformed_text(messages, e)
-                    self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
-
-                    print(f"-> Initial extraction failed for {source_doc} [{start_idx}-{end_idx}]. Retrying with custom JSON reformatter...")
-
-                    reformat_prompt = (
-                        f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
-                        f"Validation error message/details:\n{str(e)}\n\n"
-                        f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
-                    )
+            max_attempts = 2
+            triples_list = []
+            for attempt in range(1, max_attempts + 1):
+                with capture_run_messages() as messages:
                     try:
-                        ref_result = triple_reformat_agent.run_sync(reformat_prompt)
-                        print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
-                        triples_list = ref_result.output.triples
-                    except Exception as reformat_err:
-                        self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
-                        print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
-                        continue
+                        # Execute extraction
+                        triple_result = triple_agent.run_sync(user_prompt, deps=deps)
+                        triples_list = triple_result.output.triples
+                        print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples) on attempt {attempt}")
+                        break
+                    except Exception as e:
+                        malformed_text = self._extract_malformed_text(messages, e)
+                        self._log_extraction_error(f"initial_triple_extraction_failed_attempt_{attempt}", source_doc, start_idx, end_idx, e, malformed_text)
+
+                        if attempt < max_attempts:
+                            print(f"-> Initial extraction attempt {attempt} failed. Retrying standard extraction...")
+                            continue
+
+                        print(f"-> Initial extraction failed after {max_attempts} attempts. Retrying with custom JSON reformatter...")
+
+                        reformat_prompt = (
+                            f"Malformed input payload that failed schema validation:\n{malformed_text}\n\n"
+                            f"Please reformat the text to strictly match the schemas.TripleExtractionResult schema."
+                        )
+                        try:
+                            ref_result = triple_reformat_agent.run_sync(reformat_prompt)
+                            print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
+                            triples_list = ref_result.output.triples
+                            break
+                        except Exception as reformat_err:
+                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                            print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
+                            break
             
             # Update state with new entities and save triplets
             for t in triples_list:
