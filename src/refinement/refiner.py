@@ -373,7 +373,7 @@ class RefinementPipeline:
         print("[Refinement] Step 3: Taxonomic Lifting")
 
         subject_taxonomic_map = {}
-        predicate_taxonomic_map = {}
+        predicate_taxonomic_map = {p: p for p in unique_predicates_norm}
         object_taxonomic_map = {}
 
         async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
@@ -521,8 +521,6 @@ class RefinementPipeline:
                 tasks = []
                 for cluster in subj_clusters:
                     tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map))
-                for cluster in pred_clusters:
-                    tasks.append(lift_cluster_async(cluster, sem, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map))
                 for cluster in obj_clusters:
                     tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map))
                 await asyncio.gather(*tasks)
@@ -530,8 +528,6 @@ class RefinementPipeline:
         else:
             for cluster in subj_clusters:
                 lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map)
-            for cluster in pred_clusters:
-                lift_cluster_sync(cluster, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map)
             for cluster in obj_clusters:
                 lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map)
 
