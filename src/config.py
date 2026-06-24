@@ -52,20 +52,19 @@ class ConfigLoader:
 # Expose a global, read-only dictionary that any file can import
 settings = ConfigLoader.get_config()
 
-# Monkey patch pydantic_ai to fix Ollama Nil-Content Bug for tool calls.
-# Pydantic-AI sets content=None when a model response contains only tool calls.
-# Ollama's OpenAI compatibility layer fails with a 400 Bad Request error if content is null/nil.
-# By forcing content to be an empty string, we keep Ollama happy.
+# Monkey patch pydantic_ai to fix Ollama Nil-Content Bug.
+# Ollama's OpenAI compatibility layer fails with a 400 Bad Request error if the content of any message is null/nil.
+# By forcing content to be an empty string if it is None, we keep Ollama happy.
 try:
     from pydantic_ai.models.openai import OpenAIChatModel
-    _original = OpenAIChatModel._MapModelResponseContext._into_message_param
-    def _patched(self):
-        result = _original(self)
-        if result is not None:
-            if result.get("content") is None and result.get("tool_calls"):
-                result["content"] = ""
-        return result
-    OpenAIChatModel._MapModelResponseContext._into_message_param = _patched
+    _original_map_messages = OpenAIChatModel._map_messages
+    async def _patched_map_messages(self, *args, **kwargs):
+        messages = await _original_map_messages(self, *args, **kwargs)
+        if messages:
+            for msg in messages:
+                if msg.get("content") is None:
+                    msg["content"] = ""
+        return messages
+    OpenAIChatModel._map_messages = _patched_map_messages
 except Exception:
     pass
-
