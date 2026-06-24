@@ -231,28 +231,45 @@ class RefinementPipeline:
             if tasks:
                 await asyncio.gather(*tasks)
 
+        pre_subject_map = {}
+        pre_predicate_map = {}
+        pre_object_map = {}
+
+        async def process_all_terms():
+            print("   -> Normalizing Subjects...")
+            await run_all_batches(unique_subjects, subject_norm_agent, pre_subject_map)
+                
+            print("   -> Normalizing Predicates...")
+            await run_all_batches(unique_predicates, predicate_norm_agent, pre_predicate_map)
+                
+            print("   -> Normalizing Objects...")
+            await run_all_batches(unique_objects, object_norm_agent, pre_object_map)
+            
+        # Execute all normalization passes inside a single shared event loop
+        asyncio.run(process_all_terms())
+
+        # Construct final case-sensitive maps using the original raw string keys
         subject_map = {}
         predicate_map = {}
         object_map = {}
 
-        async def process_all_terms():
-            print("   -> Normalizing Subjects...")
-            await run_all_batches(unique_subjects, subject_norm_agent, subject_map)
-            with open(out_dir / "subject_normalization_map.json", "w") as f:
-                json.dump(subject_map, f, indent=2)
-                
-            print("   -> Normalizing Predicates...")
-            await run_all_batches(unique_predicates, predicate_norm_agent, predicate_map)
-            with open(out_dir / "predicate_normalization_map.json", "w") as f:
-                json.dump(predicate_map, f, indent=2)
-                
-            print("   -> Normalizing Objects...")
-            await run_all_batches(unique_objects, object_norm_agent, object_map)
-            with open(out_dir / "object_normalization_map.json", "w") as f:
-                json.dump(object_map, f, indent=2)
+        for t in raw_triples:
+            pre_subj = self._nlp_preprocess(t.subject)
+            pre_pred = self._nlp_preprocess(t.predicate)
+            pre_obj = self._nlp_preprocess(t.object)
             
-        # Execute all normalization passes inside a single shared event loop
-        asyncio.run(process_all_terms())
+            subject_map[t.subject] = pre_subject_map.get(pre_subj, pre_subj)
+            predicate_map[t.predicate] = pre_predicate_map.get(pre_pred, pre_pred)
+            object_map[t.object] = pre_object_map.get(pre_obj, pre_obj)
+
+        with open(out_dir / "subject_normalization_map.json", "w") as f:
+            json.dump(subject_map, f, indent=2)
+
+        with open(out_dir / "predicate_normalization_map.json", "w") as f:
+            json.dump(predicate_map, f, indent=2)
+
+        with open(out_dir / "object_normalization_map.json", "w") as f:
+            json.dump(object_map, f, indent=2)
 
         # Consolidate global normalization map for backwards compatibility
         normalization_map = {}
@@ -274,16 +291,13 @@ class RefinementPipeline:
         # Calculate normalized frequencies for weighting centroids
         normalized_frequencies = defaultdict(int)
         for t in raw_triples:
-            pre_subj = self._nlp_preprocess(t.subject)
-            norm_subj = subject_map.get(pre_subj, pre_subj)
+            norm_subj = subject_map.get(t.subject, t.subject)
             normalized_frequencies[norm_subj] += 1
             
-            pre_pred = self._nlp_preprocess(t.predicate)
-            norm_pred = predicate_map.get(pre_pred, pre_pred)
+            norm_pred = predicate_map.get(t.predicate, t.predicate)
             normalized_frequencies[norm_pred] += 1
             
-            pre_obj = self._nlp_preprocess(t.object)
-            norm_obj = object_map.get(pre_obj, pre_obj)
+            norm_obj = object_map.get(t.object, t.object)
             normalized_frequencies[norm_obj] += 1
 
         threshold = self.config.get('refinement', {}).get('clustering_threshold', 0.4)
@@ -552,23 +566,42 @@ class RefinementPipeline:
         # Apply both Lexical Normalization and Taxonomic Lifting maps to raw triples
         normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
         for t in normalized_triples:
-            pre_subj = self._nlp_preprocess(t.subject)
-            pre_pred = self._nlp_preprocess(t.predicate)
-            pre_obj = self._nlp_preprocess(t.object)
+            # 1. Normalization lookup: case-sensitive direct with case-insensitive fallback
+            norm_subj = subject_map.get(t.subject)
+            if norm_subj is None:
+                pre_subj = self._nlp_preprocess(t.subject)
+                norm_subj = lower_subj_norm.get(pre_subj.lower(), pre_subj)
+                
+            norm_pred = predicate_map.get(t.predicate)
+            if norm_pred is None:
+                pre_pred = self._nlp_preprocess(t.predicate)
+                norm_pred = lower_pred_norm.get(pre_pred.lower(), pre_pred)
+                
+            norm_obj = object_map.get(t.object)
+            if norm_obj is None:
+                pre_obj = self._nlp_preprocess(t.object)
+                norm_obj = lower_obj_norm.get(pre_obj.lower(), pre_obj)
             
-            norm_subj = lower_subj_norm.get(pre_subj.lower(), pre_subj)
-            norm_pred = lower_pred_norm.get(pre_pred.lower(), pre_pred)
-            norm_obj = lower_obj_norm.get(pre_obj.lower(), pre_obj)
-            
-            t.subject = lower_subj_tax.get(norm_subj.lower(), norm_subj)
-            t.predicate = lower_pred_tax.get(norm_pred.lower(), norm_pred)
-            t.object = lower_obj_tax.get(norm_obj.lower(), norm_obj)
+            # 2. Taxonomic lookup: case-sensitive direct with case-insensitive fallback
+            final_subj = subject_taxonomic_map.get(norm_subj)
+            if final_subj is None:
+                final_subj = lower_subj_tax.get(norm_subj.lower(), norm_subj)
+                
+            final_pred = predicate_taxonomic_map.get(norm_pred)
+            if final_pred is None:
+                final_pred = lower_pred_tax.get(norm_pred.lower(), norm_pred)
+                
+            final_obj = object_taxonomic_map.get(norm_obj)
+            if final_obj is None:
+                final_obj = lower_obj_tax.get(norm_obj.lower(), norm_obj)
+                
+            # Assign final resolved values
+            t.subject = final_subj
+            t.predicate = final_pred
+            t.object = final_obj
             
         with open(out_dir / "refined_triplets.json", "w") as f:
             json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
-            
-        with open(out_dir / "taxonomic_map.json", "w") as f:
-            json.dump(taxonomic_map, f, indent=2)
 
         # 4. Theme-Based Embedding Mapping
         print("[Refinement] Step 4: Theme-Based Embedding Mapping")

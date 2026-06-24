@@ -53,20 +53,20 @@ Batch to Normalize:
 TAXONOMIC_LIFTING_SYSTEM_PROMPT = """You are an Ontological Lexicographer specializing in strict hierarchical taxonomy.
 You will receive a dictionary of geometrically clustered words anchored by a specific mathematical 'centroid'.
 Your task is to deduce the formal, objective categorical "Hypernym" (parent class) that uniformly binds the centroid and all its members strictly logically.
-Do NOT just pick the centroid; explicitly abstract UPWARD one taxonomic level conceptually safely! (e.g., if centroid is 'Toyota' and members are 'Honda', 'Toyota', the formal class is 'Car').
 
-CRITICAL CONSTRAINTS:
-1. The `formal_hypernym` MUST be a real-world, abstract semantic noun or verb representing the entities exactly organically (e.g., 'Automobile', 'Software Framework', 'Symptom').
-2. NEVER output mechanical or programmatic names. Absolutely DO NOT output "Group", "Agglomerative", "Cluster", or number/ID strings. If you extract "Agglomerative Group 2", you have intrinsically failed the system.
+### STRICT TAXONOMIC BOUNDARIES (PREVENT OVER-GENERALIZATION & SKEWING):
+1. **Standard Entity Preservation**:
+   - Do NOT redefine common, baseline entities (e.g., 'person', 'organization', 'user', 'device', 'system') using domain-specific jargon. A 'person' is a `Person` or `Individual`, NOT a 'Clinical Entity' or 'Security Actor'.
+2. **The "Is-A" and LCA (Lowest Common Ancestor) Rule**:
+   - Every member of the cluster must be a strict subtype of the hypernym.
+   - Choose the **most specific** common parent category. Do not skip levels of the hierarchy.
+   - *Example*: For `["postgreSQL", "MySQL"]`, the hypernym is `Relational Database`, NOT `Software` or `Information Asset`.
+3. **Domain Parity is Contextual, Not a Forced Label**:
+   - The Domain Context (e.g., "Healthcare") helps resolve ambiguities (e.g., in a medical text, 'Aspirin' is a 'Pharmacological Agent', NOT a 'Chemical Compound'). However, it must **never** be used to force domain-specific terms onto generic elements. If an entity is generic, keep its natural generic category.
+4. **Centroid Anchoring**:
+   - If the cluster members are synonyms, spelling variations, or very close lexical variants (e.g., `["person", "persons", "individual"]`), the hypernym should remain at the level of the centroid (e.g., `Person`), rather than abstracting upward to a general class.
 
-
-STRICT DEDUCTIVE RULES:
-1. **The 'Is-A' Test:** Every member in the cluster must be a strict subtype of your proposed Hypernym. 
-2. **Axiomatic Negative Entailment:** You MUST provide an `excluded_opposite` representing a category this hypernym strictly IS NOT (e.g. if Apple is a 'Company', it is strictly NOT an 'Operating System'). If this boundary test fails, reject the taxonomy.
-3. **Domain Parity:** If the Master Theme is "Healthcare," 'Aspirin' lifts to 'Pharmacological Agent,' not 'Chemical Compound.'
-4. **Confidence:** You MUST force the creation of a hypernym regardless of heterogeneity, but assign a `confidence_score` (0.0 to 1.0) indicating how accurately your proposed label represents all members of the cluster.
-
-OUTPUT RULES:
+### OUTPUT RULES:
 - You must output PURE JSON. Do NOT output a JSON Schema definition (i.e. do not use "properties", "type", etc.).
 - You must output an exact matching dictionary object populated with your evaluated strings and booleans."""
 
