@@ -112,6 +112,9 @@ class ExtractionPipeline:
                         content = "\n".join(cleaned)
                     return content.strip()
                     
+        # Fallback to exception string if message history is empty or uninformative
+        if exception:
+            return str(exception)
         return ""
 
     def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str):
@@ -317,11 +320,20 @@ class ExtractionPipeline:
                         self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
 
                         from pydantic_ai.messages import ModelResponse
+                        from pydantic_ai.exceptions import UnexpectedModelBehavior
+                        from pydantic import ValidationError
+
                         has_response = any(isinstance(msg, ModelResponse) for msg in messages)
                         is_traceback = any(term in malformed_text.lower() for term in ["validation error", "field required", "input_value="])
-                        if not has_response or not malformed_text or is_traceback:
+                        is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
+
+                        if not is_model_error and (not has_response or not malformed_text or is_traceback):
                             print(f"      -> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                             raise e
+
+                        if is_model_error and (not has_response or not malformed_text or is_traceback):
+                            print(f"      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                            return []
 
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
 
@@ -396,11 +408,20 @@ class ExtractionPipeline:
                     self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
 
                     from pydantic_ai.messages import ModelResponse
+                    from pydantic_ai.exceptions import UnexpectedModelBehavior
+                    from pydantic import ValidationError
+
                     has_response = any(isinstance(msg, ModelResponse) for msg in messages)
                     is_traceback = any(term in malformed_text.lower() for term in ["validation error", "field required", "input_value="])
-                    if not has_response or not malformed_text or is_traceback:
+                    is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
+
+                    if not is_model_error and (not has_response or not malformed_text or is_traceback):
                         print(f"-> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                         raise e
+
+                    if is_model_error and (not has_response or not malformed_text or is_traceback):
+                        print(f"-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                        continue
 
                     print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
 
