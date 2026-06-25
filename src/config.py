@@ -39,13 +39,13 @@ class ConfigLoader:
                 if "llm" in cls._config:
                     cls._config["llm"]["api_key"] = env_key
                 for stage in ["extraction", "refinement", "synthesis"]:
-                    if (
-                        stage in cls._config 
-                        and isinstance(cls._config[stage], dict) 
-                        and "llm" in cls._config[stage]
-                        and isinstance(cls._config[stage]["llm"], dict)
-                    ):
-                        cls._config[stage]["llm"]["api_key"] = env_key
+                    if stage in cls._config and isinstance(cls._config[stage], dict):
+                        for key in ["llm", "llm_theme", "llm_triple"]:
+                            if (
+                                key in cls._config[stage]
+                                and isinstance(cls._config[stage][key], dict)
+                            ):
+                                cls._config[stage][key]["api_key"] = env_key
                 
         return cls._config
 

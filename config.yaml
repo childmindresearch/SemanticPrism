@@ -40,7 +40,18 @@ extraction:
   # max_async_calls will increase VRAM consumption. Ensure:
   # (context_window_cap * max_async_calls * bytes_per_token_KV) fits in GPU VRAM.
   context_window_cap: 8192
-  # Stage-specific model overrides
+  # Stage-specific model overrides (Optional: define separate theme and triple extraction models)
+  # llm_theme:
+  #   provider: "google"
+  #   model_name: "gemini-1.5-flash"
+  #   api_key: ""
+  #   temperature: 0.0
+  # llm_triple:
+  #   provider: "ollama"
+  #   model_name: "SemP10k-gemma:latest"
+  #   base_url: "http://127.0.0.1:11434/v1"
+  #   api_key: ""
+  #   temperature: 0.0
   llm:
     provider: "ollama"
     model_name: "SemP10k-gemma:latest" # "gemma4:26b"

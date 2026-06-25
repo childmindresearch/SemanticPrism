@@ -39,10 +39,10 @@ class RawTriple(BaseModel):
     Extracts a high-fidelity subject-predicate-object relationship.
     Focuses on atomic facts to ensure graph density and accuracy.
     """
-    subject: str = Field(..., description="The exact source entity exactly as it appears in the source text. Do not modify the casing or format.")
-    predicate: str = Field(..., description="The exact relationship verb or linking phrase exactly as it appears in the source text. Do not use snake_case.")
-    object: str = Field(..., description="The exact target entity or attribute value exactly as it appears in the source text. Do not modify the casing or format.")
-    source_quote: str = Field(..., description="The exact snippet from the text that proves this relationship exists.")
+    subject: str = Field(..., description="The primary entity or concept exactly as it appears in the source text. Do not modify the casing or format.")
+    predicate: str = Field(..., description="The relationship or action connecting subject and object exactly as it appears in the source text. Do not modify the casing or format.")
+    object: str = Field(..., description="The target entity, concept, or value. Do not modify the casing or format.")
+    source_quote: str = Field(..., description="The EXACT, verbatim substring from the text confirming this relationship.")
     theme_association: Optional[str] = Field(default="Other", description="The theme this triple most closely aligns with, if any.")
 
     @field_validator('subject', 'predicate', 'object')
