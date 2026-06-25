@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import schemas
 from . import prompts
-from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent
+from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
 from src.config import settings
 
 class PipelineRunContext:
@@ -335,7 +335,7 @@ class ExtractionPipeline:
                             print(f"      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                             return []
 
-                        print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
+                        print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 
                         themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
                         reformat_prompt = (
@@ -423,7 +423,7 @@ class ExtractionPipeline:
                         print(f"-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                         continue
 
-                    print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter...")
+                    print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 
                     themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
                     reformat_prompt = (

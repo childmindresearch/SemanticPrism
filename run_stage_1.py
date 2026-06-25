@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from src.config import settings
 from src.extraction.extractor import ExtractionPipeline, PipelineRunContext
 from src.agents.vram_manager import purge_vram
+from src.agents.extraction_agents import theme_model, triple_model
 
 def load_input_documents() -> list[dict]:
     """
@@ -95,7 +96,7 @@ def main():
     print(f"Pipeline Resume Mode: {resume_mode}\n")
     
     # Phase 1: Global Theme Discovery
-    print("=== Phase 1: Global Theme Discovery ===")
+    print(f"=== Phase 1: Global Theme Discovery (Model: {theme_model}) ===")
     for doc in documents:
         safe_name = pipeline.sanitize_filename(doc['id'])
         theme_file_path = pipeline.themes_dir / f"{safe_name}_themes.json"
@@ -112,7 +113,7 @@ def main():
     pipeline.aggregate_themes()
         
     # Phase 2: Master Theme Synthesis
-    print("\n=== Phase 2: Master Theme Synthesis ===")
+    print(f"\n=== Phase 2: Master Theme Synthesis (Model: {theme_model}) ===")
     print("-> Synthesizing master themes from all documents...")
     pipeline.synthesize_master_themes()
     
@@ -120,7 +121,7 @@ def main():
     purge_vram()
     
     # Phase 3: Global Triple Extraction
-    print("\n=== Phase 3: Global Triple Extraction ===")
+    print(f"\n=== Phase 3: Global Triple Extraction (Model: {triple_model}) ===")
     for doc in documents:
         safe_name = pipeline.sanitize_filename(doc['id'])
         triple_file_path = pipeline.triples_dir / f"{safe_name}_triplets.json"
