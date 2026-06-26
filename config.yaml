@@ -83,6 +83,10 @@ refinement:
 
 topology:
   max_structural_clusters: 10
+  # Spectral Hub Retention Rate (PageRank top N% threshold)
+  # Determines the percentage of top-PageRank entities to treat as global hubs.
+  # e.g., 0.05 treats the top 5% of nodes as global hubs.
+  spectral_variance_retention: 0.05
 
 synthesis:
   max_async_calls: 3
