@@ -7,7 +7,7 @@ import json
 import re
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from collections import defaultdict
 import numpy as np
 
@@ -54,6 +54,64 @@ class RefinementPipeline:
         if log_file.exists():
             log_file.unlink()
 
+        # Setup SQLite Database and Lock for WAL-safe async operations
+        self.resume = self.config.get('refinement', {}).get('resume', True)
+        db_dir = Path(base_out_dir) / "02_refinement"
+        db_dir.mkdir(parents=True, exist_ok=True)
+        self.db_path = db_dir / "refinement_state.db"
+        
+        # Erase existing database file if resume is set to False (clean run requested)
+        if not self.resume and self.db_path.exists():
+            print(f"[Refinement] Starting fresh run: deleting existing cache database at {self.db_path}")
+            try:
+                self.db_path.unlink()
+                for ext in [".db-wal", ".db-shm"]:
+                    extra_file = self.db_path.with_suffix(ext)
+                    if extra_file.exists():
+                        extra_file.unlink()
+            except Exception as e:
+                print(f"[Refinement] Warning: Could not delete cache database: {e}")
+                
+        self.db_lock = asyncio.Lock()
+        self._init_db()
+
+    def _init_db(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS lexical_normalization (
+            original_term TEXT PRIMARY KEY,
+            normalized_term TEXT,
+            term_type TEXT
+        );
+        """)
+        conn.execute("DROP TABLE IF EXISTS taxonomic_lifting;")
+        conn.commit()
+        conn.close()
+
+    async def _run_db_query(self, query: str, params: tuple = (), is_write: bool = False):
+        import sqlite3
+        def _execute():
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            cursor = conn.cursor()
+            try:
+                cursor.execute(query, params)
+                if is_write:
+                    conn.commit()
+                    return None
+                return cursor.fetchall()
+            finally:
+                conn.close()
+                
+        if is_write:
+            async with self.db_lock:
+                return await asyncio.to_thread(_execute)
+        else:
+            return await asyncio.to_thread(_execute)
+
     def _log_error(self, record: Dict[str, Any]):
         """Helper to append error records to stage_02_refinement_errors.json."""
         try:
@@ -99,7 +157,11 @@ class RefinementPipeline:
 
     def execute(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str]):
         print("[Refinement] Starting Stage 2 Pipeline...")
-        
+        subject_map, predicate_map, object_map = self.execute_part_1(raw_triples, master_themes)
+        return self.execute_part_2(raw_triples, original_themes, master_themes, subject_map, predicate_map, object_map)
+
+    def execute_part_1(self, raw_triples: List[RawTriple], master_themes: List[str]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+        print("[Refinement] Starting Stage 2 Pipeline Part 1 (Lexical Normalization)...")
         # 1. Lexical Normalization
         print("[Refinement] Step 1: Lexical Normalization")
         normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
@@ -128,7 +190,7 @@ class RefinementPipeline:
         out_dir = Path("outputs/02_refinement")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int, target_map: dict):
+        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int, target_map: dict, term_type: str):
             async with sem:
                 print(f"      -> Running API call for batch {batch_idx}/{total_batches}...")
                 user_prompt = prompts.LLM_PREPROCESSING_USER_PROMPT.format(
@@ -153,6 +215,11 @@ class RefinementPipeline:
                         )
                     for pair in result.output.tokens:
                         target_map[pair.original] = pair.normalized
+                        await self._run_db_query(
+                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                            (pair.original, pair.normalized, term_type),
+                            is_write=True
+                        )
                 except asyncio.TimeoutError:
                     print(f"      -> Timeout error on API call for batch {batch_idx}/{total_batches}")
                     error_record = {
@@ -164,6 +231,11 @@ class RefinementPipeline:
                     self._log_error(error_record)
                     for term in batch:
                         target_map[term] = term
+                        await self._run_db_query(
+                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                            (term, term, term_type),
+                            is_write=True
+                        )
                 except Exception as e:
                     print(f"      -> Error normalizing batch {batch_idx}/{total_batches}: {e}")
                     error_record = {
@@ -175,8 +247,13 @@ class RefinementPipeline:
                     self._log_error(error_record)
                     for term in batch:
                         target_map[term] = term
+                        await self._run_db_query(
+                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                            (term, term, term_type),
+                            is_write=True
+                        )
 
-        async def run_all_batches(term_set: set, agent, target_map: dict):
+        async def run_all_batches(term_set: set, agent, target_map: dict, term_type: str):
             term_list = sorted(list(term_set))
             sem = asyncio.Semaphore(max_async)
             tasks = []
@@ -220,7 +297,7 @@ class RefinementPipeline:
             async def wrapped_process(batch, sem, agent, batch_idx):
                 print(f"      -> Enqueued batch {batch_idx}/{total_batches} ({len(batch)} terms)...")
                 try:
-                    await process_batch(batch, sem, agent, batch_idx, total_batches, target_map)
+                    await process_batch(batch, sem, agent, batch_idx, total_batches, target_map, term_type)
                     print(f"      -> Completed batch {batch_idx}/{total_batches}")
                 except Exception as e:
                     print(f"      -> Unexpected error on batch {batch_idx}/{total_batches}: {e}")
@@ -236,14 +313,34 @@ class RefinementPipeline:
         pre_object_map = {}
 
         async def process_all_terms():
-            print("   -> Normalizing Subjects...")
-            await run_all_batches(unique_subjects, subject_norm_agent, pre_subject_map)
+            if self.resume:
+                print("   -> Loading cached lexical normalization mappings from database...")
+                cached_rows = await self._run_db_query(
+                    "SELECT original_term, normalized_term, term_type FROM lexical_normalization"
+                )
+                for row in cached_rows:
+                    orig, norm, term_type = row
+                    if term_type == "subject":
+                        pre_subject_map[orig] = norm
+                    elif term_type == "predicate":
+                        pre_predicate_map[orig] = norm
+                    elif term_type == "object":
+                        pre_object_map[orig] = norm
+            else:
+                print("   -> Starting fresh run (skipping cached database loading)...")
+
+            subjects_to_process = unique_subjects - set(pre_subject_map.keys())
+            predicates_to_process = unique_predicates - set(pre_predicate_map.keys())
+            objects_to_process = unique_objects - set(pre_object_map.keys())
+
+            print(f"   -> Normalizing Subjects ({len(subjects_to_process)} remaining)...")
+            await run_all_batches(subjects_to_process, subject_norm_agent, pre_subject_map, "subject")
                 
-            print("   -> Normalizing Predicates...")
-            await run_all_batches(unique_predicates, predicate_norm_agent, pre_predicate_map)
+            print(f"   -> Normalizing Predicates ({len(predicates_to_process)} remaining)...")
+            await run_all_batches(predicates_to_process, predicate_norm_agent, pre_predicate_map, "predicate")
                 
-            print("   -> Normalizing Objects...")
-            await run_all_batches(unique_objects, object_norm_agent, pre_object_map)
+            print(f"   -> Normalizing Objects ({len(objects_to_process)} remaining)...")
+            await run_all_batches(objects_to_process, object_norm_agent, pre_object_map, "object")
             
         # Execute all normalization passes inside a single shared event loop
         asyncio.run(process_all_terms())
@@ -279,6 +376,16 @@ class RefinementPipeline:
 
         with open(out_dir / "normalization_map.json", "w") as f:
             json.dump(normalization_map, f, indent=2)
+
+        print("[Refinement] Stage 2 Pipeline Part 1 Completed.")
+        return subject_map, predicate_map, object_map
+
+    def execute_part_2(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str], subject_map: Dict[str, str], predicate_map: Dict[str, str], object_map: Dict[str, str]) -> List[RawTriple]:
+        print("[Refinement] Starting Stage 2 Pipeline Part 2 (Clustering, Lifting, Theme Mapping)...")
+        refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
+        max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
+        out_dir = Path("outputs/02_refinement")
+        out_dir.mkdir(parents=True, exist_ok=True)
 
         # Before loading embeddings, explicitly purge VRAM
         print("[Refinement] Purging VRAM before embedding initialization...")
@@ -377,13 +484,14 @@ class RefinementPipeline:
         object_taxonomic_map = {}
 
         async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
+            cluster_terms = cluster["members"]
+            label = cluster["cluster_number"]
+            if len(cluster_terms) == 1:
+                target_map[cluster_terms[0]] = cluster_terms[0]
+                return
+            
             async with sem:
-                cluster_terms = cluster["members"]
-                label = cluster["cluster_number"]
-                if len(cluster_terms) == 1:
-                    target_map[cluster_terms[0]] = cluster_terms[0]
-                    return
-                    
+                print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
                 idx = [terms_list.index(t) for t in cluster_terms]
                 cluster_vecs = term_embeddings_l2[idx]
                 weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
@@ -433,18 +541,21 @@ class RefinementPipeline:
                         deps=self.context.master_domain
                     )
                     mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                    print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
                     for t in cluster_terms:
                         target_map[t] = mapped_term
                 except Exception as e:
-                    print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                    print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
                     error_record = {
                         "phase": f"taxonomic_lifting_{label_prefix}",
                         "cluster_label": label,
                         "error": str(e)
                     }
                     self._log_error(error_record)
+                    mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
+                    print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
                     for t in cluster_terms:
-                        target_map[t] = fallback_candidates[0] if fallback_candidates else t
+                        target_map[t] = mapped_term
 
         def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
             cluster_terms = cluster["members"]
@@ -452,7 +563,8 @@ class RefinementPipeline:
             if len(cluster_terms) == 1:
                 target_map[cluster_terms[0]] = cluster_terms[0]
                 return
-                
+            
+            print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
             idx = [terms_list.index(t) for t in cluster_terms]
             cluster_vecs = term_embeddings_l2[idx]
             weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
@@ -502,18 +614,30 @@ class RefinementPipeline:
                     deps=self.context.master_domain
                 )
                 mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
                 for t in cluster_terms:
                     target_map[t] = mapped_term
             except Exception as e:
-                print(f"[Refinement] Error lifting {label_prefix} cluster {label}: {e}")
+                print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
                 error_record = {
                     "phase": f"taxonomic_lifting_{label_prefix}",
                     "cluster_label": label,
                     "error": str(e)
                 }
                 self._log_error(error_record)
+                mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
+                print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
                 for t in cluster_terms:
-                    target_map[t] = fallback_candidates[0] if fallback_candidates else t
+                    target_map[t] = mapped_term
+
+        # Count clusters that need LLM resolution vs those resolved locally (singletons)
+        subj_singletons = sum(1 for c in subj_clusters if len(c["members"]) == 1)
+        subj_multi = len(subj_clusters) - subj_singletons
+        obj_singletons = sum(1 for c in obj_clusters if len(c["members"]) == 1)
+        obj_multi = len(obj_clusters) - obj_singletons
+
+        print(f"   -> Subjects: {len(subj_clusters)} total clusters ({subj_singletons} single-member resolved locally, {subj_multi} multi-member requiring lifting)")
+        print(f"   -> Objects: {len(obj_clusters)} total clusters ({obj_singletons} single-member resolved locally, {obj_multi} multi-member requiring lifting)")
 
         if self.use_async:
             async def run_lifting():
@@ -535,6 +659,7 @@ class RefinementPipeline:
         with open(out_dir / "subject_taxonomic_map.json", "w") as f:
             json.dump(subject_taxonomic_map, f, indent=2)
 
+        # Re-verify and clean up other maps
         with open(out_dir / "predicate_taxonomic_map.json", "w") as f:
             json.dump(predicate_taxonomic_map, f, indent=2)
 
