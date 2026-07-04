@@ -4,7 +4,7 @@ from pyvis.network import Network
 from pathlib import Path
 from typing import Dict, Any, List
 from collections import defaultdict
-from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult
+from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult, HubPartition
 
 try:
     from cdlib import algorithms
@@ -247,6 +247,44 @@ class TopologyPipeline:
                     ))
         return theme_inheritance
 
+    def _partition_hub_network(self, dg: nx.DiGraph, global_hubs: List[str], path_type: str = "community") -> List[HubPartition]:
+        if not global_hubs:
+            return []
+            
+        if len(global_hubs) <= 2:
+            return [HubPartition(hub_cluster_id=0, nodes=list(global_hubs))]
+
+        hubs_set = set(global_hubs)
+        hub_subgraph = nx.DiGraph()
+        for h in hubs_set:
+            hub_subgraph.add_node(h)
+            
+        for u, v, data in dg.edges(data=True):
+            if u in hubs_set and v in hubs_set:
+                if hub_subgraph.has_edge(u, v):
+                    hub_subgraph[u][v]['weight'] = hub_subgraph[u][v].get('weight', 1) + 1
+                else:
+                    hub_subgraph.add_edge(u, v, weight=1)
+
+        ug_hubs = hub_subgraph.to_undirected()
+        if len(ug_hubs.edges()) == 0:
+            return [HubPartition(hub_cluster_id=i, nodes=[h]) for i, h in enumerate(global_hubs)]
+
+        hub_partitions = []
+        if algorithms:
+            try:
+                coms = algorithms.leiden(ug_hubs)
+                for i, c_nodes in enumerate(coms.communities):
+                    hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=list(c_nodes)))
+            except Exception:
+                for i, comp in enumerate(nx.connected_components(ug_hubs)):
+                    hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=list(comp)))
+        else:
+            for i, comp in enumerate(nx.connected_components(ug_hubs)):
+                hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=list(comp)))
+                
+        return hub_partitions
+
     # =========================================================================
     # PATH 1: COMMUNITY PATH (Approach A)
     # =========================================================================
@@ -284,9 +322,11 @@ class TopologyPipeline:
                 communities.append(CommunityPartition(community_id=i, nodes=list(comp)))
 
         theme_inheritance = self._calculate_theme_inheritance(theme_sets)
+        hub_partitions = self._partition_hub_network(dg, global_hubs, path_type="community")
         
         result = TopologyResult(
             global_hubs=global_hubs,
+            hub_partitions=hub_partitions,
             communities=communities,
             structural_clusters=[],
             orphans=orphans,
@@ -367,9 +407,11 @@ class TopologyPipeline:
                 print(f"[Topology Embedding] Error in Node2Vec clustering: {e}")
 
         theme_inheritance = self._calculate_theme_inheritance(theme_sets)
+        hub_partitions = self._partition_hub_network(dg, global_hubs, path_type="embedding")
 
         result = TopologyResult(
             global_hubs=global_hubs,
+            hub_partitions=hub_partitions,
             communities=[],
             structural_clusters=structural_clusters,
             orphans=orphans,
@@ -493,13 +535,21 @@ class TopologyPipeline:
 
         # 2b. Global Hubs Only Topology Graph (Inter-Hub Edges Only)
         net_hubs_only = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a2e", font_color="white", heading=f"[{path_label}] Global Hubs Only Topology")
+        
+        hub_cluster_map = {}
+        for hp in result.hub_partitions:
+            for n in hp.nodes:
+                hub_cluster_map[n] = hp.hub_cluster_id
+
         for node in hubs_set:
             metrics = result.node_metrics.get(node)
             centrality = metrics.degree_centrality if metrics else 0.0
             p_val = metrics.participation_coefficient if metrics else 0.0
+            c_id = hub_cluster_map.get(node, 0)
+            color = colors[c_id % len(colors)]
             size = (centrality * 200) + 35
-            title = f"[{path_label}]\nRole: Global Hub\nDegree Centrality: {centrality:.4f}\nParticipation Coeff (P_i): {p_val:.4f}"
-            net_hubs_only.add_node(node, label=node, color="#ff4444", shape="star", size=size, title=title, borderWidth=3, shadow=True)
+            title = f"[{path_label}]\nRole: Global Hub\nHub Cluster ID: {c_id}\nDegree Centrality: {centrality:.4f}\nParticipation Coeff (P_i): {p_val:.4f}"
+            net_hubs_only.add_node(node, label=node, color=color, shape="star", size=size, title=title, borderWidth=3, shadow=True)
 
         for u, v, data in dg.edges(data=True):
             if u in hubs_set and v in hubs_set:

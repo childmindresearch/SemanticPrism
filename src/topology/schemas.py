@@ -17,6 +17,10 @@ class NodeMetrics(BaseModel):
     in_edges: List[EdgeDetail] = []
     out_edges: List[EdgeDetail] = []
 
+class HubPartition(BaseModel):
+    hub_cluster_id: int
+    nodes: List[str]
+
 class CommunityPartition(BaseModel):
     community_id: int
     nodes: List[str]
@@ -32,6 +36,7 @@ class ThemeInheritance(BaseModel):
 
 class TopologyResult(BaseModel):
     global_hubs: List[str]
+    hub_partitions: List[HubPartition] = []
     communities: List[CommunityPartition]
     structural_clusters: List[StructuralCluster]
     orphans: List[str]
