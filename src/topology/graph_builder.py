@@ -32,37 +32,37 @@ except ImportError:
     silhouette_score = None
 
 
-def _calculate_participation_coefficient(dg: nx.DiGraph, theme_sets: Dict[str, set]) -> Dict[str, float]:
+def _calculate_participation_coefficient(dg: nx.DiGraph, refined_triplets: List[dict]) -> Dict[str, float]:
     """
-    Computes Participation Coefficient P_i for each node across themes:
+    Computes Participation Coefficient P_i for each node based on incident edge themes:
     P_i = 1 - sum( (k_{i,m} / k_i)^2 )
-    where k_i is total degree of node i, and k_{i,m} is connection count to theme m.
+    where k_i is total degree of node i, and k_{i,m} is incident edge count associated with theme m.
     """
+    node_edge_themes = defaultdict(list)
+    for t in refined_triplets:
+        subj = t.get('subject')
+        obj = t.get('object')
+        theme = t.get('theme_association', 'Other')
+        if not theme or theme == 'Other':
+            theme = 'Unassigned'
+        if subj:
+            node_edge_themes[str(subj).lower().strip()].append(theme)
+        if obj:
+            node_edge_themes[str(obj).lower().strip()].append(theme)
+            
     p_scores = {}
     for node in dg.nodes():
-        total_deg = dg.in_degree(node) + dg.out_degree(node)
-        if total_deg == 0:
+        themes = node_edge_themes.get(node, [])
+        k_i = len(themes)
+        # Compute P_i for nodes with degree >= 3 to identify cross-domain hubs
+        if k_i < 3:
             p_scores[node] = 0.0
             continue
-        
-        neighbors = set(dg.predecessors(node)).union(set(dg.successors(node)))
-        theme_counts = defaultdict(int)
-        for theme_name, theme_nodes in theme_sets.items():
-            overlap = len(neighbors.intersection(theme_nodes))
-            if node in theme_nodes:
-                overlap += 1
-            if overlap > 0:
-                theme_counts[theme_name] = overlap
-                
-        sum_sq = 0.0
-        total_theme_connections = sum(theme_counts.values())
-        if total_theme_connections > 0:
-            for theme_name, count in theme_counts.items():
-                frac = count / total_theme_connections
-                sum_sq += frac * frac
-            p_scores[node] = float(max(0.0, 1.0 - sum_sq))
-        else:
-            p_scores[node] = 0.0
+        counts = defaultdict(int)
+        for th in themes:
+            counts[th] += 1
+        sum_sq = sum((c / k_i) ** 2 for c in counts.values())
+        p_scores[node] = float(max(0.0, 1.0 - sum_sq))
     return p_scores
 
 
@@ -73,21 +73,49 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
     return nx.betweenness_centrality(dg)
 
 
-def _calculate_modularity_vitality(ug: nx.Graph, theme_sets: Dict[str, set]) -> Dict[str, float]:
+def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -> Dict[str, float]:
     """
-    Computes Delta Q(v) = Q(G) - Q(G \ v) for each node v in ug.
-    Negative value means removing node v INCREASES modularity Q (node blurs community boundaries).
+    Computes Delta Q(v) = Q(G) - Q(G \ v) for each node v in ug relative to primary theme partition.
+    Negative value means removing node v INCREASES modularity Q (node blurs primary theme boundaries).
     """
     vitality = {}
-    if len(ug) < 3 or not theme_sets:
+    if len(ug) < 3:
         for n in ug.nodes(): vitality[n] = 0.0
         return vitality
-    try:
-        comms = [list(nodes.intersection(set(ug.nodes()))) for nodes in theme_sets.values() if len(nodes.intersection(set(ug.nodes()))) > 0]
-        if len(comms) < 2:
-            for n in ug.nodes(): vitality[n] = 0.0
-            return vitality
+        
+    node_edge_themes = defaultdict(list)
+    for t in refined_triplets:
+        subj = t.get('subject')
+        obj = t.get('object')
+        theme = t.get('theme_association', 'Other')
+        if not theme or theme == 'Other':
+            theme = 'Unassigned'
+        if subj:
+            node_edge_themes[str(subj).lower().strip()].append(theme)
+        if obj:
+            node_edge_themes[str(obj).lower().strip()].append(theme)
             
+    # Assign each node to its primary theme (highest edge frequency)
+    primary_theme = {}
+    for node in ug.nodes():
+        themes = node_edge_themes.get(node, [])
+        if not themes:
+            primary_theme[node] = 'Unassigned'
+        else:
+            counts = defaultdict(int)
+            for th in themes: counts[th] += 1
+            primary_theme[node] = max(counts.items(), key=lambda x: x[1])[0]
+            
+    theme_groups = defaultdict(list)
+    for node, p_th in primary_theme.items():
+        theme_groups[p_th].append(node)
+        
+    comms = [nodes for nodes in theme_groups.values() if len(nodes) > 0]
+    if len(comms) < 2:
+        for n in ug.nodes(): vitality[n] = 0.0
+        return vitality
+        
+    try:
         base_q = nx.community.modularity(ug, comms)
         for n in ug.nodes():
             sub_g = ug.copy()
@@ -101,6 +129,7 @@ def _calculate_modularity_vitality(ug: nx.Graph, theme_sets: Dict[str, set]) -> 
                 vitality[n] = 0.0
     except Exception:
         for n in ug.nodes(): vitality[n] = 0.0
+        
     return vitality
 
 
@@ -165,8 +194,8 @@ class TopologyPipeline:
         pagerank = nx.pagerank(dg) if len(dg) > 0 else {}
         degree_cent = nx.degree_centrality(dg) if len(dg) > 0 else {}
         betweenness = _calculate_betweenness(dg)
-        participation = _calculate_participation_coefficient(dg, theme_sets)
-        mod_vitality = _calculate_modularity_vitality(ug, theme_sets)
+        participation = _calculate_participation_coefficient(dg, refined_triplets)
+        mod_vitality = _calculate_modularity_vitality(ug, refined_triplets)
 
         results = {}
         
@@ -223,10 +252,10 @@ class TopologyPipeline:
     # PATH 1: COMMUNITY PATH (Approach A)
     # =========================================================================
     def execute_community_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        # Hub Selection: High Participation Coefficient (P_i > threshold) OR Top 10% Betweenness Centrality
+        # Hub Selection for Path 1: Participation Coefficient (P_i >= threshold) OR Top Betweenness Centrality (top 10% percentile)
         betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
         betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.comm_betw_percentile)))
-        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0])
+        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0.02])
         
         global_hubs = []
         for node in dg.nodes():
@@ -284,12 +313,14 @@ class TopologyPipeline:
     # PATH 2: EMBEDDING PATH (Approach B)
     # =========================================================================
     def execute_embedding_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        # Hub Selection: High Participation Coefficient (P_i > threshold) OR Negative Modularity Vitality (Delta Q < 0)
+        # Hub Selection for Path 2: Participation Coefficient (P_i >= threshold) OR Top Negative Modularity Vitality (Delta Q < -0.005)
+        mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1]) # lowest values first
+        negative_mod_v_hubs = set([n for n, val in mod_v_sorted[:5] if val < -0.005 and dg.degree(n) >= 3])
+        
         global_hubs = []
         for node in dg.nodes():
             p_val = participation.get(node, 0.0)
-            q_val = mod_vitality.get(node, 0.0)
-            is_mod_pruned = self.enable_mod_vitality and (q_val < 0.0)
+            is_mod_pruned = self.enable_mod_vitality and (node in negative_mod_v_hubs)
             if p_val >= self.emb_p_thresh or is_mod_pruned:
                 global_hubs.append(node)
                 
@@ -432,7 +463,7 @@ class TopologyPipeline:
             # Communities Only
             comm_map = {}
             for comm in result.communities:
-                if len(comm.nodes) >= 3:
+                if len(comm.nodes) >= 2:
                     for n in comm.nodes: comm_map[n] = comm.community_id
 
             net_comm = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading="Communities Topology (Intra-Community Edges Only)")
@@ -470,7 +501,6 @@ class TopologyPipeline:
                 metrics = result.node_metrics.get(node)
                 if not metrics: continue
                 p_val = metrics.participation_coefficient
-                # Scale color from blue (low P_i) to bright orange/yellow (high P_i)
                 color = f"hsl({int((1.0 - p_val) * 200)}, 80%, 50%)"
                 size = 15 + (p_val * 40)
                 title = f"Node: {node}\nParticipation Coefficient (P_i): {p_val:.4f}\nCross-Community Hub: {p_val >= self.comm_p_thresh}"
@@ -485,7 +515,7 @@ class TopologyPipeline:
             # Structural Clusters Only
             struct_map = {}
             for sc in result.structural_clusters:
-                if len(sc.nodes) >= 3:
+                if len(sc.nodes) >= 2:
                     for n in sc.nodes: struct_map[n] = sc.cluster_id
 
             net_struct = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading="Structural Clusters Topology (Intra-Cluster Edges Only)")
@@ -505,7 +535,6 @@ class TopologyPipeline:
                 metrics = result.node_metrics.get(node)
                 if not metrics: continue
                 q_val = metrics.modularity_vitality
-                # Color code: Red for negative Delta Q (blurs boundaries), Green for positive Delta Q (strengthens boundaries)
                 color = "#ff4444" if q_val < 0 else "#44ff44" if q_val > 0 else "#aaaaaa"
                 title = f"Node: {node}\nModularity Vitality (Delta Q): {q_val:.4f}\nPruned as Hub: {q_val < 0}"
                 net_vit.add_node(node, label=node, color=color, shape="box" if q_val < 0 else "dot", size=25, title=title, borderWidth=2)
