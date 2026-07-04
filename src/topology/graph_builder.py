@@ -54,7 +54,6 @@ def _calculate_participation_coefficient(dg: nx.DiGraph, refined_triplets: List[
     for node in dg.nodes():
         themes = node_edge_themes.get(node, [])
         k_i = len(themes)
-        # Compute P_i for nodes with degree >= 3 to identify cross-domain hubs
         if k_i < 3:
             p_scores[node] = 0.0
             continue
@@ -70,7 +69,6 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
     """Computes shortest-path Betweenness Centrality for directed graph."""
     if len(dg) == 0:
         return {}
-    # Use sampling if graph is very large to maintain fast performance
     if len(dg) > 500:
         k_sample = min(100, max(50, int(len(dg) * 0.1)))
         return nx.betweenness_centrality(dg, k=k_sample)
@@ -426,15 +424,19 @@ class TopologyPipeline:
             if is_hub or self.min_node_degree == 0 or deg >= self.min_node_degree:
                 candidate_nodes.add(node)
 
-        # Apply Max Visual Nodes Hard Cap if configured
-        if self.max_total_visual_nodes > 0 and len(candidate_nodes) > self.max_total_visual_nodes:
-            # Keep hubs + top N by centrality
-            hubs_in_cand = set(result.global_hubs)
-            non_hubs = candidate_nodes - hubs_in_cand
-            sorted_non_hubs = sorted(non_hubs, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)
-            candidate_nodes = hubs_in_cand.union(set(sorted_non_hubs[:self.max_total_visual_nodes - len(hubs_in_cand)]))
+        # Apply Max Visual Nodes Cap if configured (Supports fraction e.g. 0.25 = top 25%, or hard integer e.g. 200)
+        if self.max_total_visual_nodes > 0:
+            if isinstance(self.max_total_visual_nodes, float) and self.max_total_visual_nodes <= 1.0:
+                target_max = max(10, int(len(dg) * self.max_total_visual_nodes))
+            else:
+                target_max = int(self.max_total_visual_nodes)
+                
+            if len(candidate_nodes) > target_max:
+                hubs_in_cand = set(result.global_hubs)
+                non_hubs = candidate_nodes - hubs_in_cand
+                sorted_non_hubs = sorted(non_hubs, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)
+                candidate_nodes = hubs_in_cand.union(set(sorted_non_hubs[:max(0, target_max - len(hubs_in_cand))]))
 
-        # PyVis Options String
         options_json = json.dumps({
             "physics": {
                 "enabled": True,
@@ -504,7 +506,6 @@ class TopologyPipeline:
 
         # PATH 1 SPECIFIC VISUALIZATIONS
         if path_type == "community":
-            # Communities Only
             comm_map = {}
             for comm in result.communities:
                 nodes_in_c = [n for n in comm.nodes if n in candidate_nodes]
@@ -524,7 +525,7 @@ class TopologyPipeline:
             net_comm.set_options(options_json)
             net_comm.save_graph(str(vis_dir / "interactive_communities_only.html"))
 
-            # NEW: Workflow Narratives (Betweenness Chokepoints)
+            # Workflow Narratives (Betweenness Chokepoints)
             net_flow = Network(height="1000px", width="100%", directed=True, bgcolor="#111122", font_color="white", heading=f"[{path_label}] Workflow Narratives & Betweenness Chokepoints")
             for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
@@ -542,7 +543,7 @@ class TopologyPipeline:
             net_flow.set_options(options_json)
             net_flow.save_graph(str(vis_dir / "interactive_workflow_narratives.html"))
 
-            # NEW: Participation Dispersion Map
+            # Participation Dispersion Map
             net_part = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a1a", font_color="white", heading=f"[{path_label}] Participation Coefficient (P_i) Dispersion Map")
             for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
@@ -560,7 +561,6 @@ class TopologyPipeline:
 
         # PATH 2 SPECIFIC VISUALIZATIONS
         if path_type == "embedding":
-            # Structural Clusters Only
             struct_map = {}
             for sc in result.structural_clusters:
                 nodes_in_sc = [n for n in sc.nodes if n in candidate_nodes]
@@ -580,7 +580,7 @@ class TopologyPipeline:
             net_struct.set_options(options_json)
             net_struct.save_graph(str(vis_dir / "interactive_structural_clusters_only.html"))
 
-            # NEW: Modularity Vitality Landscape
+            # Modularity Vitality Landscape
             net_vit = Network(height="1000px", width="100%", directed=True, bgcolor="#1e1e1e", font_color="white", heading=f"[{path_label}] Modularity Vitality (Delta Q) Landscape")
             for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
@@ -620,3 +620,178 @@ class TopologyPipeline:
                             f.write(html_content)
                 except Exception as e:
                     print(f"Warning: Failed to generate Node2Vec Scatter Plot: {e}")
+
+        # NEW VISUALIZATIONS:
+        # A. Stage 4 LLM Payload Gallery (Isolated Cluster Cards)
+        self._generate_llm_payload_gallery(dg, result, refined_triplets, vis_dir, path_label, path_type)
+        
+        # B. Collapsed Module Architecture Diagram
+        self._generate_collapsed_modules_graph(dg, result, vis_dir, path_label, path_type)
+
+    def _generate_llm_payload_gallery(self, dg: nx.DiGraph, result: TopologyResult, refined_triplets: List[dict], vis_dir: Path, path_label: str, path_type: str):
+        clusters = result.communities if path_type == "community" else result.structural_clusters
+        agent_name = "leiden_schema_agent" if path_type == "community" else "node2vec_schema_agent"
+        cluster_type_label = "Community" if path_type == "community" else "Structural Cluster"
+        
+        payload_data = []
+        for cluster in clusters:
+            c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
+            nodes = cluster.nodes
+            
+            # Find triplets associated with this cluster
+            nodes_set = set(nodes)
+            associated_triplets = []
+            for t in refined_triplets:
+                s = str(t.get('subject', '')).lower().strip()
+                o = str(t.get('object', '')).lower().strip()
+                if s in nodes_set or o in nodes_set:
+                    associated_triplets.append({"subject": s, "predicate": t.get('predicate', ''), "object": o})
+                    
+            connected_hubs = [h for h in result.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes)]
+            
+            payload_data.append({
+                "id": c_id,
+                "module_name": f"01_{path_type}_{c_id}.py",
+                "nodes": nodes,
+                "triplet_count": len(associated_triplets),
+                "triplets": associated_triplets[:15], # top 15 for preview
+                "connected_hubs": connected_hubs
+            })
+            
+        payload_json = json.dumps(payload_data)
+        hubs_json = json.dumps(result.global_hubs)
+        
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>[{path_label}] Stage 4 LLM Payload Gallery</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
+    <style>
+        body {{ background-color: #121212; color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; }}
+        h1 {{ margin-top: 0; color: #44aaff; font-size: 24px; }}
+        .subtitle {{ color: #aaaaaa; margin-bottom: 20px; font-size: 14px; }}
+        .container {{ display: flex; gap: 20px; height: 800px; }}
+        .sidebar {{ width: 350px; background-color: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 15px; overflow-y: auto; }}
+        .canvas-container {{ flex: 1; background-color: #1e1e1e; border: 1px solid #333; border-radius: 8px; position: relative; }}
+        #network {{ width: 100%; height: 100%; }}
+        select {{ width: 100%; padding: 10px; background-color: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px; font-size: 15px; margin-bottom: 15px; cursor: pointer; }}
+        .badge {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px; background: #333; color: #44aaff; }}
+        .card {{ background: #262626; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #44aaff; }}
+        .triplet-item {{ font-size: 12px; color: #cccccc; padding: 4px 0; border-bottom: 1px solid #333; }}
+        code {{ color: #ff9933; font-family: monospace; }}
+    </style>
+</head>
+<body>
+    <h1>[{path_label}] Stage 4 LLM Payload Gallery</h1>
+    <div class="subtitle">Direct visualization of individual cluster subgraphs as passed to <code>{agent_name}</code> for Stage 4 Pydantic schema synthesis.</div>
+    
+    <div class="container">
+        <div class="sidebar">
+            <label for="clusterSelect"><b>Select Partition Payload:</b></label>
+            <select id="clusterSelect" onchange="loadCluster(this.value)"></select>
+            
+            <div id="payloadDetails"></div>
+        </div>
+        <div class="canvas-container">
+            <div id="network"></div>
+        </div>
+    </div>
+
+    <script>
+        const payloads = {payload_json};
+        const globalHubs = new Set({hubs_json});
+        const selectEl = document.getElementById('clusterSelect');
+        const detailsEl = document.getElementById('payloadDetails');
+        let network = null;
+
+        payloads.forEach((p, idx) => {{
+            const opt = document.createElement('option');
+            opt.value = idx;
+            opt.textContent = `{cluster_type_label} ${{p.id}} (${{p.nodes.length}} entities)`;
+            selectEl.appendChild(opt);
+        }});
+
+        function loadCluster(idx) {{
+            const payload = payloads[idx];
+            
+            // Render Details Panel
+            detailsEl.innerHTML = `
+                <div class="card">
+                    <span class="badge">LLM Agent</span> <code>{agent_name}</code><br>
+                    <span class="badge">Output Schema</span> <code>${{payload.module_name}}</code><br>
+                    <span class="badge">Entities</span> <b>${{payload.nodes.length}}</b> | <span class="badge">Triplets</span> <b>${{payload.triplet_count}}</b>
+                </div>
+                <h4>Global Hub Anchors:</h4>
+                <p>${{payload.connected_hubs.length > 0 ? payload.connected_hubs.map(h => `<span class="badge" style="color:#ff5555;">${{h}}</span>`).join(' ') : '<i>None</i>'}}</p>
+                <h4>Sample Incident Triplets:</h4>
+                ${{payload.triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('')}}
+            `;
+
+            // Draw Subgraph
+            const nodes = [];
+            const edges = [];
+            const addedNodes = new Set();
+
+            payload.nodes.forEach(n => {{
+                addedNodes.add(n);
+                nodes.push({{ id: n, label: n, color: '#44aaff', shape: 'dot', size: 25 }});
+            }});
+
+            payload.connected_hubs.forEach(h => {{
+                if (!addedNodes.has(h)) {{
+                    addedNodes.add(h);
+                    nodes.push({{ id: h, label: h, color: '#ff4444', shape: 'star', size: 35, title: 'Global Hub Anchor' }});
+                }}
+            }});
+
+            payload.triplets.forEach(t => {{
+                if (addedNodes.has(t.subject) && addedNodes.has(t.object)) {{
+                    edges.push({{ from: t.subject, to: t.object, title: t.predicate, arrows: 'to', color: 'rgba(200,200,200,0.5)' }});
+                }}
+            }});
+
+            const container = document.getElementById('network');
+            const data = {{ nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }};
+            const options = {{ physics: {{ enabled: true, solver: 'forceAtlas2Based' }} }};
+            
+            if (network) network.destroy();
+            network = new vis.Network(container, data, options);
+        }}
+
+        if (payloads.length > 0) loadCluster(0);
+    </script>
+</body>
+</html>"""
+        with open(vis_dir / "interactive_llm_payload_gallery.html", "w") as f:
+            f.write(html_content)
+
+    def _generate_collapsed_modules_graph(self, dg: nx.DiGraph, result: TopologyResult, vis_dir: Path, path_label: str, path_type: str):
+        clusters = result.communities if path_type == "community" else result.structural_clusters
+        cluster_label = "Community" if path_type == "community" else "Cluster"
+        
+        net = Network(height="1000px", width="100%", directed=True, bgcolor="#181824", font_color="white", heading=f"[{path_label}] Collapsed Module Architecture Diagram")
+        
+        # Add Global Hubs as Star Nodes
+        hubs_set = set(result.global_hubs)
+        for h in hubs_set:
+            metrics = result.node_metrics.get(h)
+            cent = metrics.degree_centrality if metrics else 0.0
+            net.add_node(h, label=f"HUB: {h}", color="#ff4444", shape="star", size=40, title=f"Global Hub\nCentrality: {cent:.4f}", borderWidth=2, shadow=True)
+            
+        # Add Clusters as Collapsed Box Nodes
+        for cluster in clusters:
+            c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
+            nodes = cluster.nodes
+            mod_id = f"Module_{c_id}"
+            label = f"{cluster_label} {c_id}\n({len(nodes)} entities)"
+            title = f"{cluster_label} {c_id} Members:\n" + "\n".join(nodes[:10]) + (f"\n... and {len(nodes)-10} more" if len(nodes) > 10 else "")
+            net.add_node(mod_id, label=label, color="#44aaff", shape="box", size=30, title=title, borderWidth=2, shadow=True)
+            
+            # Connect Hubs to Modules
+            for h in hubs_set:
+                if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes):
+                    net.add_edge(h, mod_id, color="rgba(255, 100, 100, 0.7)", width=2)
+                    
+        net.set_options("""{"physics": {"forceAtlas2Based": {"gravitationalConstant": -120, "centralGravity": 0.01, "springLength": 250}, "solver": "forceAtlas2Based"}}""")
+        net.save_graph(str(vis_dir / "interactive_collapsed_modules.html"))

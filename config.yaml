@@ -135,9 +135,9 @@ topology:
   # Has 0% impact on JSON outputs or Stage 4 schema generation.
   # =========================================================================
   visualizations:
-    min_node_degree: 0           # Minimum node degree to render on HTML canvas (e.g. 2 omits degree-1 leaves; 0 = show all)
-    max_nodes_per_cluster: 0     # Max nodes per cluster to render in HTML (0 = unlimited)
-    max_total_visual_nodes: 0    # Hard cap on total nodes per HTML file (0 = unlimited)
+    min_node_degree: 3           # Minimum node degree to render on HTML canvas (e.g. 2 omits degree-1 leaves; 0 = show all)
+    max_nodes_per_cluster: 30     # Max nodes per cluster to render in HTML (0 = unlimited)
+    max_total_visual_nodes: 0.25 # Max nodes as a fraction of total graph nodes (e.g. 0.25 = top 25%; >1 = hard integer cap; 0 = show all)
     freeze_physics: true         # Disable live physics engine after stabilization for 60 FPS browser panning
 
 synthesis:
