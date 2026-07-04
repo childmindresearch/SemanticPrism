@@ -402,8 +402,6 @@ class TopologyPipeline:
     # =========================================================================
     def _generate_path_visuals(self, dg: nx.DiGraph, result: TopologyResult, theme_sets: dict, refined_triplets: List[dict], vis_dir: Path, path_type: str, node_embeddings: dict = None, top_betweenness: set = None):
         vis_dir.mkdir(parents=True, exist_ok=True)
-        root_vis_dir = Path("outputs/visuals")
-        root_vis_dir.mkdir(parents=True, exist_ok=True)
         
         path_label = "Path 1: Community Workflow Path" if path_type == "community" else "Path 2: Embedding Categorical Path"
         
@@ -474,8 +472,6 @@ class TopologyPipeline:
                 
         net.set_options(options_json)
         net.save_graph(str(vis_dir / "interactive_topology_graph.html"))
-        if path_type == "community":
-            net.save_graph(str(root_vis_dir / "interactive_topology_graph.html"))
 
         # 2. Hubs & Ego Networks Visual
         net_hubs = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Global Hubs & Ego Networks")

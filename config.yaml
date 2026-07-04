@@ -146,7 +146,7 @@ topology:
     # participation_threshold: Cutoff for cross-theme structural hubs (P_i in [0, 1]).
     #   - INCREASING (e.g. 0.70-0.80): Prunes FEWER hubs before Node2Vec, capturing broader structural relationships in vector space.
     #   - DECREASING (e.g. 0.40-0.50): Prunes MORE multi-theme nodes, isolating pure category clusters in vector space.
-    participation_threshold: 0.65
+    participation_threshold: 0.45
 
     # enable_modularity_vitality_pruning: Toggles pruning of boundary-blurring nodes (Delta Q < -0.005).
     #   - TRUE : Identifies nodes whose removal INCREASES modularity Q, forcing clean category separation.
@@ -189,9 +189,27 @@ topology:
     freeze_physics: true         # Disable live physics engine after stabilization for smooth 60 FPS browser panning
 
 synthesis:
+  # Stage 4 Synthesis Path Execution Mode
+  # Options:
+  #   - "community"  : Synthesize Path 1 workflow schemas from outputs/03_topology/community/ (Default).
+  #   - "embedding"  : Synthesize Path 2 categorical schemas from outputs/03_topology/embedding/.
+  #   - "both"       : Synthesize both Path 1 and Path 2 schemas in sequence.
+  execution_mode: "community"
+
+  # Stage 4 Schema Pass Execution Mode
+  # Options:
+  #   - "normalized" : Synthesize normalized schemas from refined_triplets.json (Pass A).
+  #   - "raw"        : Synthesize raw unwound schemas from original_triplets.json (Pass B).
+  #   - "both"       : Synthesize both normalized and raw schema passes (Default).
+  schema_pass_mode: "both"
+
   max_async_calls: 3
   clustering_strategy: "node2vec" # Options: "leiden" or "node2vec"
-  min_cluster_size: 3
+
+  # Entity threshold for Stage 4 target qualification (Default: 5).
+  # Communities/clusters with < 5 entities are filtered from individual schema extraction
+  # and their entities are routed directly to Phase 1 Enum synthesis (enums.py) so zero data is lost.
+  min_cluster_size: 5
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.
