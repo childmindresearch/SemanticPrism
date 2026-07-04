@@ -128,6 +128,18 @@ topology:
     node2vec_walk_length: 10                    # Random walk length per node
     node2vec_num_walks: 100                     # Number of random walks per node
 
+  # =========================================================================
+  # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
+  # =========================================================================
+  # Controls visual pruning and rendering performance for HTML files ONLY.
+  # Has 0% impact on JSON outputs or Stage 4 schema generation.
+  # =========================================================================
+  visualizations:
+    min_node_degree: 0           # Minimum node degree to render on HTML canvas (e.g. 2 omits degree-1 leaves; 0 = show all)
+    max_nodes_per_cluster: 0     # Max nodes per cluster to render in HTML (0 = unlimited)
+    max_total_visual_nodes: 0    # Hard cap on total nodes per HTML file (0 = unlimited)
+    freeze_physics: true         # Disable live physics engine after stabilization for 60 FPS browser panning
+
 synthesis:
   max_async_calls: 3
   clustering_strategy: "node2vec" # Options: "leiden" or "node2vec"

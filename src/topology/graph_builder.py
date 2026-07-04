@@ -70,6 +70,10 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
     """Computes shortest-path Betweenness Centrality for directed graph."""
     if len(dg) == 0:
         return {}
+    # Use sampling if graph is very large to maintain fast performance
+    if len(dg) > 500:
+        k_sample = min(100, max(50, int(len(dg) * 0.1)))
+        return nx.betweenness_centrality(dg, k=k_sample)
     return nx.betweenness_centrality(dg)
 
 
@@ -95,7 +99,6 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
         if obj:
             node_edge_themes[str(obj).lower().strip()].append(theme)
             
-    # Assign each node to its primary theme (highest edge frequency)
     primary_theme = {}
     for node in ug.nodes():
         themes = node_edge_themes.get(node, [])
@@ -153,6 +156,13 @@ class TopologyPipeline:
         self.n2v_dim = self.emb_cfg.get('node2vec_dimensions', 64)
         self.n2v_walk_len = self.emb_cfg.get('node2vec_walk_length', 10)
         self.n2v_num_walks = self.emb_cfg.get('node2vec_num_walks', 100)
+
+        # Visual Pruning & Rendering Config (HTML files ONLY - 0 impact on JSON partitions)
+        self.vis_cfg = self.config.get('visualizations', {})
+        self.min_node_degree = self.vis_cfg.get('min_node_degree', 0)
+        self.max_nodes_per_cluster = self.vis_cfg.get('max_nodes_per_cluster', 0)
+        self.max_total_visual_nodes = self.vis_cfg.get('max_total_visual_nodes', 0)
+        self.freeze_physics = self.vis_cfg.get('freeze_physics', True)
 
     def execute(self, refined_triplets: List[Dict[str, Any]]) -> Dict[str, TopologyResult]:
         print("[Topology] Starting Stage 3 Pipeline...")
@@ -252,7 +262,6 @@ class TopologyPipeline:
     # PATH 1: COMMUNITY PATH (Approach A)
     # =========================================================================
     def execute_community_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        # Hub Selection for Path 1: Participation Coefficient (P_i >= threshold) OR Top Betweenness Centrality (top 10% percentile)
         betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
         betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.comm_betw_percentile)))
         top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0.02])
@@ -267,12 +276,10 @@ class TopologyPipeline:
         orphans = [node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs]
         node_metrics = self._build_node_metrics(dg, ug, global_hubs, pagerank, degree_cent, betweenness, participation, mod_vitality)
 
-        # Subgraph Pruning
         sub_graph = ug.copy()
         sub_graph.remove_nodes_from(global_hubs)
         sub_graph.remove_nodes_from(orphans)
         
-        # Leiden Clustering
         communities = []
         if algorithms and len(sub_graph.nodes()) > 0:
             try:
@@ -292,7 +299,7 @@ class TopologyPipeline:
         result = TopologyResult(
             global_hubs=global_hubs,
             communities=communities,
-            structural_clusters=[], # Path 1 focuses on communities
+            structural_clusters=[],
             orphans=orphans,
             node_metrics=node_metrics,
             theme_inheritance=theme_inheritance
@@ -303,7 +310,7 @@ class TopologyPipeline:
         with open(out_dir / "topology_partitions.json", "w") as f:
             json.dump(result.model_dump(), f, indent=2)
 
-        # Visualizations
+        # Visualizations (Filtered ONLY for HTML output)
         vis_dir = Path("outputs/visuals/community")
         self._generate_path_visuals(dg, result, theme_sets, refined_triplets, vis_dir=vis_dir, path_type="community", top_betweenness=top_betweenness_nodes)
         
@@ -313,8 +320,7 @@ class TopologyPipeline:
     # PATH 2: EMBEDDING PATH (Approach B)
     # =========================================================================
     def execute_embedding_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        # Hub Selection for Path 2: Participation Coefficient (P_i >= threshold) OR Top Negative Modularity Vitality (Delta Q < -0.005)
-        mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1]) # lowest values first
+        mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1])
         negative_mod_v_hubs = set([n for n, val in mod_v_sorted[:5] if val < -0.005 and dg.degree(n) >= 3])
         
         global_hubs = []
@@ -327,12 +333,10 @@ class TopologyPipeline:
         orphans = [node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs]
         node_metrics = self._build_node_metrics(dg, ug, global_hubs, pagerank, degree_cent, betweenness, participation, mod_vitality)
 
-        # Subgraph Pruning
         sub_graph = ug.copy()
         sub_graph.remove_nodes_from(global_hubs)
         sub_graph.remove_nodes_from(orphans)
 
-        # Node2Vec Embeddings + Dynamic K-Means Silhouette
         structural_clusters = []
         node_embeddings = {}
         if Node2Vec and KMeans and len(sub_graph.nodes()) >= 3:
@@ -377,7 +381,7 @@ class TopologyPipeline:
 
         result = TopologyResult(
             global_hubs=global_hubs,
-            communities=[], # Path 2 focuses on structural clusters
+            communities=[],
             structural_clusters=structural_clusters,
             orphans=orphans,
             node_metrics=node_metrics,
@@ -389,19 +393,21 @@ class TopologyPipeline:
         with open(out_dir / "topology_partitions.json", "w") as f:
             json.dump(result.model_dump(), f, indent=2)
 
-        # Visualizations
+        # Visualizations (Filtered ONLY for HTML output)
         vis_dir = Path("outputs/visuals/embedding")
         self._generate_path_visuals(dg, result, theme_sets, refined_triplets, vis_dir=vis_dir, path_type="embedding", node_embeddings=node_embeddings)
 
         return result
 
     # =========================================================================
-    # VISUALIZATION ENGINE FOR BOTH PATHS
+    # VISUALIZATION ENGINE FOR BOTH PATHS (HTML OUTPUTS ONLY)
     # =========================================================================
     def _generate_path_visuals(self, dg: nx.DiGraph, result: TopologyResult, theme_sets: dict, refined_triplets: List[dict], vis_dir: Path, path_type: str, node_embeddings: dict = None, top_betweenness: set = None):
         vis_dir.mkdir(parents=True, exist_ok=True)
         root_vis_dir = Path("outputs/visuals")
         root_vis_dir.mkdir(parents=True, exist_ok=True)
+        
+        path_label = "Path 1: Community Workflow Path" if path_type == "community" else "Path 2: Embedding Categorical Path"
         
         colors = [
             "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
@@ -410,36 +416,73 @@ class TopologyPipeline:
             "#17becf", "#9edae5"
         ]
 
-        # 1. Standard Topology Graph
-        net = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"Standard Topology Graph ({path_type.title()} Path)")
+        # Apply Visual Degree Pruning (HTML ONLY)
+        candidate_nodes = set()
         for node in dg.nodes():
             metrics = result.node_metrics.get(node)
             if not metrics: continue
             is_hub = metrics.is_hub
+            deg = dg.degree(node)
+            if is_hub or self.min_node_degree == 0 or deg >= self.min_node_degree:
+                candidate_nodes.add(node)
+
+        # Apply Max Visual Nodes Hard Cap if configured
+        if self.max_total_visual_nodes > 0 and len(candidate_nodes) > self.max_total_visual_nodes:
+            # Keep hubs + top N by centrality
+            hubs_in_cand = set(result.global_hubs)
+            non_hubs = candidate_nodes - hubs_in_cand
+            sorted_non_hubs = sorted(non_hubs, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)
+            candidate_nodes = hubs_in_cand.union(set(sorted_non_hubs[:self.max_total_visual_nodes - len(hubs_in_cand)]))
+
+        # PyVis Options String
+        options_json = json.dumps({
+            "physics": {
+                "enabled": True,
+                "forceAtlas2Based": {
+                    "gravitationalConstant": -80,
+                    "centralGravity": 0.005,
+                    "springLength": 200,
+                    "springConstant": 0.08
+                },
+                "solver": "forceAtlas2Based",
+                "stabilization": {
+                    "enabled": True,
+                    "iterations": 150,
+                    "fit": True
+                }
+            }
+        })
+
+        # 1. Standard Topology Graph
+        net = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Standard Topology Graph")
+        for node in candidate_nodes:
+            metrics = result.node_metrics.get(node)
+            if not metrics: continue
+            is_hub = metrics.is_hub
             is_orphan = metrics.is_orphan
-            
             color = "red" if is_hub else "gray" if is_orphan else "#aec7e8"
             shape = "star" if is_hub else "dot"
             size = (metrics.degree_centrality * 200) + (35 if is_hub else 15)
-            title = f"Role: {'Hub' if is_hub else 'Orphan' if is_orphan else 'Entity'}\nDegree Cent: {metrics.degree_centrality:.4f}\nP_i: {metrics.participation_coefficient:.3f}"
+            title = f"[{path_label}]\nRole: {'Hub' if is_hub else 'Orphan' if is_orphan else 'Entity'}\nDegree Cent: {metrics.degree_centrality:.4f}\nP_i: {metrics.participation_coefficient:.3f}"
             net.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=2, shadow=True)
 
         for u, v, data in dg.edges(data=True):
             if u in net.get_nodes() and v in net.get_nodes():
                 net.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
                 
-        net.set_options("""{"physics": {"forceAtlas2Based": {"gravitationalConstant": -80, "centralGravity": 0.005, "springLength": 200, "springConstant": 0.08}, "solver": "forceAtlas2Based", "stabilization": {"iterations": 150}}}""")
+        net.set_options(options_json)
         net.save_graph(str(vis_dir / "interactive_topology_graph.html"))
         if path_type == "community":
             net.save_graph(str(root_vis_dir / "interactive_topology_graph.html"))
 
         # 2. Hubs & Ego Networks Visual
-        net_hubs = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"Global Hubs & Ego Networks ({path_type.title()} Path)")
+        net_hubs = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Global Hubs & Ego Networks")
         hubs_set = set(result.global_hubs)
         hub_connected_nodes = set(hubs_set)
         for u, v, data in dg.edges(data=True):
             if u in hubs_set or v in hubs_set:
-                hub_connected_nodes.add(u); hub_connected_nodes.add(v)
+                if u in candidate_nodes and v in candidate_nodes:
+                    hub_connected_nodes.add(u); hub_connected_nodes.add(v)
                 
         for node in hub_connected_nodes:
             metrics = result.node_metrics.get(node)
@@ -448,7 +491,7 @@ class TopologyPipeline:
             color = "red" if is_hub else "#aec7e8"
             shape = "star" if is_hub else "dot"
             size = (centrality * 200) + (35 if is_hub else 15)
-            title = f"Role: {'Global Hub' if is_hub else 'Spoke Node'}\nCentrality: {centrality:.4f}"
+            title = f"[{path_label}]\nRole: {'Global Hub' if is_hub else 'Spoke Node'}\nCentrality: {centrality:.4f}"
             net_hubs.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=2, shadow=True)
 
         for u, v, data in dg.edges(data=True):
@@ -456,6 +499,7 @@ class TopologyPipeline:
                 if u in hubs_set or v in hubs_set:
                     is_inter_hub = u in hubs_set and v in hubs_set
                     net_hubs.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 100, 100, 0.8)" if is_inter_hub else "rgba(200,200,200,0.4)", width=3 if is_inter_hub else 1)
+        net_hubs.set_options(options_json)
         net_hubs.save_graph(str(vis_dir / "interactive_hubs_ego_network.html"))
 
         # PATH 1 SPECIFIC VISUALIZATIONS
@@ -463,24 +507,26 @@ class TopologyPipeline:
             # Communities Only
             comm_map = {}
             for comm in result.communities:
-                if len(comm.nodes) >= 2:
-                    for n in comm.nodes: comm_map[n] = comm.community_id
+                nodes_in_c = [n for n in comm.nodes if n in candidate_nodes]
+                if self.max_nodes_per_cluster > 0 and len(nodes_in_c) > self.max_nodes_per_cluster:
+                    nodes_in_c = sorted(nodes_in_c, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)[:self.max_nodes_per_cluster]
+                for n in nodes_in_c: comm_map[n] = comm.community_id
 
-            net_comm = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading="Communities Topology (Intra-Community Edges Only)")
-            for node in dg.nodes():
+            net_comm = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Communities Topology (Intra-Community Edges Only)")
+            for node in candidate_nodes:
                 if node not in comm_map: continue
-                metrics = result.node_metrics.get(node)
                 comm_id = comm_map[node]
                 color = colors[comm_id % len(colors)]
-                net_comm.add_node(node, label=node, color=color, shape="dot", size=25, title=f"Community: {comm_id}", borderWidth=2, shadow=True)
+                net_comm.add_node(node, label=node, color=color, shape="dot", size=25, title=f"[{path_label}]\nCommunity: {comm_id}", borderWidth=2, shadow=True)
             for u, v, data in dg.edges(data=True):
                 if u in net_comm.get_nodes() and v in net_comm.get_nodes() and comm_map.get(u) == comm_map.get(v):
                     net_comm.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
+            net_comm.set_options(options_json)
             net_comm.save_graph(str(vis_dir / "interactive_communities_only.html"))
 
             # NEW: Workflow Narratives (Betweenness Chokepoints)
-            net_flow = Network(height="1000px", width="100%", directed=True, bgcolor="#111122", font_color="white", heading="Workflow Narratives & Betweenness Chokepoints")
-            for node in dg.nodes():
+            net_flow = Network(height="1000px", width="100%", directed=True, bgcolor="#111122", font_color="white", heading=f"[{path_label}] Workflow Narratives & Betweenness Chokepoints")
+            for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
                 if not metrics: continue
                 betw = metrics.betweenness_centrality
@@ -488,26 +534,28 @@ class TopologyPipeline:
                 color = "#ff4444" if is_choke else "#44aaff"
                 shape = "diamond" if is_choke else "dot"
                 size = 15 + (betw * 300)
-                title = f"Node: {node}\nBetweenness Centrality: {betw:.4f}\nIs Narrative Chokepoint: {is_choke}"
+                title = f"[{path_label}]\nNode: {node}\nBetweenness Centrality: {betw:.4f}\nIs Narrative Chokepoint: {is_choke}"
                 net_flow.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=3 if is_choke else 1, shadow=True)
             for u, v, data in dg.edges(data=True):
                 if u in net_flow.get_nodes() and v in net_flow.get_nodes():
                     net_flow.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,255,0.4)", width=1)
+            net_flow.set_options(options_json)
             net_flow.save_graph(str(vis_dir / "interactive_workflow_narratives.html"))
 
             # NEW: Participation Dispersion Map
-            net_part = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a1a", font_color="white", heading="Participation Coefficient (P_i) Dispersion Map")
-            for node in dg.nodes():
+            net_part = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a1a", font_color="white", heading=f"[{path_label}] Participation Coefficient (P_i) Dispersion Map")
+            for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
                 if not metrics: continue
                 p_val = metrics.participation_coefficient
                 color = f"hsl({int((1.0 - p_val) * 200)}, 80%, 50%)"
                 size = 15 + (p_val * 40)
-                title = f"Node: {node}\nParticipation Coefficient (P_i): {p_val:.4f}\nCross-Community Hub: {p_val >= self.comm_p_thresh}"
+                title = f"[{path_label}]\nNode: {node}\nParticipation Coefficient (P_i): {p_val:.4f}\nCross-Community Hub: {p_val >= self.comm_p_thresh}"
                 net_part.add_node(node, label=node, color=color, shape="star" if p_val >= self.comm_p_thresh else "dot", size=size, title=title, borderWidth=2)
             for u, v, data in dg.edges(data=True):
                 if u in net_part.get_nodes() and v in net_part.get_nodes():
                     net_part.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
+            net_part.set_options(options_json)
             net_part.save_graph(str(vis_dir / "interactive_participation_dispersion.html"))
 
         # PATH 2 SPECIFIC VISUALIZATIONS
@@ -515,55 +563,60 @@ class TopologyPipeline:
             # Structural Clusters Only
             struct_map = {}
             for sc in result.structural_clusters:
-                if len(sc.nodes) >= 2:
-                    for n in sc.nodes: struct_map[n] = sc.cluster_id
+                nodes_in_sc = [n for n in sc.nodes if n in candidate_nodes]
+                if self.max_nodes_per_cluster > 0 and len(nodes_in_sc) > self.max_nodes_per_cluster:
+                    nodes_in_sc = sorted(nodes_in_sc, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)[:self.max_nodes_per_cluster]
+                for n in nodes_in_sc: struct_map[n] = sc.cluster_id
 
-            net_struct = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading="Structural Clusters Topology (Intra-Cluster Edges Only)")
-            for node in dg.nodes():
+            net_struct = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Structural Clusters Topology (Intra-Cluster Edges Only)")
+            for node in candidate_nodes:
                 if node not in struct_map: continue
                 sc_id = struct_map[node]
                 color = colors[sc_id % len(colors)]
-                net_struct.add_node(node, label=node, color=color, shape="dot", size=25, title=f"Structural Cluster: {sc_id}", borderWidth=2, shadow=True)
+                net_struct.add_node(node, label=node, color=color, shape="dot", size=25, title=f"[{path_label}]\nStructural Cluster: {sc_id}", borderWidth=2, shadow=True)
             for u, v, data in dg.edges(data=True):
                 if u in net_struct.get_nodes() and v in net_struct.get_nodes() and struct_map.get(u) == struct_map.get(v):
                     net_struct.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
+            net_struct.set_options(options_json)
             net_struct.save_graph(str(vis_dir / "interactive_structural_clusters_only.html"))
 
             # NEW: Modularity Vitality Landscape
-            net_vit = Network(height="1000px", width="100%", directed=True, bgcolor="#1e1e1e", font_color="white", heading="Modularity Vitality (Delta Q) Landscape")
-            for node in dg.nodes():
+            net_vit = Network(height="1000px", width="100%", directed=True, bgcolor="#1e1e1e", font_color="white", heading=f"[{path_label}] Modularity Vitality (Delta Q) Landscape")
+            for node in candidate_nodes:
                 metrics = result.node_metrics.get(node)
                 if not metrics: continue
                 q_val = metrics.modularity_vitality
                 color = "#ff4444" if q_val < 0 else "#44ff44" if q_val > 0 else "#aaaaaa"
-                title = f"Node: {node}\nModularity Vitality (Delta Q): {q_val:.4f}\nPruned as Hub: {q_val < 0}"
+                title = f"[{path_label}]\nNode: {node}\nModularity Vitality (Delta Q): {q_val:.4f}\nPruned as Hub: {q_val < 0}"
                 net_vit.add_node(node, label=node, color=color, shape="box" if q_val < 0 else "dot", size=25, title=title, borderWidth=2)
             for u, v, data in dg.edges(data=True):
                 if u in net_vit.get_nodes() and v in net_vit.get_nodes():
                     net_vit.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
+            net_vit.set_options(options_json)
             net_vit.save_graph(str(vis_dir / "interactive_modularity_vitality_landscape.html"))
 
             # Node2Vec 2D Embeddings Scatter Plot
             if node_embeddings and len(node_embeddings) >= 2:
                 try:
                     from sklearn.decomposition import PCA
-                    nodes_list = list(node_embeddings.keys())
-                    embeddings_matrix = np.array([node_embeddings[n] for n in nodes_list])
-                    pca = PCA(n_components=2)
-                    coords = pca.fit_transform(embeddings_matrix)
-                    
-                    node_clusters = {}
-                    for sc in result.structural_clusters:
-                        for n in sc.nodes: node_clusters[n] = sc.cluster_id
-                    
-                    plotly_data = []
-                    for idx, name in enumerate(nodes_list):
-                        c_id = node_clusters.get(name, -1)
-                        plotly_data.append({"name": name, "x": float(coords[idx, 0]), "y": float(coords[idx, 1]), "cluster": int(c_id)})
-                    
-                    plotly_json = json.dumps(plotly_data)
-                    html_content = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Node2Vec 2D Embedding Space</title><script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script><style>body {{ background-color: #222222; color: #ffffff; font-family: sans-serif; margin: 0; padding: 20px; }} #plot {{ width: 100%; height: 800px; }}</style></head><body><h1>Node2Vec 2D Embedding Space</h1><div id="plot"></div><script>const data = {plotly_json}; const tracesMap = {{}}; data.forEach(item => {{ const c = item.cluster; if (!tracesMap[c]) {{ tracesMap[c] = {{ x: [], y: [], text: [], mode: 'markers+text', textposition: 'top center', name: 'Cluster ' + c, type: 'scatter', marker: {{ size: 14, opacity: 0.8 }} }}; }} tracesMap[c].x.push(item.x); tracesMap[c].y.push(item.y); tracesMap[c].text.push(item.name); }}); Plotly.newPlot('plot', Object.values(tracesMap), {{ paper_bgcolor: '#222222', plot_bgcolor: '#222222', xaxis: {{ gridcolor: '#444' }}, yaxis: {{ gridcolor: '#444' }} }});</script></body></html>"""
-                    with open(vis_dir / "interactive_node2vec_embeddings.html", "w") as f:
-                        f.write(html_content)
+                    nodes_list = [n for n in node_embeddings.keys() if n in candidate_nodes]
+                    if len(nodes_list) >= 2:
+                        embeddings_matrix = np.array([node_embeddings[n] for n in nodes_list])
+                        pca = PCA(n_components=2)
+                        coords = pca.fit_transform(embeddings_matrix)
+                        
+                        node_clusters = {}
+                        for sc in result.structural_clusters:
+                            for n in sc.nodes: node_clusters[n] = sc.cluster_id
+                        
+                        plotly_data = []
+                        for idx, name in enumerate(nodes_list):
+                            c_id = node_clusters.get(name, -1)
+                            plotly_data.append({"name": name, "x": float(coords[idx, 0]), "y": float(coords[idx, 1]), "cluster": int(c_id)})
+                        
+                        plotly_json = json.dumps(plotly_data)
+                        html_content = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>[{path_label}] Node2Vec 2D Embedding Space</title><script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script><style>body {{ background-color: #222222; color: #ffffff; font-family: sans-serif; margin: 0; padding: 20px; }} #plot {{ width: 100%; height: 800px; }}</style></head><body><h1>[{path_label}] Node2Vec 2D Embedding Space</h1><div id="plot"></div><script>const data = {plotly_json}; const tracesMap = {{}}; data.forEach(item => {{ const c = item.cluster; if (!tracesMap[c]) {{ tracesMap[c] = {{ x: [], y: [], text: [], mode: 'markers+text', textposition: 'top center', name: 'Cluster ' + c, type: 'scatter', marker: {{ size: 14, opacity: 0.8 }} }}; }} tracesMap[c].x.push(item.x); tracesMap[c].y.push(item.y); tracesMap[c].text.push(item.name); }}); Plotly.newPlot('plot', Object.values(tracesMap), {{ paper_bgcolor: '#222222', plot_bgcolor: '#222222', xaxis: {{ gridcolor: '#444' }}, yaxis: {{ gridcolor: '#444' }} }});</script></body></html>"""
+                        with open(vis_dir / "interactive_node2vec_embeddings.html", "w") as f:
+                            f.write(html_content)
                 except Exception as e:
                     print(f"Warning: Failed to generate Node2Vec Scatter Plot: {e}")
