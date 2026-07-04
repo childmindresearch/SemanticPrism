@@ -103,10 +103,32 @@ topology:
   # Output Location: outputs/03_topology/community/topology_partitions.json
   # Visualizations : outputs/visuals/community/
   # =========================================================================
+  # =========================================================================
+  # PATH 1: COMMUNITY PATH (Approach A - Workflow & Event Isolation)
+  # =========================================================================
+  # Objective: Isolate narrative workflows and clinical/event processes.
+  # Hub Identification Mechanism:
+  #   - Participation Coefficient (P_i): Measures multi-community edge dispersion.
+  #   - Betweenness Centrality: Identifies sequential "chokepoint" nodes bridging narrative steps.
+  # Clustering Engine: Leiden Modularity Algorithm on the pruned sub-graph.
+  # Output Location: outputs/03_topology/community/topology_partitions.json
+  # Visualizations : outputs/visuals/community/
+  # =========================================================================
   community_path:
-    participation_threshold: 0.65     # Participation Coefficient cutoff (P_i >= 0.65). Higher value restricts hub status to 3+ theme connectors, preventing over-fragmentation into tiny micro-clusters.
-    betweenness_percentile: 0.95     # Top 5% betweenness centrality cutoff (0.95). Identifies key narrative transition chokepoints while keeping internal workflow steps intact.
-    leiden_resolution: 1.0           # Leiden clustering resolution parameter (1.0 = standard modularity density).
+    # participation_threshold: Cutoff for cross-community hubs (P_i in [0, 1]).
+    #   - INCREASING (e.g. 0.70-0.80): Prunes FEWER hubs (only super-connectors spanning 3+ themes). Graph stays connected -> Leiden yields FEWER, LARGER workflow modules (richer LLM context).
+    #   - DECREASING (e.g. 0.40-0.50): Prunes MORE hubs (includes 2-theme connectors). Graph breaks into MORE, SMALLER micro-communities (granular schemas).
+    participation_threshold: 0.65
+
+    # betweenness_percentile: Shortest-path narrative chokepoint cutoff.
+    #   - INCREASING (e.g. 0.95-0.98): Selects top 2-5% highest betweenness nodes as hubs -> FEWER chokepoints pruned, preserving connected workflow steps inside clusters.
+    #   - DECREASING (e.g. 0.80-0.90): Selects top 10-20% chokepoints as hubs -> MORE transition nodes pruned, isolating procedural sub-steps into separate micro-modules.
+    betweenness_percentile: 0.95
+
+    # leiden_resolution: Leiden modularity resolution density parameter.
+    #   - INCREASING (e.g. 1.5-2.0): Forces Leiden to discover SMALLER, tighter sub-communities (denser micro-workflows).
+    #   - DECREASING (e.g. 0.5-0.8): Forces Leiden to merge sub-communities into LARGER macro-workflow modules.
+    leiden_resolution: 1.0
 
   # =========================================================================
   # PATH 2: EMBEDDING PATH (Approach B - Pure Category & Role Isolation)
@@ -121,23 +143,49 @@ topology:
   # Visualizations : outputs/visuals/embedding/
   # =========================================================================
   embedding_path:
-    participation_threshold: 0.65                 # Participation Coefficient cutoff (P_i >= 0.65). Restricts structural hub pruning to multi-domain super-connectors.
-    enable_modularity_vitality_pruning: true    # Prune boundary-blurring nodes with negative modularity vitality (Delta Q < -0.005) to force category separation.
-    max_structural_clusters: 12                 # Maximum K evaluated during K-Means Silhouette search (finds optimal K between 2 and 12).
-    node2vec_dimensions: 64                     # Embedding vector space dimensions (64D captures complex topological role equivalence).
-    node2vec_walk_length: 10                    # Length of random walk trajectories per node.
-    node2vec_num_walks: 100                     # Total random walk iterations per node for stable embedding convergence.
+    # participation_threshold: Cutoff for cross-theme structural hubs (P_i in [0, 1]).
+    #   - INCREASING (e.g. 0.70-0.80): Prunes FEWER hubs before Node2Vec, capturing broader structural relationships in vector space.
+    #   - DECREASING (e.g. 0.40-0.50): Prunes MORE multi-theme nodes, isolating pure category clusters in vector space.
+    participation_threshold: 0.65
+
+    # enable_modularity_vitality_pruning: Toggles pruning of boundary-blurring nodes (Delta Q < -0.005).
+    #   - TRUE : Identifies nodes whose removal INCREASES modularity Q, forcing clean category separation.
+    #   - FALSE: Retains boundary-blurring nodes inside structural clusters.
+    enable_modularity_vitality_pruning: true
+
+    # max_structural_clusters: Maximum K evaluated during K-Means Silhouette optimization search.
+    #   - INCREASING (e.g. 15-20): Allows evaluation of higher cluster counts for large, fine-grained entity taxonomies.
+    #   - DECREASING (e.g. 5-8) : Restricts search to low cluster counts for coarse, high-level entity categories.
+    max_structural_clusters: 12
+
+    # node2vec_dimensions: Vector space dimensionality for Node2Vec embeddings. (e.g., 32,64,128)
+    #   - INCREASING (e.g. 128): Expands vector capacity for complex topological role representations on massive graphs (>10k nodes).
+    #   - DECREASING (e.g. 32) : Reduces vector dimensionality for fast embedding convergence on smaller graphs (<500 nodes).
+    node2vec_dimensions: 128
+
+    # node2vec_walk_length: Length of random walk trajectories per node.
+    #   - INCREASING (e.g. 15-20): Deepens structural neighborhood exploration per walk trajectory.
+    node2vec_walk_length: 10
+
+    # node2vec_num_walks: Number of random walk iterations per node.
+    #   - INCREASING (e.g. 150-200): Increases sampling density, producing highly deterministic, stable cluster boundaries.
+    node2vec_num_walks: 100
 
   # =========================================================================
   # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
   # =========================================================================
-  # Controls visual pruning and rendering performance for HTML files ONLY.
+  # Controls visual pruning and rendering performance for global diagnostic HTML files ONLY
+  # (e.g. interactive_topology_graph, interactive_communities_only, interactive_workflow_narratives).
+  #
+  # NOTE: These parameters do NOT apply to 'interactive_llm_payload_gallery.html' nor
+  # 'interactive_collapsed_modules.html', which ALWAYS represent 100% of the raw 
+  # topology partitions passed to Stage 4 for schema synthesis.
   # Has 0% impact on JSON outputs or Stage 4 schema generation.
   # =========================================================================
   visualizations:
-    min_node_degree: 3           # Minimum node degree to render on HTML canvas (e.g. 3 omits low-degree leaf nodes; 0 = show all)
-    max_nodes_per_cluster: 30     # Max central nodes per cluster to render in HTML (0 = unlimited)
-    max_total_visual_nodes: 0.25 # Max nodes to render as a fraction of total graph nodes (e.g. 0.25 = top 25%; >1 = hard integer cap; 0 = show all)
+    min_node_degree: 3           # Minimum node degree to render on global diagnostic HTML charts (e.g. 3 omits low-degree leaf nodes; 0 = show all)
+    max_nodes_per_cluster: 30     # Max central nodes per cluster to render on global diagnostic HTML charts (0 = unlimited)
+    max_total_visual_nodes: 0.25 # Max nodes to render as a fraction of total graph nodes on global diagnostic HTML charts (e.g. 0.25 = top 25%; >1 = hard integer cap; 0 = show all)
     freeze_physics: true         # Disable live physics engine after stabilization for smooth 60 FPS browser panning
 
 synthesis:

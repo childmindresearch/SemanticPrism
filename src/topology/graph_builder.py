@@ -706,6 +706,13 @@ class TopologyPipeline:
         const detailsEl = document.getElementById('payloadDetails');
         let network = null;
 
+        const defaultOpt = document.createElement('option');
+        defaultOpt.value = "";
+        defaultOpt.textContent = "-- Select a Partition Payload --";
+        defaultOpt.disabled = true;
+        defaultOpt.selected = true;
+        selectEl.appendChild(defaultOpt);
+
         payloads.forEach((p, idx) => {{
             const opt = document.createElement('option');
             opt.value = idx;
@@ -714,6 +721,7 @@ class TopologyPipeline:
         }});
 
         function loadCluster(idx) {{
+            if (idx === "" || idx === null || idx === undefined) return;
             const payload = payloads[idx];
             
             // Render Details Panel
@@ -760,7 +768,7 @@ class TopologyPipeline:
             network = new vis.Network(container, data, options);
         }}
 
-        if (payloads.length > 0) loadCluster(0);
+        detailsEl.innerHTML = '<div style="color: #888888; font-style: italic; padding: 20px 0;">Select a partition payload from the dropdown above to view its discrete subgraph and LLM metadata.</div>';
     </script>
 </body>
 </html>"""
