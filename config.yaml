@@ -104,29 +104,29 @@ topology:
   # Visualizations : outputs/visuals/community/
   # =========================================================================
   community_path:
-    participation_threshold: 0.5     # Cutoff for cross-community hubs (P_i > 0.5)
-    betweenness_percentile: 0.90     # Top 10% betweenness centrality cutoff for chokepoints
-    leiden_resolution: 1.0           # Leiden clustering resolution parameter
+    participation_threshold: 0.65     # Participation Coefficient cutoff (P_i >= 0.65). Higher value restricts hub status to 3+ theme connectors, preventing over-fragmentation into tiny micro-clusters.
+    betweenness_percentile: 0.95     # Top 5% betweenness centrality cutoff (0.95). Identifies key narrative transition chokepoints while keeping internal workflow steps intact.
+    leiden_resolution: 1.0           # Leiden clustering resolution parameter (1.0 = standard modularity density).
 
   # =========================================================================
   # PATH 2: EMBEDDING PATH (Approach B - Pure Category & Role Isolation)
   # =========================================================================
   # Objective: Isolate pure, decoupled ontological categories and structural roles.
   # Hub Identification Mechanism:
-  #   - Participation Coefficient (P_i): Measures multi-theme edge dispersion.
-  #   - Modularity Vitality (Delta Q): Prunes nodes whose presence lowers global modularity (Delta Q < 0),
+  #   - Participation Coefficient (P_i): Measures multi-theme edge dispersion across categories.
+  #   - Modularity Vitality (Delta Q): Prunes nodes whose presence lowers global modularity (Delta Q < -0.005),
   #     maximizing structural cluster isolation.
   # Clustering Engine: Node2Vec 64D random-walk embeddings + dynamic K-Means Silhouette optimization.
   # Output Location: outputs/03_topology/embedding/topology_partitions.json
   # Visualizations : outputs/visuals/embedding/
   # =========================================================================
   embedding_path:
-    participation_threshold: 0.5                 # Cutoff for cross-theme hubs (P_i > 0.5)
-    enable_modularity_vitality_pruning: true    # Prune nodes with negative modularity vitality (Delta Q < 0)
-    max_structural_clusters: 10                 # Maximum K for K-Means Silhouette search
-    node2vec_dimensions: 64                     # Embedding vector dimensions
-    node2vec_walk_length: 10                    # Random walk length per node
-    node2vec_num_walks: 100                     # Number of random walks per node
+    participation_threshold: 0.65                 # Participation Coefficient cutoff (P_i >= 0.65). Restricts structural hub pruning to multi-domain super-connectors.
+    enable_modularity_vitality_pruning: true    # Prune boundary-blurring nodes with negative modularity vitality (Delta Q < -0.005) to force category separation.
+    max_structural_clusters: 12                 # Maximum K evaluated during K-Means Silhouette search (finds optimal K between 2 and 12).
+    node2vec_dimensions: 64                     # Embedding vector space dimensions (64D captures complex topological role equivalence).
+    node2vec_walk_length: 10                    # Length of random walk trajectories per node.
+    node2vec_num_walks: 100                     # Total random walk iterations per node for stable embedding convergence.
 
   # =========================================================================
   # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
@@ -135,10 +135,10 @@ topology:
   # Has 0% impact on JSON outputs or Stage 4 schema generation.
   # =========================================================================
   visualizations:
-    min_node_degree: 3           # Minimum node degree to render on HTML canvas (e.g. 2 omits degree-1 leaves; 0 = show all)
-    max_nodes_per_cluster: 30     # Max nodes per cluster to render in HTML (0 = unlimited)
-    max_total_visual_nodes: 0.25 # Max nodes as a fraction of total graph nodes (e.g. 0.25 = top 25%; >1 = hard integer cap; 0 = show all)
-    freeze_physics: true         # Disable live physics engine after stabilization for 60 FPS browser panning
+    min_node_degree: 3           # Minimum node degree to render on HTML canvas (e.g. 3 omits low-degree leaf nodes; 0 = show all)
+    max_nodes_per_cluster: 30     # Max central nodes per cluster to render in HTML (0 = unlimited)
+    max_total_visual_nodes: 0.25 # Max nodes to render as a fraction of total graph nodes (e.g. 0.25 = top 25%; >1 = hard integer cap; 0 = show all)
+    freeze_physics: true         # Disable live physics engine after stabilization for smooth 60 FPS browser panning
 
 synthesis:
   max_async_calls: 3
