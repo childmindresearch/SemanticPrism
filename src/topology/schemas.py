@@ -9,6 +9,9 @@ class NodeMetrics(BaseModel):
     node_id: str
     degree_centrality: float
     pagerank: float
+    betweenness_centrality: float = 0.0
+    participation_coefficient: float = 0.0
+    modularity_vitality: float = 0.0
     is_hub: bool
     is_orphan: bool
     in_edges: List[EdgeDetail] = []

@@ -83,11 +83,50 @@ refinement:
     temperature: 0.0
 
 topology:
-  max_structural_clusters: 10
-  # Spectral Hub Retention Rate (PageRank top N% threshold)
-  # Determines the percentage of top-PageRank entities to treat as global hubs.
-  # e.g., 0.05 treats the top 5% of nodes as global hubs.
-  spectral_variance_retention: 0.05
+  # Execution Mode for Stage 3 Topology Pipeline
+  # Options:
+  #   - "both"      : Execute both Community Path (Approach A) and Embedding Path (Approach B) concurrently (Default).
+  #   - "community"  : Execute only Path 1 (Approach A: Traditional Community Path via Leiden).
+  #   - "embedding"  : Execute only Path 2 (Approach B: Embedding Path via Node2Vec).
+  execution_mode: "both"
+  inheritance_overlap_threshold: 0.3
+
+  # =========================================================================
+  # PATH 1: COMMUNITY PATH (Approach A - Workflow & Event Isolation)
+  # =========================================================================
+  # Objective: Isolate narrative workflows and clinical/event processes.
+  # Hub Identification Mechanism:
+  #   - Participation Coefficient (P_i): Measures multi-community edge dispersion.
+  #     Nodes with P_i > threshold (e.g. 0.5) have >50% of edges outside their primary theme.
+  #   - Betweenness Centrality: Identifies sequential "chokepoint" nodes bridging narrative steps.
+  # Clustering Engine: Leiden Modularity Algorithm on the pruned sub-graph.
+  # Output Location: outputs/03_topology/community/topology_partitions.json
+  # Visualizations : outputs/visuals/community/
+  # =========================================================================
+  community_path:
+    participation_threshold: 0.5     # Cutoff for cross-community hubs (P_i > 0.5)
+    betweenness_percentile: 0.90     # Top 10% betweenness centrality cutoff for chokepoints
+    leiden_resolution: 1.0           # Leiden clustering resolution parameter
+
+  # =========================================================================
+  # PATH 2: EMBEDDING PATH (Approach B - Pure Category & Role Isolation)
+  # =========================================================================
+  # Objective: Isolate pure, decoupled ontological categories and structural roles.
+  # Hub Identification Mechanism:
+  #   - Participation Coefficient (P_i): Measures multi-theme edge dispersion.
+  #   - Modularity Vitality (Delta Q): Prunes nodes whose presence lowers global modularity (Delta Q < 0),
+  #     maximizing structural cluster isolation.
+  # Clustering Engine: Node2Vec 64D random-walk embeddings + dynamic K-Means Silhouette optimization.
+  # Output Location: outputs/03_topology/embedding/topology_partitions.json
+  # Visualizations : outputs/visuals/embedding/
+  # =========================================================================
+  embedding_path:
+    participation_threshold: 0.5                 # Cutoff for cross-theme hubs (P_i > 0.5)
+    enable_modularity_vitality_pruning: true    # Prune nodes with negative modularity vitality (Delta Q < 0)
+    max_structural_clusters: 10                 # Maximum K for K-Means Silhouette search
+    node2vec_dimensions: 64                     # Embedding vector dimensions
+    node2vec_walk_length: 10                    # Random walk length per node
+    node2vec_num_walks: 100                     # Number of random walks per node
 
 synthesis:
   max_async_calls: 3
