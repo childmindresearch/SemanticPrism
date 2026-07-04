@@ -758,3 +758,52 @@ class TopologyPipeline:
             }
             """)
             net_struct.save_graph(str(vis_dir / "interactive_structural_clusters_only.html"))
+
+        # 12. Hubs & Ego Networks Visual (Hub Subgraph)
+        net_hubs = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading="Global Hubs & Ego Networks Topology")
+        
+        hubs_set = set(result.global_hubs)
+        hub_connected_nodes = set(hubs_set)
+        
+        for u, v, data in dg.edges(data=True):
+            if u in hubs_set or v in hubs_set:
+                hub_connected_nodes.add(u)
+                hub_connected_nodes.add(v)
+                
+        for node in hub_connected_nodes:
+            metrics = result.node_metrics.get(node)
+            is_hub = node in hubs_set
+            centrality = metrics.degree_centrality if metrics else 0.0
+            
+            color = "red" if is_hub else "#aec7e8"
+            shape = "star" if is_hub else "dot"
+            size = (centrality * 200) + (35 if is_hub else 15)
+            border_width = 4 if is_hub else 2
+            
+            role_str = "Global Hub" if is_hub else "Spoke Node"
+            title = f"Role: {role_str}\nCentrality: {centrality:.4f}"
+            
+            net_hubs.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=border_width, shadow=True)
+
+        for u, v, data in dg.edges(data=True):
+            if u in net_hubs.get_nodes() and v in net_hubs.get_nodes():
+                if u in hubs_set or v in hubs_set:
+                    is_inter_hub = u in hubs_set and v in hubs_set
+                    net_hubs.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 100, 100, 0.8)" if is_inter_hub else "rgba(200,200,200,0.4)", width=3 if is_inter_hub else 1)
+
+        net_hubs.set_options("""
+        {
+          "physics": {
+            "forceAtlas2Based": {
+              "gravitationalConstant": -150,
+              "centralGravity": 0.005,
+              "springLength": 250,
+              "springConstant": 0.05
+            },
+            "solver": "forceAtlas2Based",
+            "stabilization": {"iterations": 150}
+          }
+        }
+        """)
+        net_hubs.save_graph(str(vis_dir / "interactive_hubs_ego_network.html"))
+
