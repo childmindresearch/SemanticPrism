@@ -2,7 +2,7 @@ import json
 import networkx as nx
 from pyvis.network import Network
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 from collections import defaultdict
 from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult
 
@@ -10,15 +10,6 @@ try:
     from cdlib import algorithms
 except ImportError:
     algorithms = None
-
-# Compatibility patch for scipy 1.13+ and gensim: inject triu into scipy.linalg if missing
-try:
-    import numpy as np
-    import scipy
-    import scipy.linalg
-    scipy.linalg.triu = np.triu
-except Exception:
-    pass
 
 try:
     import numpy as np

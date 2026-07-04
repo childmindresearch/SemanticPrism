@@ -204,7 +204,6 @@ synthesis:
   schema_pass_mode: "both"
 
   max_async_calls: 3
-  clustering_strategy: "node2vec" # Options: "leiden" or "node2vec"
 
   # Entity threshold for Stage 4 target qualification (Default: 5).
   # Communities/clusters with < 5 entities are filtered from individual schema extraction

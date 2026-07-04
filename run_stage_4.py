@@ -26,15 +26,9 @@ def main():
 
     if synth_mode in ("both", "community"):
         comm_topology = load_json("outputs/03_topology/community/topology_partitions.json")
-        if not comm_topology:
-            print("   [Fallback] Checking legacy topology_partitions.json path...")
-            comm_topology = load_json("outputs/03_topology/topology_partitions.json")
 
     if synth_mode in ("both", "embedding"):
         emb_topology = load_json("outputs/03_topology/embedding/topology_partitions.json")
-        if not emb_topology and not comm_topology:
-            print("   [Fallback] Checking legacy topology_partitions.json path...")
-            emb_topology = load_json("outputs/03_topology/topology_partitions.json")
 
     refined_triplets = load_json("outputs/02_refinement/refined_triplets.json")
     original_triplets = load_json("outputs/01_extraction/original_triplets.json")
