@@ -654,7 +654,8 @@ class TopologyPipeline:
                 "module_name": f"01_{path_type}_{c_id}.py",
                 "nodes": nodes,
                 "triplet_count": len(associated_triplets),
-                "triplets": associated_triplets[:15], # top 15 for preview
+                "triplets": associated_triplets, # full triplets array for vis.js edges
+                "sample_triplets": associated_triplets[:15], # top 15 for sidebar text preview
                 "connected_hubs": connected_hubs
             })
             
@@ -725,7 +726,7 @@ class TopologyPipeline:
                 <h4>Global Hub Anchors:</h4>
                 <p>${{payload.connected_hubs.length > 0 ? payload.connected_hubs.map(h => `<span class="badge" style="color:#ff5555;">${{h}}</span>`).join(' ') : '<i>None</i>'}}</p>
                 <h4>Sample Incident Triplets:</h4>
-                ${{payload.triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('')}}
+                ${{payload.sample_triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('')}}
             `;
 
             // Draw Subgraph
