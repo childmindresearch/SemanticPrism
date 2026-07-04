@@ -500,6 +500,23 @@ class TopologyPipeline:
         net_hubs.set_options(options_json)
         net_hubs.save_graph(str(vis_dir / "interactive_hubs_ego_network.html"))
 
+        # 2b. Global Hubs Only Topology Graph (Inter-Hub Edges Only)
+        net_hubs_only = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a2e", font_color="white", heading=f"[{path_label}] Global Hubs Only Topology")
+        for node in hubs_set:
+            metrics = result.node_metrics.get(node)
+            centrality = metrics.degree_centrality if metrics else 0.0
+            p_val = metrics.participation_coefficient if metrics else 0.0
+            size = (centrality * 200) + 35
+            title = f"[{path_label}]\nRole: Global Hub\nDegree Centrality: {centrality:.4f}\nParticipation Coeff (P_i): {p_val:.4f}"
+            net_hubs_only.add_node(node, label=node, color="#ff4444", shape="star", size=size, title=title, borderWidth=3, shadow=True)
+
+        for u, v, data in dg.edges(data=True):
+            if u in hubs_set and v in hubs_set:
+                net_hubs_only.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 215, 0, 0.8)", width=3)
+                
+        net_hubs_only.set_options(options_json)
+        net_hubs_only.save_graph(str(vis_dir / "interactive_global_hubs.html"))
+
         # PATH 1 SPECIFIC VISUALIZATIONS
         if path_type == "community":
             comm_map = {}
