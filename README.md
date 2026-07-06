@@ -57,60 +57,148 @@ The pipeline runs sequentially across four stages, utilizing outputs from preced
 ---
 
 ### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_3.py))
-**Purpose:** To map refined triplets into a network graph and execute **Dual-Path Topological Partitioning** (`topology.execution_mode: "community"` | `"embedding"` | `"both"`) to discover workflow sequences and structural category taxonomies.
+**Purpose:** To map refined triplets into a network graph and execute **Dual-Path Topological Partitioning** to discover workflow sequences and structural category taxonomies.
 
-#### Path 1: Community Workflow Topology (Approach A)
-*   **Objective:** Isolate narrative workflows, event sequences, and clinical processes.
-*   **Hub Identification Mechanism:**
-    *   **Participation Coefficient ($P_i \ge 0.65$):** Identifies nodes whose incident edges span $\ge 65\%$ across multiple distinct domain themes.
-    *   **Betweenness Centrality Chokepoint (Top 5%):** Identifies shortest-path bottleneck nodes (`betweenness_centrality > 0.02`) that bridge narrative workflow steps.
-*   **Clustering Engine:** **Leiden Modularity Algorithm** on the pruned sub-graph (with hubs and singletons temporarily isolated).
-*   **Output Location:** `outputs/03_topology/community/topology_partitions.json`
-*   **Visualizations:** `outputs/visuals/community/`
+```mermaid
+graph TD
+    Triplets["refined_triplets.json"] --> Graph["NetworkX Directed Graph"]
+    Graph --> HubDetect{"Hub Detection"}
+    
+    subgraph Path 1: Community Workflow (Leiden)
+        HubDetect -->|Participation Coeff >= 0.65 OR Betweenness Top 5%| Hubs1["Prune Global Hubs"]
+        Hubs1 --> GraphPruned1["Pruned Subgraph"]
+        GraphPruned1 --> Leiden["Leiden Modularity Algorithm"]
+        Leiden --> CommPart["Leiden Spoke Communities"]
+    end
 
-#### Path 2: Embedding Categorical Topology (Approach B)
-*   **Objective:** Isolate pure, decoupled ontological categories and structural roles.
-*   **Hub Identification Mechanism:**
-    *   **Participation Coefficient ($P_i \ge 0.45$):** Identifies cross-category structural connectors.
-    *   **Modularity Vitality Pruning ($\Delta Q < -0.005$):** Prunes boundary-blurring nodes whose removal *increases* global modularity ($Q$) and have degree $\ge 3$.
-*   **Clustering Engine:** **Node2Vec 64D/128D Random-Walk Embeddings** + **Dynamic K-Means Silhouette Optimization** ($K=2 \dots 12$).
-*   **Output Location:** `outputs/03_topology/embedding/topology_partitions.json`
-*   **Visualizations:** `outputs/visuals/embedding/`
+    subgraph Path 2: Embedding Categorical (Node2Vec)
+        HubDetect -->|Participation Coeff >= 0.45 OR Modularity Vitality < -0.005| Hubs2["Prune Global Hubs"]
+        Hubs2 --> GraphPruned2["Pruned Subgraph"]
+        GraphPruned2 --> Node2Vec["Node2Vec Random Walks & Embeddings"]
+        Node2Vec --> KMeans["K-Means Silhouette Optimization"]
+        KMeans --> StructPart["Structural Clusters"]
+    end
+    
+    CommPart --> S3_Out["Stage 3 JSON Outputs & HTML Visuals"]
+    StructPart --> S3_Out
+    Hubs1 --> S3_Out
+    Hubs2 --> S3_Out
+```
 
-#### Diagnostic HTML Visualizations Engine
-Stage 3 exports 10 interactive PyVis HTML diagnostic files under `outputs/visuals/community/` and `outputs/visuals/embedding/`:
-1. `interactive_topology_graph.html`: Full network topology with hub/orphan node styling.
-2. `interactive_hubs_ego_network.html`: Global hubs and their connected spoke nodes.
-3. `interactive_global_hubs.html`: **Global Hubs Only Topology** showing inter-hub directed edges with gold highlights.
-4. `interactive_communities_only.html` / `interactive_structural_clusters_only.html`: Intra-cluster member sub-graphs.
-5. `interactive_workflow_narratives.html`: Shortest-path narrative chokepoints and betweenness hotspots.
-6. `interactive_participation_dispersion.html`: Participation coefficient ($P_i$) heatmap dispersion.
-7. `interactive_modularity_vitality_landscape.html`: Modularity vitality ($\Delta Q$) category separation.
-8. `interactive_node2vec_embeddings.html`: 2D PCA projection of Node2Vec embedding space.
-9. `interactive_llm_payload_gallery.html`: 100% raw cluster payload cards passed to Stage 4 LLMs.
-10. `interactive_collapsed_modules.html`: High-level architecture block diagram mapping hub anchors to module nodes.
+#### Detailed Stage 3 Process Flow & Updates
+*   **Dual-Path Split:** The network graph is partitioned down two paths:
+    1.  **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (using a high Participation Coefficient $P_i \ge 0.65$ or top 5% shortest-path betweenness centrality) to isolate tight modular event-sequences. The remaining graph is partitioned using the **Leiden Modularity Algorithm**.
+    2.  **Path 2 (Embedding Categorical Path):** Prunes nodes based on Modularity Vitality ($\Delta Q < -0.005$, indicating nodes whose removal increases modularity and structural separation). It then generates high-dimensional structural representations using **Node2Vec** random walks, which are clustered using **Silhouette K-Means Optimization**.
+*   **Visualization Pruning (Visual Boundary Separation):**
+    *   *Intra-Cluster Filtering Update:* In the hubs-only global network visualizer (`interactive_global_hubs.html`), edges connecting hubs of different clusters are pruned. Only intra-cluster edges are drawn. This visually isolates distinct functional sectors and prevents the visual display from cluttering with global transition lines.
+*   **Output Location:** `outputs/03_topology/community/` and `outputs/03_topology/embedding/`
+    *   `topology_partitions.json`: Contains the node assignments, global hubs, orphans, and centrality metrics (pagerank, degree centrality, betweenness).
+*   **Visualizations:** Exports 10 interactive HTML dashboards (such as `interactive_topology_graph.html` and `interactive_collapsed_modules.html`) representing the network topology. Rendering options like `max_total_visual_nodes` (defaulting to `0.25` or top 25%) are used to ensure smooth canvas performance in the browser.
+
+---
+
+### Transition: Stage 3 to Stage 4 Data Flow
+
+This diagram maps how raw partitions and metrics exported by Stage 3 are dynamically resolved and routed by the Stage 4 synthesis target controller:
+
+```mermaid
+graph TD
+    subgraph Stage 3 Outputs
+        S3_Comm["outputs/03_topology/community/topology_partitions.json"]
+        S3_Emb["outputs/03_topology/embedding/topology_partitions.json"]
+    end
+
+    subgraph Config Ingestion
+        Conf["config.yaml"] -->|min_cluster_size / max_hub_targets| TargetResolv{"Target Resolver"}
+    end
+
+    S3_Comm -->|Leiden Communities & Hubs| TargetResolv
+    S3_Emb -->|Structural Clusters & Hubs| TargetResolv
+
+    subgraph Stage 4 Target Routing
+        TargetResolv -->|Nodes < min_cluster_size OR Low-Centrality Hubs| Phase1["Phase 1: Enums Aggregation"]
+        TargetResolv -->|Nodes >= min_cluster_size| Phase2a["Phase 2a: Spoke Communities"]
+        TargetResolv -->|Top N Hubs| Phase2b["Phase 2b: Global Hub Models"]
+    end
+
+    Phase1 -->|enums.py| PassConsol["Phase 3: Consolidation"]
+    Phase2a -->|0X_community_name.py| PassConsol
+    Phase2b -->|hubs.py| PassConsol
+    
+    PassConsol -->|master_ontology.py| PassFinal["Phase 4: Master Integration"]
+    PassFinal -->|comprehensive_ontology.py| RDB["Downstream Relational DB Mapping"]
+```
 
 ---
 
 ### Stage 4: Synthesis Engine ([run_stage_4.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_4.py))
 **Purpose:** To translate mathematical graph partitions back into deployable Python Pydantic ontologies using path-isolated, multi-pass LLM synthesis.
 
-*   **Path Isolation & Schema Pass Control (`config.yaml`):**
-    *   `synthesis.execution_mode`: `"community"` (Path 1), `"embedding"` (Path 2), or `"both"`. Outputs schemas into `outputs/schemas/community/` or `outputs/schemas/embedding/`.
-    *   `synthesis.schema_pass_mode`: `"normalized"` (Pass A from `refined_triplets.json`), `"raw"` (Pass B from `original_triplets.json`), or `"both"`.
-*   **Phase 1: Orphan & Low-Density Node Enum Synthesis (`enums.py`):**
-    *   Bundles all isolated singleton nodes AND entity nodes from low-density communities below `min_cluster_size` ($<5$ entities).
-    *   Synthesizes them into standardized Python `Enum` classes in `enums.py` in **1 single LLM call**, ensuring **zero data is lost**.
-*   **Phase 2a: Global Hub Base Model Synthesis (`hubs.py`):**
-    *   Synthesizes `global_hubs` **first** into foundational Pydantic `BaseModel` classes using Phase 1's `enums.py` context.
-*   **Phase 2b: Qualified Community Schema Generation (`01_<module_name>.py`):**
-    *   Processes qualified clusters ($\ge \text{min\_cluster\_size}$ nodes) using `leiden_schema_agent` or `node2vec_schema_agent`.
-    *   Injects both `global_enums` AND `global_hubs` into system prompt context (`deps`).
-    *   Community schemas synthesize Pydantic classes that **inherit from** or **reference** root models in `hubs.py` as typed fields.
-*   **Phase 3: Global Consolidation:**
-    *   Combines `enums.py`, `hubs.py`, and community module files into a unified `master_ontology.py` using `consolidation_agent` with token estimation and hierarchical sub-batching.
-*   **Phase 4: Comprehensive Ontology & Code Formatting:**
-    *   Synthesizes `comprehensive_ontology.py` merging raw and normalized master ontologies, and runs `ruff format` on all generated SDK files.
+```mermaid
+graph TD
+    subgraph Input Parsing
+        S3_JSON["topology_partitions.json"]
+        Norm_Triplets["refined_triplets.json"]
+        Raw_Triplets["original_triplets.json"]
+    end
+
+    subgraph Phase 1: Enums Synthesis
+        S3_JSON -->|Filter: Size < min_cluster_size OR Hub Rank > max_hub_targets| EnumNodes["Enum Nodes Set"]
+        EnumNodes --> EnumLLM["Orphan Enum Agent"]
+        EnumLLM --> EnumsPy["enums.py"]
+    end
+
+    subgraph Phase 2: Schema Generation
+        S3_JSON -->|Filter: Size >= min_cluster_size| SpokeNodes["Spoke Nodes & Hubs"]
+        Norm_Triplets -->|PageRank & Intra-Edge Pruning| Pruning["Triplet Payload Cap"]
+        Raw_Triplets -->|PageRank & Intra-Edge Pruning| Pruning
+        
+        Pruning -->|Capped Payload <= max_triplets_per_target| SchemaLLM["Schema Synthesis Agents"]
+        EnumsPy -->|Injected Context| SchemaLLM
+        
+        SchemaLLM -->|Pass A: Normalized| NormSchemas["normalized/ schemas"]
+        SchemaLLM -->|Pass B: Raw| RawSchemas["raw/ schemas"]
+    end
+
+    subgraph Phase 3: Consolidation
+        NormSchemas --> ConsolLLM["Consolidation Agent"]
+        RawSchemas --> ConsolLLM
+        ConsolLLM --> MasterNorm["normalized/master_ontology.py"]
+        ConsolLLM --> MasterRaw["raw/master_ontology.py"]
+    end
+
+    subgraph Phase 4: Master Integration
+        MasterNorm --> FinalLLM["Comprehensive Ontology Agent"]
+        MasterRaw --> FinalLLM
+        FinalLLM --> CompOnt["comprehensive_ontology.py"]
+        CompOnt --> Ruff["Ruff Format Codebase"]
+    end
+```
+
+#### Detailed Stage 4 Process Flow & Updates
+*   **Relational Database-Driven Constraints:**
+    System prompts have been re-engineered to produce schemas optimized for downstream relational SQL databases and extraction tools:
+    1.  *No Unique Identifiers:* Agents are forbidden from generating arbitrary key fields (like `id` or `uuid`), delegating identifier injection to a deterministic offline pipeline.
+    2.  *Strict Enums/Literals:* Forces the classification of type, state, status, category, and metadata properties using class definitions in `enums.py` or standard Python `Literal` strings.
+    3.  *Default to Optional:* All attributes default to `Optional[Type] = None` to prevent downstream Pydantic AI extraction models from hallucinating value properties that are absent in clinical source texts.
+    4.  *JSONB Table Collapsing:* Secondary or scalar attributes are grouped into a single metadata dictionary (e.g. `metadata: Optional[Dict[str, Any]] = None`) to map to SQL `JSONB` columns, keeping tables narrow and preventing database column bloat.
+*   **Hub Centrality-Based Pruning (`max_hub_targets`):**
+    On massive graphs, the number of global hubs can grow very large, leading to schema bloat.
+    *   *Centrality Ranking:* The pipeline ranks global hubs based on their betweenness and degree centrality.
+    *   *Capping & Routing:* Only the top $N$ hubs (controlled by `max_hub_targets` in `config.yaml`, defaulting to `10`) are generated as standalone schema tables. Remaining low-centrality hubs are routed directly to the Phase 1 `enums.py` aggregator, maintaining complete semantic standard coverage without inflating the database table footprint.
+*   **PageRank Triplet Payload Pruning (`max_triplets_per_target`):**
+    For dense graphs where communities contain thousands of relations, the payload size is capped (controlled by `max_triplets_per_target`, defaulting to `1000` triplets) to prevent token window overflow.
+    *   *PageRank Sorting:* Triplets are ranked by the average PageRank of their subject and object nodes.
+    *   *Intra-Edge Bonus:* Triplets linking two nodes within the target community are prioritized, ensuring that the core, high-density internal relationships are preserved for the LLM.
+    *   *Perfect Cross-Pass Indexing:* The selected triplet indices are identically mapped between the normalized pass (Pass A) and the raw pass (Pass B), guaranteeing that the two generated master models align on the same semantic facts.
+*   **Ollama/Local Model Compatibility Layer:**
+    Modified model configuration settings in `synthesis_agents.py` to prevent `400 Bad Request` execution crashes on Ollama endpoints:
+    *   *Exclude max_tokens:* Dynamically omits `max_tokens` from `ModelSettings` when `provider == 'ollama'`, avoiding the `max_completion_tokens` parameter which Ollama rejects.
+    *   *Auto Tool Choice:* Sets `tool_choice="auto"` for Ollama runs, bypassing Ollama's rejection of forced `"required"` tool configurations.
+*   **Detailed Log Diagnostics:**
+    *   *Composition Summary:* Prints the target breakdown (`spokes` vs. `hubs`) at execution startup.
+    *   *Size Metrics:* Prints the exact node size and triplet count for every target and pass.
+    *   *Failure Dumps:* On output retry failures, it prints Pydantic validation location trace errors and dumps the raw LLM responses for all 3 retry attempts to facilitate quick prompt debugging.
 
 ---
 
@@ -138,4 +226,6 @@ The entire execution of SemanticPrism is parameterized through [config.yaml](fil
 | **`synthesis`** | `execution_mode` | `string` | `"community"` | Stage 4 topology ingestion mode (`"community"`, `"embedding"`, or `"both"`). |
 | **`synthesis`** | `schema_pass_mode` | `string` | `"both"` | Stage 4 pass mode (`"normalized"`, `"raw"`, or `"both"`). |
 | **`synthesis`** | `min_cluster_size` | `integer` | `5` | Entity threshold for Stage 4 target qualification ($<5$ routed to `enums.py`). |
+| **`synthesis`** | `max_hub_targets` | `integer` | `10` | Caps the number of global hub schema targets; remaining hubs are routed to `enums.py`. |
+| **`synthesis`** | `max_triplets_per_target` | `integer` | `1000` | Caps the number of triplet statements sent to the LLM per schema target. |
 | **`synthesis`** | `context_window_cap`| `integer` | `16384` | Context window cap in tokens for schema generation and consolidation. |
