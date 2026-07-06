@@ -209,6 +209,10 @@ synthesis:
   # Communities/clusters with < 5 entities are filtered from individual schema extraction
   # and their entities are routed directly to Phase 1 Enum synthesis (enums.py) so zero data is lost.
   min_cluster_size: 7
+  # Maximum number of global hub nodes to process as individual schema targets.
+  # Hubs exceeding this limit are routed directly to Phase 1 Enum synthesis (enums.py)
+  # to prevent database schema bloat on large-scale datasets.
+  max_hub_targets: 10
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.

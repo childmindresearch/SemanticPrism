@@ -95,6 +95,19 @@ class SynthesisPipeline:
         if run_raw:
             raw_dir.mkdir(parents=True, exist_ok=True)
 
+        # Resolve Hubs and Filter Count based on Centrality Metrics
+        raw_hubs = topology.get("global_hubs", [])
+        max_hub_targets = self.config.get('synthesis', {}).get('max_hub_targets', 10)
+        metrics = topology.get("node_metrics", {})
+        
+        def get_hub_sort_key(node_id):
+            node_m = metrics.get(node_id, {})
+            return (node_m.get("betweenness_centrality", 0.0), node_m.get("degree_centrality", 0.0))
+            
+        sorted_hubs = sorted(raw_hubs, key=get_hub_sort_key, reverse=True)
+        hubs = sorted_hubs[:max_hub_targets]
+        discarded_hubs = sorted_hubs[max_hub_targets:]
+
         # Phase 1: Orphan & Low-Density Node Aggregation (Enums)
         print(f"   -> [{path_label}] Phase 1: Orphan & Low-Density Node Aggregation (Enums)...")
         orphans = list(topology.get("orphans", []))
@@ -111,8 +124,8 @@ class SynthesisPipeline:
                 if len(nodes) < min_cluster_size:
                     small_cluster_nodes.extend(nodes)
 
-        all_enum_nodes = sorted(list(set(orphans + small_cluster_nodes)))
-        print(f"      -> Total Enum Nodes: {len(all_enum_nodes)} ({len(orphans)} orphans + {len(small_cluster_nodes)} from low-density clusters < {min_cluster_size} nodes)")
+        all_enum_nodes = sorted(list(set(orphans + small_cluster_nodes + discarded_hubs)))
+        print(f"      -> Total Enum Nodes: {len(all_enum_nodes)} ({len(orphans)} orphans + {len(small_cluster_nodes)} from low-density clusters + {len(discarded_hubs)} discarded hubs < {min_cluster_size} nodes)")
         global_enums_code = ""
         
         if all_enum_nodes:
@@ -140,7 +153,6 @@ class SynthesisPipeline:
         print(f"   -> [{path_label}] Phase 2: Schema Generation...")
         
         # Consolidate Targets (>= min_cluster_size)
-        hubs = topology.get("global_hubs", [])
         targets = []
         
         if path_type == "embedding":
