@@ -171,9 +171,12 @@ class SynthesisPipeline:
             print(f"      -> Qualified Communities (>= {min_cluster_size} nodes): {len(targets)} targets")
             
         targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
+        spoke_count = len(targets)
         
         for hub in hubs:
             targets.append({"type": "hub", "id": hub, "nodes": [hub]})
+            
+        print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {len(hubs)} global hubs)")
             
         inheritance_map = topology.get("theme_inheritance", [])
         synth_ctx = SynthesisContext(
@@ -188,11 +191,11 @@ class SynthesisPipeline:
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
             
-            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem):
+            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, node_count):
                 async with sem:
                     pass_name = "normalized" if is_normalized else "raw"
                     target_dir = norm_dir if is_normalized else raw_dir
-                    print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name}...")
+                    print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                     last_llm_responses.set([])
                     try:
                         res = await active_agent.run(json.dumps(subset), deps=synth_ctx)
@@ -211,7 +214,7 @@ class SynthesisPipeline:
                     if run_norm:
                         norm_subset = [t for t in refined_triplets if str(t.get('subject', '')).lower().strip() in target_nodes or str(t.get('object', '')).lower().strip() in target_nodes]
                         if norm_subset:
-                            tasks.append(run_single_pass(norm_subset, True, i, target["type"], target["id"], sem))
+                            tasks.append(run_single_pass(norm_subset, True, i, target["type"], target["id"], sem, len(target_nodes)))
                     
                     if run_raw:
                         raw_subset = []
@@ -223,7 +226,7 @@ class SynthesisPipeline:
                                 if subj in target_nodes or obj in target_nodes:
                                     raw_subset.append(raw_t)
                         if raw_subset:
-                            tasks.append(run_single_pass(raw_subset, False, i, target["type"], target["id"], sem))
+                            tasks.append(run_single_pass(raw_subset, False, i, target["type"], target["id"], sem, len(target_nodes)))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
@@ -232,11 +235,12 @@ class SynthesisPipeline:
         else:
             for i, target in enumerate(targets, start=1):
                 target_nodes = set(target["nodes"])
-                print(f"      -> Processing Target {i}/{len(targets)} ({target['type']} {target['id']})")
+                node_count = len(target_nodes)
                 
                 if run_norm:
                     norm_subset = [t for t in refined_triplets if str(t.get('subject', '')).lower().strip() in target_nodes or str(t.get('object', '')).lower().strip() in target_nodes]
                     if norm_subset:
+                        print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - normalized (Size: {node_count} nodes, {len(norm_subset)} triplets)...")
                         last_llm_responses.set([])
                         try:
                             norm_res = active_agent.run_sync(json.dumps(norm_subset), deps=synth_ctx)
@@ -257,6 +261,7 @@ class SynthesisPipeline:
                                 raw_subset.append(raw_t)
                     
                     if raw_subset:
+                        print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - raw (Size: {node_count} nodes, {len(raw_subset)} triplets)...")
                         last_llm_responses.set([])
                         try:
                             raw_res = active_agent.run_sync(json.dumps(raw_subset), deps=synth_ctx)
