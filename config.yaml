@@ -208,7 +208,7 @@ synthesis:
   # Entity threshold for Stage 4 target qualification (Default: 5).
   # Communities/clusters with < 5 entities are filtered from individual schema extraction
   # and their entities are routed directly to Phase 1 Enum synthesis (enums.py) so zero data is lost.
-  min_cluster_size: 5
+  min_cluster_size: 7
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.

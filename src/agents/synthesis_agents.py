@@ -83,7 +83,10 @@ pydantic_model = LoggingModel(resolved_model)
 # Setup stage-specific context limit and model settings
 synthesis_cap = settings.get('synthesis', {}).get('context_window_cap', 16384)
 model_settings = ModelSettings(
-    max_tokens=synthesis_cap,
+    # Avoid setting max_tokens for Ollama to prevent pydantic-ai from sending max_completion_tokens, which Ollama rejects
+    **({"max_tokens": 4096} if provider != 'ollama' else {}),
+    # Force tool_choice="auto" for Ollama to prevent pydantic-ai from sending "required", which Ollama rejects
+    **({"tool_choice": "auto"} if provider == 'ollama' else {}),
     extra_body={"options": {"num_ctx": synthesis_cap}} if provider == 'ollama' else {}
 )
 
