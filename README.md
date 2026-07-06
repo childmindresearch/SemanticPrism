@@ -8,7 +8,7 @@ The purpose of SemanticPrism is to solve the "hallucination and overlap" problem
 
 ## Overall Pipeline Execution Flow
 
-The entire pipeline is orchestratable via the master script [run_pipeline.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_pipeline.py).
+The entire pipeline is orchestratable via the master script [run_pipeline.py](run_pipeline.py).
 To run all stages in sequence, execute:
 ```bash
 python3 run_pipeline.py
@@ -21,7 +21,7 @@ This execution uses separate subprocesses for each stage to ensure that GPU VRAM
 
 The pipeline runs sequentially across four stages, utilizing outputs from preceding runs.
 
-### Stage 1: Extraction ([run_stage_1.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_1.py))
+### Stage 1: Extraction ([run_stage_1.py](run_stage_1.py))
 **Purpose:** To ingest unstructured source texts and extract raw semantic relationships and global themes.
 
 *   **Global Theme Discovery:** The pipeline scans the input documents in sliding text chunks to identify overarching "Master Themes" (e.g., *Symptomology*, *Interventions*, *Accommodations*).
@@ -35,8 +35,19 @@ The pipeline runs sequentially across four stages, utilizing outputs from preced
 
 ---
 
-### Stage 2: Refinement ([run_stage_2.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_2.py))
+### Stage 2: Refinement ([run_stage_2.py](run_stage_2.py))
 **Purpose:** To clean, deduplicate, and normalize the raw, noisy triplets into a standardized, clean taxonomy.
+
+```mermaid
+graph TD
+    RawTriplets["original_triplets.json"] --> LexicalNorm["Lexical Normalization"]
+    LexicalNorm --> Embeddings["Sentence Transformers Embeddings"]
+    Embeddings --> CosineClust["Agglomerative Clustering (Cosine Distance)"]
+    CosineClust --> CentroidResolv["Centroid Representative Term Selection"]
+    CentroidResolv --> TaxoLifting["Taxonomic Lifting (LLM Hypernym Resolution)"]
+    TaxoLifting --> Remap["Triple Remapping & Theme-Embedding Mapping"]
+    Remap --> RefinedOut["refined_triplets.json & taxonomic_map.json"]
+```
 
 *   **Lexical Normalization:** Cleans text syntax (stripping underscores, lowercase formatting) and uses batch LLM agents to correct spelling mistakes, expand acronyms, and normalize phrasing.
     *   *Underlying Detail (Preventing Graph Fragmentation):* Ensures that variations such as *"WISC-5"*, *"wisc-v"*, and *"wisc 5"* map to the exact same string. Otherwise, they would form disjoint nodes, fracturing the graph topology.
@@ -56,7 +67,7 @@ The pipeline runs sequentially across four stages, utilizing outputs from preced
 
 ---
 
-### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_3.py))
+### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](run_stage_3.py))
 **Purpose:** To map refined triplets into a network graph and execute **Dual-Path Topological Partitioning** to discover workflow sequences and structural category taxonomies.
 
 ```mermaid
@@ -65,14 +76,14 @@ graph TD
     Graph --> HubDetect{"Hub Detection"}
     
     subgraph Path 1: Community Workflow (Leiden)
-        HubDetect -->|Participation Coeff >= 0.65 OR Betweenness Top 5%| Hubs1["Prune Global Hubs"]
+        HubDetect -->|"Participation Coeff >= 0.65 OR Betweenness Top 5%"| Hubs1["Prune Global Hubs"]
         Hubs1 --> GraphPruned1["Pruned Subgraph"]
         GraphPruned1 --> Leiden["Leiden Modularity Algorithm"]
         Leiden --> CommPart["Leiden Spoke Communities"]
     end
 
     subgraph Path 2: Embedding Categorical (Node2Vec)
-        HubDetect -->|Participation Coeff >= 0.45 OR Modularity Vitality < -0.005| Hubs2["Prune Global Hubs"]
+        HubDetect -->|"Participation Coeff >= 0.45 OR Modularity Vitality < -0.005"| Hubs2["Prune Global Hubs"]
         Hubs2 --> GraphPruned2["Pruned Subgraph"]
         GraphPruned2 --> Node2Vec["Node2Vec Random Walks & Embeddings"]
         Node2Vec --> KMeans["K-Means Silhouette Optimization"]
@@ -104,34 +115,54 @@ This diagram maps how raw partitions and metrics exported by Stage 3 are dynamic
 ```mermaid
 graph TD
     subgraph Stage 3 Outputs
+        direction TB
         S3_Comm["outputs/03_topology/community/topology_partitions.json"]
         S3_Emb["outputs/03_topology/embedding/topology_partitions.json"]
     end
 
     subgraph Config Ingestion
-        Conf["config.yaml"] -->|min_cluster_size / max_hub_targets| TargetResolv{"Target Resolver"}
+        direction TB
+        Conf["config.yaml"]
     end
 
-    S3_Comm -->|Leiden Communities & Hubs| TargetResolv
-    S3_Emb -->|Structural Clusters & Hubs| TargetResolv
-
-    subgraph Stage 4 Target Routing
-        TargetResolv -->|Nodes < min_cluster_size OR Low-Centrality Hubs| Phase1["Phase 1: Enums Aggregation"]
-        TargetResolv -->|Nodes >= min_cluster_size| Phase2a["Phase 2a: Spoke Communities"]
-        TargetResolv -->|Top N Hubs| Phase2b["Phase 2b: Global Hub Models"]
+    subgraph Routing Engine
+        direction TB
+        TargetResolv{"Target Resolver"}
     end
 
-    Phase1 -->|enums.py| PassConsol["Phase 3: Consolidation"]
-    Phase2a -->|0X_community_name.py| PassConsol
-    Phase2b -->|hubs.py| PassConsol
+    S3_Comm --> TargetResolv
+    S3_Emb --> TargetResolv
+    Conf -->|"min_cluster_size & max_hub_targets"| TargetResolv
+
+    subgraph Stage 4 Targets
+        direction TB
+        Phase1["Phase 1: Enums Aggregation"]
+        Phase2a["Phase 2a: Spoke Communities"]
+        Phase2b["Phase 2b: Global Hub Models"]
+    end
+
+    TargetResolv -->|"Size < min_cluster_size or Rank > max_hub_targets"| Phase1
+    TargetResolv -->|"Size >= min_cluster_size"| Phase2a
+    TargetResolv -->|"Top N Hubs"| Phase2b
+
+    subgraph Pipeline Progression
+        direction TB
+        PassConsol["Phase 3: Consolidation"]
+        PassFinal["Phase 4: Comprehensive Ontology"]
+        RDB["Downstream Relational DB Mapping"]
+    end
+
+    Phase1 --> PassConsol
+    Phase2a --> PassConsol
+    Phase2b --> PassConsol
     
-    PassConsol -->|master_ontology.py| PassFinal["Phase 4: Master Integration"]
-    PassFinal -->|comprehensive_ontology.py| RDB["Downstream Relational DB Mapping"]
+    PassConsol --> PassFinal
+    PassFinal --> RDB
 ```
 
 ---
 
-### Stage 4: Synthesis Engine ([run_stage_4.py](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/run_stage_4.py))
+### Stage 4: Synthesis Engine ([run_stage_4.py](run_stage_4.py))
 **Purpose:** To translate mathematical graph partitions back into deployable Python Pydantic ontologies using path-isolated, multi-pass LLM synthesis.
 
 ```mermaid
@@ -143,21 +174,21 @@ graph TD
     end
 
     subgraph Phase 1: Enums Synthesis
-        S3_JSON -->|Filter: Size < min_cluster_size OR Hub Rank > max_hub_targets| EnumNodes["Enum Nodes Set"]
+        S3_JSON -->|"Filter: Size < min_cluster_size OR Hub Rank > max_hub_targets"| EnumNodes["Enum Nodes Set"]
         EnumNodes --> EnumLLM["Orphan Enum Agent"]
         EnumLLM --> EnumsPy["enums.py"]
     end
 
     subgraph Phase 2: Schema Generation
-        S3_JSON -->|Filter: Size >= min_cluster_size| SpokeNodes["Spoke Nodes & Hubs"]
-        Norm_Triplets -->|PageRank & Intra-Edge Pruning| Pruning["Triplet Payload Cap"]
-        Raw_Triplets -->|PageRank & Intra-Edge Pruning| Pruning
+        S3_JSON -->|"Filter: Size >= min_cluster_size"| SpokeNodes["Spoke Nodes & Hubs"]
+        Norm_Triplets -->|"PageRank & Intra-Edge Pruning"| Pruning["Triplet Payload Cap"]
+        Raw_Triplets -->|"PageRank & Intra-Edge Pruning"| Pruning
         
-        Pruning -->|Capped Payload <= max_triplets_per_target| SchemaLLM["Schema Synthesis Agents"]
-        EnumsPy -->|Injected Context| SchemaLLM
+        Pruning -->|"Capped Payload <= max_triplets_per_target"| SchemaLLM["Schema Synthesis Agents"]
+        EnumsPy -->|"Injected Context"| SchemaLLM
         
-        SchemaLLM -->|Pass A: Normalized| NormSchemas["normalized/ schemas"]
-        SchemaLLM -->|Pass B: Raw| RawSchemas["raw/ schemas"]
+        SchemaLLM -->|"Pass A: Normalized"| NormSchemas["normalized/ schemas"]
+        SchemaLLM -->|"Pass B: Raw"| RawSchemas["raw/ schemas"]
     end
 
     subgraph Phase 3: Consolidation
@@ -204,7 +235,7 @@ graph TD
 
 ## Configuration Parameter Guide (`config.yaml`)
 
-The entire execution of SemanticPrism is parameterized through [config.yaml](file:///Users/david.lobue/Desktop/Agents/Refactor/SemanticPrism/config.yaml):
+The entire execution of SemanticPrism is parameterized through [config.yaml](config.yaml):
 
 | Config Section | Parameter | Type | Default | Description & Selection Guidance |
 | :--- | :--- | :--- | :--- | :--- |
