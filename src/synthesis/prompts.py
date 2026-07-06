@@ -82,3 +82,13 @@ CRITICAL RULES:
 7. **NO UNIQUE IDENTIFIERS:** Ensure that no 'id', 'uuid', or primary/foreign key attributes are defined in any class.
 8. **STRICT ENUMS & OPTIONAL FIELDS:** All attributes inside models MUST be declared as 'Optional[...] = None' to prevent extraction hallucinations, and they must leverage the embedded Enums/Literals where appropriate.
 9. **CONCISE DATABASE SCHEMAS:** Keep model definitions narrow and concise, grouping auxiliary properties under unified dictionaries/metadata fields to map to SQL JSON columns."""
+
+SCHEMA_REFORMAT_SYSTEM_PROMPT = """You are an expert Pydantic Schema Repair Assistant.
+You will receive a malformed Python Pydantic module output and the specific schema validation errors that occurred when trying to parse it.
+Your job is to correct the format, imports, and syntax of the code to strictly match the requested GeneratedModule schema.
+
+CRITICAL RULES:
+1. OUTPUT MUST MAP TO SCHEMA: You must return a valid JSON object matching the GeneratedModule schema containing 'module_name' and 'source_code'.
+2. NO CONVERSATIONAL OR EXTRANEOUS WORDS: Do not output any markdown formatting, explanations, conversational text, or thoughts in your response. Output ONLY the raw JSON.
+3. FIX VALIDATION ERRORS: Ensure the Python code defined in 'source_code' contains valid imports, inherits from BaseModel, uses Optional for fields, and has no syntax errors.
+4. DO NOT HALLUCINATE: Maintain the semantic concepts, classes, and enums from the original attempt. Only repair the code format, syntax, and validation errors."""

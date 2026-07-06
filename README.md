@@ -75,14 +75,14 @@ graph TD
     Triplets["refined_triplets.json"] --> Graph["NetworkX Directed Graph"]
     Graph --> HubDetect{"Hub Detection"}
     
-    subgraph Path 1: Community Workflow (Leiden)
+    subgraph path1 ["Path 1: Community Workflow (Leiden)"]
         HubDetect -->|"Participation Coeff >= 0.65 OR Betweenness Top 5%"| Hubs1["Prune Global Hubs"]
         Hubs1 --> GraphPruned1["Pruned Subgraph"]
         GraphPruned1 --> Leiden["Leiden Modularity Algorithm"]
         Leiden --> CommPart["Leiden Spoke Communities"]
     end
 
-    subgraph Path 2: Embedding Categorical (Node2Vec)
+    subgraph path2 ["Path 2: Embedding Categorical (Node2Vec)"]
         HubDetect -->|"Participation Coeff >= 0.45 OR Modularity Vitality < -0.005"| Hubs2["Prune Global Hubs"]
         Hubs2 --> GraphPruned2["Pruned Subgraph"]
         GraphPruned2 --> Node2Vec["Node2Vec Random Walks & Embeddings"]
@@ -114,18 +114,18 @@ This diagram maps how raw partitions and metrics exported by Stage 3 are dynamic
 
 ```mermaid
 graph TD
-    subgraph Stage 3 Outputs
+    subgraph stage3_outputs ["Stage 3 Outputs"]
         direction TB
         S3_Comm["outputs/03_topology/community/topology_partitions.json"]
         S3_Emb["outputs/03_topology/embedding/topology_partitions.json"]
     end
 
-    subgraph Config Ingestion
+    subgraph config_ingestion ["Config Ingestion"]
         direction TB
         Conf["config.yaml"]
     end
 
-    subgraph Routing Engine
+    subgraph routing_engine ["Routing Engine"]
         direction TB
         TargetResolv{"Target Resolver"}
     end
@@ -134,7 +134,7 @@ graph TD
     S3_Emb --> TargetResolv
     Conf -->|"min_cluster_size & max_hub_targets"| TargetResolv
 
-    subgraph Stage 4 Targets
+    subgraph stage4_targets ["Stage 4 Targets"]
         direction TB
         Phase1["Phase 1: Enums Aggregation"]
         Phase2a["Phase 2a: Spoke Communities"]
@@ -145,7 +145,7 @@ graph TD
     TargetResolv -->|"Size >= min_cluster_size"| Phase2a
     TargetResolv -->|"Top N Hubs"| Phase2b
 
-    subgraph Pipeline Progression
+    subgraph pipeline_progression ["Pipeline Progression"]
         direction TB
         PassConsol["Phase 3: Consolidation"]
         PassFinal["Phase 4: Comprehensive Ontology"]
@@ -167,19 +167,19 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph Input Parsing
+    subgraph input_parsing ["Input Parsing"]
         S3_JSON["topology_partitions.json"]
         Norm_Triplets["refined_triplets.json"]
         Raw_Triplets["original_triplets.json"]
     end
 
-    subgraph Phase 1: Enums Synthesis
+    subgraph phase1 ["Phase 1: Enums Synthesis"]
         S3_JSON -->|"Filter: Size < min_cluster_size OR Hub Rank > max_hub_targets"| EnumNodes["Enum Nodes Set"]
         EnumNodes --> EnumLLM["Orphan Enum Agent"]
         EnumLLM --> EnumsPy["enums.py"]
     end
 
-    subgraph Phase 2: Schema Generation
+    subgraph phase2 ["Phase 2: Schema Generation"]
         S3_JSON -->|"Filter: Size >= min_cluster_size"| SpokeNodes["Spoke Nodes & Hubs"]
         Norm_Triplets -->|"PageRank & Intra-Edge Pruning"| Pruning["Triplet Payload Cap"]
         Raw_Triplets -->|"PageRank & Intra-Edge Pruning"| Pruning
@@ -191,14 +191,14 @@ graph TD
         SchemaLLM -->|"Pass B: Raw"| RawSchemas["raw/ schemas"]
     end
 
-    subgraph Phase 3: Consolidation
+    subgraph phase3 ["Phase 3: Consolidation"]
         NormSchemas --> ConsolLLM["Consolidation Agent"]
         RawSchemas --> ConsolLLM
         ConsolLLM --> MasterNorm["normalized/master_ontology.py"]
         ConsolLLM --> MasterRaw["raw/master_ontology.py"]
     end
 
-    subgraph Phase 4: Master Integration
+    subgraph phase4 ["Phase 4: Master Integration"]
         MasterNorm --> FinalLLM["Comprehensive Ontology Agent"]
         MasterRaw --> FinalLLM
         FinalLLM --> CompOnt["comprehensive_ontology.py"]

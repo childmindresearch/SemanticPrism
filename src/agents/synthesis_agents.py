@@ -120,7 +120,7 @@ leiden_schema_agent = Agent(
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT,
     model_settings=model_settings,
-    retries=3
+    retries=1
 )
 
 @leiden_schema_agent.system_prompt
@@ -134,7 +134,7 @@ node2vec_schema_agent = Agent(
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT,
     model_settings=model_settings,
-    retries=3
+    retries=1
 )
 
 @node2vec_schema_agent.system_prompt
@@ -157,4 +157,13 @@ comprehensive_ontology_agent = Agent(
     system_prompt=prompts.FINAL_ONTOLOGY_SYSTEM_PROMPT,
     model_settings=model_settings,
     retries=3
+)
+
+# Agent 5: Schema Reformat Agent
+schema_reformat_agent = Agent(
+    model=pydantic_model,
+    output_type=schemas.GeneratedModule,
+    system_prompt=prompts.SCHEMA_REFORMAT_SYSTEM_PROMPT,
+    model_settings=model_settings,
+    retries=1
 )

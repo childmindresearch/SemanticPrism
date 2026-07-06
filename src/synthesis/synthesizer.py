@@ -13,6 +13,7 @@ from src.agents.synthesis_agents import (
     OrphanContext, SynthesisContext,
     orphan_agent, leiden_schema_agent, node2vec_schema_agent,
     consolidation_agent, comprehensive_ontology_agent,
+    schema_reformat_agent,
     last_llm_responses
 )
 
@@ -72,7 +73,8 @@ class SynthesisPipeline:
         print(f"      -> Entity Threshold (min_cluster_size): {min_cluster_size}")
 
         # Setup logging
-        log_dir = Path("logs")
+        outputs_dir = self.config.get('directories', {}).get('outputs', 'outputs')
+        log_dir = Path(outputs_dir) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"synthesis_{path_type}_errors.log"
         
@@ -88,31 +90,55 @@ class SynthesisPipeline:
             error_msg = f"[Synthesis {path_type}] Error generating {pass_name} schema {i} ({target_id}): {error}"
             log_error(error_msg)
             
+            def log_detail(msg: str):
+                with open(log_file, "a") as lf:
+                    lf.write(f"[{datetime.now().isoformat()}] {msg}\n")
+            
             cause = getattr(error, '__cause__', None)
             if isinstance(cause, ValidationError):
-                log_error("      -> Pydantic Validation Error Details:")
+                log_detail("      -> Pydantic Validation Error Details:")
                 try:
                     for err in cause.errors():
                         loc = " -> ".join(str(x) for x in err.get("loc", []))
-                        log_error(f"         Location: {loc}")
-                        log_error(f"         Type:     {err.get('type')}")
-                        log_error(f"         Message:  {err.get('msg')}")
-                        log_error(f"         Input:    {err.get('input')}")
+                        log_detail(f"         Location: {loc}")
+                        log_detail(f"         Type:     {err.get('type')}")
+                        log_detail(f"         Message:  {err.get('msg')}")
+                        log_detail(f"         Input:    {err.get('input')}")
                 except Exception:
-                    log_error(f"         {cause}")
+                    log_detail(f"         {cause}")
             elif cause:
-                log_error(f"      -> Underlying Cause: {cause}")
+                log_detail(f"      -> Underlying Cause: {cause}")
                 
             if responses:
-                log_error(f"      -> Captured LLM Outputs (Attempts: {len(responses)}):")
+                log_detail(f"      -> Captured LLM Outputs (Attempts: {len(responses)}):")
                 for attempt_idx, resp in enumerate(responses, start=1):
-                    log_error(f"         [Attempt {attempt_idx} Output Preview]:")
+                    log_detail(f"         [Attempt {attempt_idx} Output Preview]:")
                     for part in resp:
                         part_str = str(part)
                         if len(part_str) > 1000:
                             part_str = part_str[:1000] + "\n... [truncated]"
                         indented = "\n".join(f"            {line}" for line in part_str.splitlines())
-                        log_error(indented)
+                        log_detail(indented)
+                        
+        def extract_malformed_text(messages, exception: Exception) -> str:
+            from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+            for msg in reversed(messages):
+                if isinstance(msg, ModelResponse):
+                    tool_calls = [p for p in msg.parts if isinstance(p, ToolCallPart)]
+                    if tool_calls:
+                        args = tool_calls[0].args
+                        return json.dumps(args, indent=2) if isinstance(args, dict) else str(args)
+                    text_parts = [p for p in msg.parts if isinstance(p, TextPart)]
+                    if text_parts:
+                        content = text_parts[0].content
+                        if "```" in content:
+                            lines = content.splitlines()
+                            cleaned = [l for l in lines if not l.strip().startswith("```")]
+                            content = "\n".join(cleaned)
+                        return content.strip()
+            if exception:
+                return str(exception)
+            return ""
         
         # Path-isolated Output directories
         output_base_dir = Path("outputs/schemas") / path_type
@@ -230,13 +256,34 @@ class SynthesisPipeline:
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                     last_llm_responses.set([])
-                    try:
-                        res = await active_agent.run(json.dumps(subset), deps=synth_ctx)
-                        filename = f"{i:02d}_{res.output.module_name}.py"
-                        with open(target_dir / filename, "w") as f:
-                            f.write(clean_python_code(res.output.source_code))
-                    except Exception as e:
-                        log_detailed_synthesis_error(e, last_llm_responses.get(), pass_name, f"{target_type} {target_id}", i)
+                    from pydantic_ai import capture_run_messages
+                    with capture_run_messages() as messages:
+                        try:
+                            res = await active_agent.run(json.dumps(subset), deps=synth_ctx)
+                            filename = f"{i:02d}_{res.output.module_name}.py"
+                            with open(target_dir / filename, "w") as f:
+                                f.write(clean_python_code(res.output.source_code))
+                        except Exception as e:
+                            # Reformat attempt (3rd attempt after 2 failures)
+                            malformed_text = extract_malformed_text(messages, e)
+                            print(f"            [Warning] Initial {pass_name} extraction failed for Target {i} after 2 tries. Running Schema Reformat Agent...")
+                            
+                            reformat_prompt = (
+                                f"Original Schema Generation Task context was:\n{json.dumps(subset)}\n\n"
+                                f"The malformed Python output from the failed attempts was:\n{malformed_text}\n\n"
+                                f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                                f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                                f"The output must consist strictly of the Pydantic GeneratedModule schema (with 'module_name' and 'source_code') "
+                                f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. Focus strictly on fixing the validation error."
+                            )
+                            try:
+                                res = await schema_reformat_agent.run(reformat_prompt)
+                                filename = f"{i:02d}_{res.output.module_name}.py"
+                                with open(target_dir / filename, "w") as f:
+                                    f.write(clean_python_code(res.output.source_code))
+                                print(f"            -> Reformat successful for Target {i}!")
+                            except Exception as reformat_err:
+                                log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), pass_name, f"{target_type} {target_id}", i)
 
             async def run_phase2_async():
                 sem = asyncio.Semaphore(max_async)
@@ -331,26 +378,68 @@ class SynthesisPipeline:
                     if norm_subset:
                         print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - normalized (Size: {node_count} nodes, {len(norm_subset)} triplets)...")
                         last_llm_responses.set([])
-                        try:
-                            norm_res = active_agent.run_sync(json.dumps(norm_subset), deps=synth_ctx)
-                            filename = f"{i:02d}_{norm_res.output.module_name}.py"
-                            with open(norm_dir / filename, "w") as f:
-                                f.write(clean_python_code(norm_res.output.source_code))
-                        except Exception as e:
-                            log_detailed_synthesis_error(e, last_llm_responses.get(), "normalized", f"{target['type']} {target['id']}", i)
+                        from pydantic_ai import capture_run_messages
+                        with capture_run_messages() as messages:
+                            try:
+                                norm_res = active_agent.run_sync(json.dumps(norm_subset), deps=synth_ctx)
+                                filename = f"{i:02d}_{norm_res.output.module_name}.py"
+                                with open(norm_dir / filename, "w") as f:
+                                    f.write(clean_python_code(norm_res.output.source_code))
+                            except Exception as e:
+                                # Reformat attempt (3rd attempt after 2 failures)
+                                malformed_text = extract_malformed_text(messages, e)
+                                print(f"            [Warning] Initial normalized extraction failed for Target {i} after 2 tries. Running Schema Reformat Agent...")
+                                
+                                reformat_prompt = (
+                                    f"Original Schema Generation Task context was:\n{json.dumps(norm_subset)}\n\n"
+                                    f"The malformed Python output from the failed attempts was:\n{malformed_text}\n\n"
+                                    f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                                    f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                                    f"The output must consist strictly of the Pydantic GeneratedModule schema (with 'module_name' and 'source_code') "
+                                    f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. Focus strictly on fixing the validation error."
+                                )
+                                try:
+                                    norm_res = schema_reformat_agent.run_sync(reformat_prompt)
+                                    filename = f"{i:02d}_{norm_res.output.module_name}.py"
+                                    with open(norm_dir / filename, "w") as f:
+                                        f.write(clean_python_code(norm_res.output.source_code))
+                                    print(f"            -> Reformat successful for Target {i}!")
+                                except Exception as reformat_err:
+                                    log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), "normalized", f"{target['type']} {target['id']}", i)
 
                 if run_raw:
                     raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
                     if raw_subset:
                         print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - raw (Size: {node_count} nodes, {len(raw_subset)} triplets)...")
                         last_llm_responses.set([])
-                        try:
-                            raw_res = active_agent.run_sync(json.dumps(raw_subset), deps=synth_ctx)
-                            filename = f"{i:02d}_{raw_res.output.module_name}.py"
-                            with open(raw_dir / filename, "w") as f:
-                                f.write(clean_python_code(raw_res.output.source_code))
-                        except Exception as e:
-                            log_detailed_synthesis_error(e, last_llm_responses.get(), "raw", f"{target['type']} {target['id']}", i)
+                        from pydantic_ai import capture_run_messages
+                        with capture_run_messages() as messages:
+                            try:
+                                raw_res = active_agent.run_sync(json.dumps(raw_subset), deps=synth_ctx)
+                                filename = f"{i:02d}_{raw_res.output.module_name}.py"
+                                with open(raw_dir / filename, "w") as f:
+                                    f.write(clean_python_code(raw_res.output.source_code))
+                            except Exception as e:
+                                # Reformat attempt (3rd attempt after 2 failures)
+                                malformed_text = extract_malformed_text(messages, e)
+                                print(f"            [Warning] Initial raw extraction failed for Target {i} after 2 tries. Running Schema Reformat Agent...")
+                                
+                                reformat_prompt = (
+                                    f"Original Schema Generation Task context was:\n{json.dumps(raw_subset)}\n\n"
+                                    f"The malformed Python output from the failed attempts was:\n{malformed_text}\n\n"
+                                    f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                                    f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                                    f"The output must consist strictly of the Pydantic GeneratedModule schema (with 'module_name' and 'source_code') "
+                                    f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. Focus strictly on fixing the validation error."
+                                )
+                                try:
+                                    raw_res = schema_reformat_agent.run_sync(reformat_prompt)
+                                    filename = f"{i:02d}_{raw_res.output.module_name}.py"
+                                    with open(raw_dir / filename, "w") as f:
+                                        f.write(clean_python_code(raw_res.output.source_code))
+                                    print(f"            -> Reformat successful for Target {i}!")
+                                except Exception as reformat_err:
+                                    log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), "raw", f"{target['type']} {target['id']}", i)
 
         # Phase 3: Global Consolidation
         print(f"   -> [{path_label}] Phase 3: Consolidation...")
