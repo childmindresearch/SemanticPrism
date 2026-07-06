@@ -213,6 +213,10 @@ synthesis:
   # Hubs exceeding this limit are routed directly to Phase 1 Enum synthesis (enums.py)
   # to prevent database schema bloat on large-scale datasets.
   max_hub_targets: 10
+  # Maximum number of triplets to send to the LLM per schema generation target.
+  # Subsets exceeding this cap are pruned based on PageRank and community status
+  # to prevent token window overflow and model confusion on dense graphs.
+  max_triplets_per_target: 1000
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.

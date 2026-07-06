@@ -208,23 +208,48 @@ class SynthesisPipeline:
             async def run_phase2_async():
                 sem = asyncio.Semaphore(max_async)
                 tasks = []
+                max_triplets_cap = self.config.get('synthesis', {}).get('max_triplets_per_target', 1000)
+                
                 for i, target in enumerate(targets, start=1):
                     target_nodes = set(target["nodes"])
                     
+                    # Find all triplet indices associated with this target's nodes
+                    matching_indices = []
+                    for idx, refined_t in enumerate(refined_triplets):
+                        subj = str(refined_t.get('subject', '')).lower().strip()
+                        obj = str(refined_t.get('object', '')).lower().strip()
+                        if subj in target_nodes or obj in target_nodes:
+                            matching_indices.append(idx)
+                            
+                    # Prune matching indices if they exceed the cap based on centrality PageRank and intra-community status
+                    if len(matching_indices) > max_triplets_cap:
+                        metrics = topology.get("node_metrics", {})
+                        scored_indices = []
+                        for idx in matching_indices:
+                            refined_t = refined_triplets[idx]
+                            subj = str(refined_t.get('subject', '')).lower().strip()
+                            obj = str(refined_t.get('object', '')).lower().strip()
+                            
+                            subj_pr = metrics.get(subj, {}).get("pagerank", 0.0)
+                            obj_pr = metrics.get(obj, {}).get("pagerank", 0.0)
+                            base_score = subj_pr + obj_pr
+                            
+                            # Prioritize intra-community connections
+                            if (subj in target_nodes) and (obj in target_nodes):
+                                base_score += 1.0
+                                
+                            scored_indices.append((base_score, idx))
+                            
+                        scored_indices.sort(key=lambda x: x[0], reverse=True)
+                        matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
+                    
                     if run_norm:
-                        norm_subset = [t for t in refined_triplets if str(t.get('subject', '')).lower().strip() in target_nodes or str(t.get('object', '')).lower().strip() in target_nodes]
+                        norm_subset = [refined_triplets[idx] for idx in matching_indices]
                         if norm_subset:
                             tasks.append(run_single_pass(norm_subset, True, i, target["type"], target["id"], sem, len(target_nodes)))
                     
                     if run_raw:
-                        raw_subset = []
-                        for idx, raw_t in enumerate(original_triplets):
-                            if idx < len(refined_triplets):
-                                refined_t = refined_triplets[idx]
-                                subj = str(refined_t.get('subject', '')).lower().strip()
-                                obj = str(refined_t.get('object', '')).lower().strip()
-                                if subj in target_nodes or obj in target_nodes:
-                                    raw_subset.append(raw_t)
+                        raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
                         if raw_subset:
                             tasks.append(run_single_pass(raw_subset, False, i, target["type"], target["id"], sem, len(target_nodes)))
                 
@@ -233,12 +258,43 @@ class SynthesisPipeline:
 
             asyncio.run(run_phase2_async())
         else:
+            max_triplets_cap = self.config.get('synthesis', {}).get('max_triplets_per_target', 1000)
             for i, target in enumerate(targets, start=1):
                 target_nodes = set(target["nodes"])
                 node_count = len(target_nodes)
                 
+                # Find all triplet indices associated with this target's nodes
+                matching_indices = []
+                for idx, refined_t in enumerate(refined_triplets):
+                    subj = str(refined_t.get('subject', '')).lower().strip()
+                    obj = str(refined_t.get('object', '')).lower().strip()
+                    if subj in target_nodes or obj in target_nodes:
+                        matching_indices.append(idx)
+                        
+                # Prune matching indices if they exceed the cap based on centrality PageRank and intra-community status
+                if len(matching_indices) > max_triplets_cap:
+                    metrics = topology.get("node_metrics", {})
+                    scored_indices = []
+                    for idx in matching_indices:
+                        refined_t = refined_triplets[idx]
+                        subj = str(refined_t.get('subject', '')).lower().strip()
+                        obj = str(refined_t.get('object', '')).lower().strip()
+                        
+                        subj_pr = metrics.get(subj, {}).get("pagerank", 0.0)
+                        obj_pr = metrics.get(obj, {}).get("pagerank", 0.0)
+                        base_score = subj_pr + obj_pr
+                        
+                        # Prioritize intra-community connections
+                        if (subj in target_nodes) and (obj in target_nodes):
+                            base_score += 1.0
+                            
+                        scored_indices.append((base_score, idx))
+                        
+                    scored_indices.sort(key=lambda x: x[0], reverse=True)
+                    matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
+                
                 if run_norm:
-                    norm_subset = [t for t in refined_triplets if str(t.get('subject', '')).lower().strip() in target_nodes or str(t.get('object', '')).lower().strip() in target_nodes]
+                    norm_subset = [refined_triplets[idx] for idx in matching_indices]
                     if norm_subset:
                         print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - normalized (Size: {node_count} nodes, {len(norm_subset)} triplets)...")
                         last_llm_responses.set([])
@@ -251,15 +307,7 @@ class SynthesisPipeline:
                             log_error(f"[Synthesis {path_type}] Error generating normalized schema {i} ({target['type']} {target['id']}): {e}")
 
                 if run_raw:
-                    raw_subset = []
-                    for idx, raw_t in enumerate(original_triplets):
-                        if idx < len(refined_triplets):
-                            refined_t = refined_triplets[idx]
-                            subj = str(refined_t.get('subject', '')).lower().strip()
-                            obj = str(refined_t.get('object', '')).lower().strip()
-                            if subj in target_nodes or obj in target_nodes:
-                                raw_subset.append(raw_t)
-                    
+                    raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
                     if raw_subset:
                         print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - raw (Size: {node_count} nodes, {len(raw_subset)} triplets)...")
                         last_llm_responses.set([])
