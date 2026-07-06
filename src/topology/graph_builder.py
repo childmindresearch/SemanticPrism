@@ -553,7 +553,8 @@ class TopologyPipeline:
 
         for u, v, data in dg.edges(data=True):
             if u in hubs_set and v in hubs_set:
-                net_hubs_only.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 215, 0, 0.8)", width=3)
+                if hub_cluster_map.get(u) == hub_cluster_map.get(v):
+                    net_hubs_only.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 215, 0, 0.8)", width=3)
                 
         net_hubs_only.set_options(options_json)
         net_hubs_only.save_graph(str(vis_dir / "interactive_global_hubs.html"))
