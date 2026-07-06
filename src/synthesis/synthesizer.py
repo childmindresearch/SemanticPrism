@@ -80,6 +80,39 @@ class SynthesisPipeline:
             print(msg)
             with open(log_file, "a") as lf:
                 lf.write(f"[{datetime.now().isoformat()}] {msg}\n")
+                
+        def log_detailed_synthesis_error(error: Exception, responses: list, pass_name: str, target_id: Any, i: int):
+            from pydantic import ValidationError
+            from pydantic_ai.exceptions import UnexpectedModelBehavior
+            
+            error_msg = f"[Synthesis {path_type}] Error generating {pass_name} schema {i} ({target_id}): {error}"
+            log_error(error_msg)
+            
+            cause = getattr(error, '__cause__', None)
+            if isinstance(cause, ValidationError):
+                log_error("      -> Pydantic Validation Error Details:")
+                try:
+                    for err in cause.errors():
+                        loc = " -> ".join(str(x) for x in err.get("loc", []))
+                        log_error(f"         Location: {loc}")
+                        log_error(f"         Type:     {err.get('type')}")
+                        log_error(f"         Message:  {err.get('msg')}")
+                        log_error(f"         Input:    {err.get('input')}")
+                except Exception:
+                    log_error(f"         {cause}")
+            elif cause:
+                log_error(f"      -> Underlying Cause: {cause}")
+                
+            if responses:
+                log_error(f"      -> Captured LLM Outputs (Attempts: {len(responses)}):")
+                for attempt_idx, resp in enumerate(responses, start=1):
+                    log_error(f"         [Attempt {attempt_idx} Output Preview]:")
+                    for part in resp:
+                        part_str = str(part)
+                        if len(part_str) > 1000:
+                            part_str = part_str[:1000] + "\n... [truncated]"
+                        indented = "\n".join(f"            {line}" for line in part_str.splitlines())
+                        log_error(indented)
         
         # Path-isolated Output directories
         output_base_dir = Path("outputs/schemas") / path_type
@@ -203,7 +236,7 @@ class SynthesisPipeline:
                         with open(target_dir / filename, "w") as f:
                             f.write(clean_python_code(res.output.source_code))
                     except Exception as e:
-                        log_error(f"[Synthesis {path_type}] Error generating {pass_name} schema {i} ({target_type} {target_id}): {e}")
+                        log_detailed_synthesis_error(e, last_llm_responses.get(), pass_name, f"{target_type} {target_id}", i)
 
             async def run_phase2_async():
                 sem = asyncio.Semaphore(max_async)
@@ -304,7 +337,7 @@ class SynthesisPipeline:
                             with open(norm_dir / filename, "w") as f:
                                 f.write(clean_python_code(norm_res.output.source_code))
                         except Exception as e:
-                            log_error(f"[Synthesis {path_type}] Error generating normalized schema {i} ({target['type']} {target['id']}): {e}")
+                            log_detailed_synthesis_error(e, last_llm_responses.get(), "normalized", f"{target['type']} {target['id']}", i)
 
                 if run_raw:
                     raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
@@ -317,7 +350,7 @@ class SynthesisPipeline:
                             with open(raw_dir / filename, "w") as f:
                                 f.write(clean_python_code(raw_res.output.source_code))
                         except Exception as e:
-                            log_error(f"[Synthesis {path_type}] Error generating raw schema {i} ({target['type']} {target['id']}): {e}")
+                            log_detailed_synthesis_error(e, last_llm_responses.get(), "raw", f"{target['type']} {target['id']}", i)
 
         # Phase 3: Global Consolidation
         print(f"   -> [{path_label}] Phase 3: Consolidation...")
