@@ -237,10 +237,8 @@ class SynthesisPipeline:
             
         print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {len(hubs)} global hubs)")
             
-        inheritance_map = topology.get("theme_inheritance", [])
         synth_ctx = SynthesisContext(
-            global_enums=global_enums_code,
-            theme_inheritance=json.dumps(inheritance_map, indent=2)
+            global_enums=global_enums_code
         )
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)

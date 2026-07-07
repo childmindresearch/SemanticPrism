@@ -97,7 +97,6 @@ class OrphanContext:
 @dataclass
 class SynthesisContext:
     global_enums: str
-    theme_inheritance: str
 
 # Agent 1: Orphan Enum Agent
 orphan_agent = Agent(
@@ -125,7 +124,7 @@ leiden_schema_agent = Agent(
 
 @leiden_schema_agent.system_prompt
 def add_leiden_schema_context(ctx: RunContext[SynthesisContext]) -> str:
-    return f"\nTheme Inheritance Mapping:\n{ctx.deps.theme_inheritance}\n\nGlobal Enums Available:\n{ctx.deps.global_enums}"
+    return f"\nGlobal Enums Available:\n{ctx.deps.global_enums}"
 
 # Agent 2b: Node2Vec Ontology Schema Agent
 node2vec_schema_agent = Agent(
@@ -139,7 +138,7 @@ node2vec_schema_agent = Agent(
 
 @node2vec_schema_agent.system_prompt
 def add_node2vec_schema_context(ctx: RunContext[SynthesisContext]) -> str:
-    return f"\nTheme Inheritance Mapping:\n{ctx.deps.theme_inheritance}\n\nGlobal Enums Available:\n{ctx.deps.global_enums}"
+    return f"\nGlobal Enums Available:\n{ctx.deps.global_enums}"
 
 # Agent 3: Consolidation Agent
 consolidation_agent = Agent(
