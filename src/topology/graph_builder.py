@@ -160,6 +160,7 @@ class TopologyPipeline:
         print("   -> Constructing Network Graphs...")
         dg = nx.DiGraph()
         
+        normalized_triplets = []
         for t in refined_triplets:
             subj = t.get('subject')
             obj = t.get('object')
@@ -168,15 +169,26 @@ class TopologyPipeline:
             if not subj or not obj:
                 continue
             
-            subj = str(subj).lower().strip()
-            obj = str(obj).lower().strip()
+            subj_norm = str(subj).lower().strip()
+            obj_norm = str(obj).lower().strip()
+            
+            t_norm = t.copy()
+            t_norm['subject'] = subj_norm
+            t_norm['object'] = obj_norm
+            normalized_triplets.append(t_norm)
                 
-            if dg.has_edge(subj, obj):
-                dg[subj][obj]['weight'] = dg[subj][obj].get('weight', 1) + 1
+            if dg.has_edge(subj_norm, obj_norm):
+                dg[subj_norm][obj_norm]['weight'] = dg[subj_norm][obj_norm].get('weight', 1) + 1
             else:
-                dg.add_edge(subj, obj, predicate=pred, weight=1)
+                dg.add_edge(subj_norm, obj_norm, predicate=pred, weight=1)
                 
         ug = dg.to_undirected()
+        
+        # Save normalized triplets as JSON
+        out_dir = Path("outputs/03_topology")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with open(out_dir / "normalized_triplets.json", "w") as f:
+            json.dump(normalized_triplets, f, indent=2)
         
         # Build Theme Sets
         theme_sets = defaultdict(set)

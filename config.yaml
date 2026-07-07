@@ -201,22 +201,22 @@ synthesis:
   #   - "normalized" : Synthesize normalized schemas from refined_triplets.json (Pass A).
   #   - "raw"        : Synthesize raw unwound schemas from original_triplets.json (Pass B).
   #   - "both"       : Synthesize both normalized and raw schema passes (Default).
-  schema_pass_mode: "both"
+  schema_pass_mode: "normalized"
 
   max_async_calls: 3
 
   # Entity threshold for Stage 4 target qualification (Default: 5).
   # Communities/clusters with < 5 entities are filtered from individual schema extraction
   # and their entities are routed directly to Phase 1 Enum synthesis (enums.py) so zero data is lost.
-  min_cluster_size: 7
+  min_cluster_size: 32
   # Maximum number of global hub nodes to process as individual schema targets.
   # Hubs exceeding this limit are routed directly to Phase 1 Enum synthesis (enums.py)
   # to prevent database schema bloat on large-scale datasets.
-  max_hub_targets: 10
+  max_hub_targets: 4
   # Maximum number of triplets to send to the LLM per schema generation target.
   # Subsets exceeding this cap are pruned based on PageRank and community status
   # to prevent token window overflow and model confusion on dense graphs.
-  max_triplets_per_target: 1000
+  max_triplets_per_target: 1200
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.
@@ -224,7 +224,7 @@ synthesis:
   # Stage-specific model overrides
   llm:
     provider: "ollama"
-    model_name: "gemma4:26b" # "gemma4:26b"
+    model_name: "SemP16k-Qwen122:latest" #"gemma4:26b"
     base_url: "http://127.0.0.1:11434/v1"
     api_key: ""
     temperature: 0.0

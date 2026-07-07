@@ -41,7 +41,7 @@ Merge the provided `enums.py`, `raw_master_ontology.py`, and `normalized_master_
 
 CRITICAL RULES:
 1. **Embed Enums Directly:** Copy and define all `Enum` and `Literal` classes from `enums.py` at the top of the file. Do not use relative imports.
-2. **Merge Classes:** Combine raw and normalized models by unioning their fields.
+2. **Merge Classes:** Combine raw and normalized models by unioning their fields. If only one of the raw or normalized master ontologies is provided, use its classes directly as the base for the comprehensive ontology.
 3. **Standardize Fields:** Keep all attributes declared as `Optional[...] = None` and leverage the embedded Enums/Literals.
 4. **No Unique IDs:** Ensure no `id`, `uuid`, or key fields are defined.
 5. **Formatting:** Output pure Python code containing all necessary imports."""

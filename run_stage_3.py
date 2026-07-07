@@ -25,9 +25,12 @@ def main():
         results = pipeline.execute(refined_triplets)
         
         # Verify outputs
+        norm_triplets_out = Path("outputs/03_topology/normalized_triplets.json")
         comm_out = Path("outputs/03_topology/community/topology_partitions.json")
         emb_out = Path("outputs/03_topology/embedding/topology_partitions.json")
         
+        if norm_triplets_out.exists():
+            print(f"   [OK] Normalized Triplets Saved: {norm_triplets_out}")
         if comm_out.exists():
             print(f"   [OK] Path 1 (Community) Partitions: {comm_out}")
         if emb_out.exists():
