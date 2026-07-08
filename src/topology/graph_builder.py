@@ -127,6 +127,7 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
 
 class TopologyPipeline:
     def __init__(self, config: Dict[str, Any]):
+        self.full_config = config
         self.config = config.get('topology', {})
         self.mode = self.config.get('execution_mode', 'both')
         self.inheritance_threshold = self.config.get('inheritance_overlap_threshold', 0.3)
@@ -700,29 +701,112 @@ class TopologyPipeline:
         agent_name = "leiden_schema_agent" if path_type == "community" else "node2vec_schema_agent"
         cluster_type_label = "Community" if path_type == "community" else "Structural Cluster"
         
-        payload_data = []
+        # Dynamically fetch parameters from self.full_config synthesis block
+        synth_cfg = self.full_config.get('synthesis', {})
+        min_cluster_size = synth_cfg.get('min_cluster_size', 5)
+        max_hub_targets = synth_cfg.get('max_hub_targets', 10)
+        max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1000)
+        
+        # 1. Qualify spoke targets (clusters >= min_cluster_size)
+        qualified_spokes = []
         for cluster in clusters:
-            c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
             nodes = cluster.nodes
+            if len(nodes) >= min_cluster_size:
+                c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
+                qualified_spokes.append({
+                    "type": path_type,
+                    "id": c_id,
+                    "nodes": nodes
+                })
+        # Sort spokes by size descending
+        qualified_spokes.sort(key=lambda x: len(x["nodes"]), reverse=True)
+        
+        # 2. Qualify hub targets
+        raw_hubs = result.global_hubs
+        metrics = result.node_metrics
+        
+        def get_hub_sort_key(node_id):
+            node_m = metrics.get(node_id)
+            if node_m is None:
+                return (0.0, 0.0)
+            return (node_m.betweenness_centrality, node_m.degree_centrality)
             
-            # Find triplets associated with this cluster
-            nodes_set = set(nodes)
-            associated_triplets = []
-            for t in refined_triplets:
-                s = str(t.get('subject', '')).lower().strip()
-                o = str(t.get('object', '')).lower().strip()
-                if s in nodes_set or o in nodes_set:
-                    associated_triplets.append({"subject": s, "predicate": t.get('predicate', ''), "object": o})
+        sorted_hubs = sorted(raw_hubs, key=get_hub_sort_key, reverse=True)
+        hubs = sorted_hubs[:max_hub_targets]
+        
+        targets = list(qualified_spokes)
+        for hub in hubs:
+            targets.append({
+                "type": "hub",
+                "id": hub,
+                "nodes": [hub]
+            })
+            
+        payload_data = []
+        for i, target in enumerate(targets, start=1):
+            target_type = target["type"]
+            c_id = target["id"]
+            target_nodes = set(target["nodes"])
+            
+            # Find all triplet indices associated with this target's nodes
+            matching_indices = []
+            for idx, refined_t in enumerate(refined_triplets):
+                subj = str(refined_t.get('subject', '')).lower().strip()
+                obj = str(refined_t.get('object', '')).lower().strip()
+                if subj in target_nodes or obj in target_nodes:
+                    matching_indices.append(idx)
                     
-            connected_hubs = [h for h in result.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes)]
+            # Prune matching indices if they exceed the cap based on centrality PageRank and intra-community status
+            if len(matching_indices) > max_triplets_cap:
+                scored_indices = []
+                for idx in matching_indices:
+                    refined_t = refined_triplets[idx]
+                    subj = str(refined_t.get('subject', '')).lower().strip()
+                    obj = str(refined_t.get('object', '')).lower().strip()
+                    
+                    subj_m = metrics.get(subj)
+                    obj_m = metrics.get(obj)
+                    subj_pr = subj_m.pagerank if subj_m else 0.0
+                    obj_pr = obj_m.pagerank if obj_m else 0.0
+                    base_score = subj_pr + obj_pr
+                    
+                    # Prioritize intra-community connections
+                    if (subj in target_nodes) and (obj in target_nodes):
+                        base_score += 1.0
+                        
+                    scored_indices.append((base_score, idx))
+                    
+                scored_indices.sort(key=lambda x: x[0], reverse=True)
+                matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
+            
+            # Extract the actual triplets
+            associated_triplets = []
+            for idx in matching_indices:
+                t = refined_triplets[idx]
+                associated_triplets.append({
+                    "subject": str(t.get('subject', '')).lower().strip(),
+                    "predicate": t.get('predicate', ''),
+                    "object": str(t.get('object', '')).lower().strip()
+                })
+            
+            # Connected hubs (for display / context)
+            if target_type == "hub":
+                connected_hubs = []
+            else:
+                connected_hubs = [h for h in result.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in target["nodes"])]
+                
+            # Define output schema filename matching synthesizer.py naming style
+            filename_suffix = f"{path_type}_{c_id}" if target_type != "hub" else f"hub_{c_id}"
+            filename = f"{i:02d}_{filename_suffix}.py"
             
             payload_data.append({
                 "id": c_id,
-                "module_name": f"01_{path_type}_{c_id}.py",
-                "nodes": nodes,
+                "type": target_type,
+                "module_name": filename,
+                "nodes": list(target_nodes),
                 "triplet_count": len(associated_triplets),
-                "triplets": associated_triplets, # full triplets array for vis.js edges
-                "sample_triplets": associated_triplets[:15], # top 15 for sidebar text preview
+                "triplets": associated_triplets,
+                "sample_triplets": associated_triplets[:15],
                 "connected_hubs": connected_hubs
             })
             
@@ -752,7 +836,10 @@ class TopologyPipeline:
 </head>
 <body>
     <h1>[{path_label}] Stage 4 LLM Payload Gallery</h1>
-    <div class="subtitle">Direct visualization of individual cluster subgraphs as passed to <code>{agent_name}</code> for Stage 4 Pydantic schema synthesis.</div>
+    <div class="subtitle">
+        Visualizing data sent to LLM for Stage 4 Pydantic schema synthesis.
+        Current Configuration: <code>min_cluster_size: {min_cluster_size}</code> | <code>max_hub_targets: {max_hub_targets}</code> | <code>max_triplets_per_target: {max_triplets_cap}</code>.
+    </div>
     
     <div class="container">
         <div class="sidebar">
@@ -783,7 +870,8 @@ class TopologyPipeline:
         payloads.forEach((p, idx) => {{
             const opt = document.createElement('option');
             opt.value = idx;
-            opt.textContent = `{cluster_type_label} ${{p.id}} (${{p.nodes.length}} entities)`;
+            const label = p.type === 'hub' ? `Global Hub Target: ${{p.id}}` : `${{p.type === 'community' ? 'Community' : 'Structural Cluster'}} ${{p.id}} (${{p.nodes.length}} entities)`;
+            opt.textContent = label;
             selectEl.appendChild(opt);
         }});
 
@@ -793,15 +881,22 @@ class TopologyPipeline:
             
             // Render Details Panel
             detailsEl.innerHTML = `
-                <div class="card">
+                <div class="card" style="border-left: 4px solid ${{payload.type === 'hub' ? '#ff4444' : '#44aaff'}};">
+                    <span class="badge" style="background: ${{payload.type === 'hub' ? '#ff4444' : '#44aaff'}}; color: white;">Target Type</span> <b>${{payload.type.toUpperCase()}}</b><br>
                     <span class="badge">LLM Agent</span> <code>{agent_name}</code><br>
                     <span class="badge">Output Schema</span> <code>${{payload.module_name}}</code><br>
-                    <span class="badge">Entities</span> <b>${{payload.nodes.length}}</b> | <span class="badge">Triplets</span> <b>${{payload.triplet_count}}</b>
+                    <span class="badge">Primary Entities</span> <b>${{payload.nodes.length}}</b><br>
+                    <span class="badge">Total Triplets</span> <b>${{payload.triplet_count}} / {max_triplets_cap} (cap)</b>
                 </div>
-                <h4>Global Hub Anchors:</h4>
-                <p>${{payload.connected_hubs.length > 0 ? payload.connected_hubs.map(h => `<span class="badge" style="color:#ff5555;">${{h}}</span>`).join(' ') : '<i>None</i>'}}</p>
-                <h4>Sample Incident Triplets:</h4>
-                ${{payload.sample_triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('')}}
+                ${{payload.type !== 'hub' && payload.connected_hubs.length > 0 ? `
+                <h4>Connected Hub Anchors:</h4>
+                <p>${{payload.connected_hubs.map(h => `<span class="badge" style="color:#ff5555; background: #2b1f1f; border: 1px solid #ff4444;">${{h}}</span>`).join(' ')}}</p>
+                ` : ''}}
+                <h4>Incident Triplets Sent to LLM:</h4>
+                <div style="max-height: 400px; overflow-y: auto; border: 1px solid #333; padding: 5px; border-radius: 4px; background: #161616;">
+                    ${{payload.triplets.length > 0 ? payload.sample_triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('') : '<i>No triplets found for this target.</i>'}}
+                    ${{payload.triplet_count > 15 ? `<div style="text-align: center; color: #888; font-size: 11px; padding-top: 5px;">... showing first 15 of ${{payload.triplet_count}} triplets ...</div>` : ''}}
+                </div>
             `;
 
             // Draw Subgraph
@@ -809,22 +904,54 @@ class TopologyPipeline:
             const edges = [];
             const addedNodes = new Set();
 
-            payload.nodes.forEach(n => {{
-                addedNodes.add(n);
-                nodes.push({{ id: n, label: n, color: '#44aaff', shape: 'dot', size: 25 }});
-            }});
-
-            payload.connected_hubs.forEach(h => {{
-                if (!addedNodes.has(h)) {{
-                    addedNodes.add(h);
-                    nodes.push({{ id: h, label: h, color: '#ff4444', shape: 'star', size: 35, title: 'Global Hub Anchor' }});
-                }}
-            }});
-
+            // 1. Add all nodes involved in the triplets to guarantee everything is visualized
             payload.triplets.forEach(t => {{
-                if (addedNodes.has(t.subject) && addedNodes.has(t.object)) {{
-                    edges.push({{ from: t.subject, to: t.object, title: t.predicate, arrows: 'to', color: 'rgba(200,200,200,0.5)' }});
-                }}
+                [t.subject, t.object].forEach(n => {{
+                    if (!addedNodes.has(n)) {{
+                        addedNodes.add(n);
+                        
+                        const isPrimary = payload.nodes.includes(n);
+                        const isHub = globalHubs.has(n);
+                        
+                        // Set colors and shapes based on roles
+                        let color = '#44aaff'; // default: target spoke node
+                        let shape = 'dot';
+                        let size = 25;
+                        let title = 'Entity';
+                        
+                        if (isHub) {{
+                            shape = 'star';
+                            size = 35;
+                            color = isPrimary ? '#ff4444' : '#cc3333'; // bright red if primary target, darker red if context hub
+                            title = isPrimary ? 'Primary Target Hub' : 'Context Hub Anchor';
+                        }} else if (!isPrimary) {{
+                            color = '#77ccff'; // lighter blue for context/neighbor nodes
+                            size = 20;
+                            title = 'Neighbor Entity (Context)';
+                        }} else {{
+                            title = 'Primary Target Entity';
+                        }}
+                        
+                        nodes.push({{ id: n, label: n, color: color, shape: shape, size: size, title: title }});
+                    }
+                }});
+            }});
+
+            // 2. Fallback: Add primary target nodes if no triplets were returned
+            payload.nodes.forEach(n => {{
+                if (!addedNodes.has(n)) {{
+                    addedNodes.add(n);
+                    const isHub = globalHubs.has(n);
+                    const color = isHub ? '#ff4444' : '#44aaff';
+                    const shape = isHub ? 'star' : 'dot';
+                    const size = isHub ? 35 : 25;
+                    nodes.push({{ id: n, label: n, color: color, shape: shape, size: size, title: 'Primary Target Entity' }});
+                }
+            }});
+
+            // 3. Add edges from triplets
+            payload.triplets.forEach(t => {{
+                edges.push({{ from: t.subject, to: t.object, title: t.predicate, arrows: 'to', color: 'rgba(200,200,200,0.5)' }});
             }});
 
             const container = document.getElementById('network');
@@ -833,7 +960,7 @@ class TopologyPipeline:
             
             if (network) network.destroy();
             network = new vis.Network(container, data, options);
-        }}
+        }
 
         detailsEl.innerHTML = '<div style="color: #888888; font-style: italic; padding: 20px 0;">Select a partition payload from the dropdown above to view its discrete subgraph and LLM metadata.</div>';
     </script>
