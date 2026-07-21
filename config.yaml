@@ -92,6 +92,18 @@ topology:
   inheritance_overlap_threshold: 0.3
 
   # =========================================================================
+  # DUAL-PATH JACCARD FUSION & UNIFICATION (Path 1 + Path 2 Alignment)
+  # =========================================================================
+  # Unifies Path 1 (Leiden Workflows) and Path 2 (Node2Vec Categories) using
+  # Jaccard Graph Distance Isomorphic Alignment.
+  # =========================================================================
+  fusion:
+    enable_unification: true
+    fusion_threshold: 0.70        # Jaccard >= 0.70 -> Isomorphic Fusion (Merged target)
+    composition_threshold: 0.20   # 0.20 <= Jaccard < 0.70 -> Relational Composition (Sub-class link)
+
+
+  # =========================================================================
   # PATH 1: COMMUNITY PATH (Approach A - Workflow & Event Isolation)
   # =========================================================================
   # Objective: Isolate narrative workflows and clinical/event processes.
@@ -193,6 +205,7 @@ synthesis:
   # Options:
   #   - "community"  : Synthesize Path 1 workflow schemas from outputs/03_topology/community/ (Default).
   #   - "embedding"  : Synthesize Path 2 categorical schemas from outputs/03_topology/embedding/.
+  #   - "unified"    : Synthesize Dual-Path Jaccard Fused schemas from outputs/03_topology/unified/.
   #   - "both"       : Synthesize both Path 1 and Path 2 schemas in sequence.
   execution_mode: "community"
 

@@ -31,8 +31,8 @@ Merge, deduplicate, and consolidate the provided fragmented Pydantic schema file
 CRITICAL RULES:
 1. **Deduplicate & Merge:** Identify classes modeling the same concept. Merge their fields using the most descriptive name.
 2. **Preserve Relationships:** Maintain subclass and inheritance hierarchy.
-3. **Standardize Fields:** Keep fields as `Optional[...] = None`, leverage global enums, and do not introduce unique key IDs.
-4. **Formatting:** Output pure Python code with all necessary imports."""
+3. **Standardize Fields:** Keep fields as `Optional[...] = None`and always leverage global enums when available.
+4. **Formatting:** Output executable Python code with all necessary imports."""
 
 FINAL_ONTOLOGY_SYSTEM_PROMPT = """You are the Lead Master Ontologist.
 Merge the provided `enums.py`, `raw_master_ontology.py`, and `normalized_master_ontology.py` into a single standalone `comprehensive_ontology.py` file.

@@ -39,11 +39,18 @@ class SynthesisPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
-    def execute(self, comm_topology: Dict[str, Any] = None, emb_topology: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
+    def execute(self, comm_topology: Dict[str, Any] = None, emb_topology: Dict[str, Any] = None, unified_topology: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
         print("[Synthesis] Starting Stage 4 Pipeline...")
         synth_mode = self.config.get('synthesis', {}).get('execution_mode', 'community')
         print(f"   -> Synthesis Execution Mode: '{synth_mode}'")
         
+        if synth_mode == "unified":
+            if unified_topology:
+                print("   ==> Executing Dual-Path Unified Fusion Synthesis...")
+                self.execute_path_synthesis(unified_topology, "unified", refined_triplets, original_triplets, master_themes)
+            else:
+                print("   [Warning] Unified topology partition not found. Skipping Unified synthesis.")
+
         if synth_mode in ("both", "community"):
             if comm_topology:
                 print("   ==> Executing Path 1: Community Path Synthesis...")
@@ -61,7 +68,7 @@ class SynthesisPipeline:
         print("[Synthesis] Stage 4 Pipeline complete.")
 
     def execute_path_synthesis(self, topology: Dict[str, Any], path_type: str, refined_triplets: List[dict], original_triplets: List[dict], master_themes: List[str]):
-        path_label = "Path 1: Community Workflow" if path_type == "community" else "Path 2: Embedding Categorical"
+        path_label = "Dual-Path Unified Fusion" if path_type == "unified" else ("Path 1: Community Workflow" if path_type == "community" else "Path 2: Embedding Categorical")
         print(f"   -> Starting Synthesis Pass for [{path_label}]...")
 
         # Read config options
@@ -177,6 +184,11 @@ class SynthesisPipeline:
                 nodes = cluster.get("nodes", [])
                 if len(nodes) < min_cluster_size:
                     small_cluster_nodes.extend(nodes)
+        elif path_type == "unified":
+            for fc in topology.get("fused_clusters", []):
+                nodes = fc.get("nodes", [])
+                if len(nodes) < min_cluster_size:
+                    small_cluster_nodes.extend(nodes)
         else:
             for comm in topology.get("communities", []):
                 nodes = comm.get("nodes", [])
@@ -221,6 +233,13 @@ class SynthesisPipeline:
                 if len(nodes_in_cluster) >= min_cluster_size:
                     targets.append({"type": "structural_cluster", "id": cluster.get("cluster_id"), "nodes": nodes_in_cluster})
             print(f"      -> Qualified Structural Clusters (>= {min_cluster_size} nodes): {len(targets)} targets")
+        elif path_type == "unified":
+            active_agent = leiden_schema_agent
+            for fc in topology.get("fused_clusters", []):
+                nodes_in_fc = fc.get("nodes", [])
+                if len(nodes_in_fc) >= min_cluster_size:
+                    targets.append({"type": "fused_cluster", "id": fc.get("fused_cluster_id"), "nodes": nodes_in_fc})
+            print(f"      -> Qualified Fused Clusters (>= {min_cluster_size} nodes): {len(targets)} targets")
         else:
             active_agent = leiden_schema_agent
             for comm in topology.get("communities", []):

@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Any
 from pydantic import BaseModel
 
 class EdgeDetail(BaseModel):
@@ -42,3 +42,23 @@ class TopologyResult(BaseModel):
     orphans: List[str]
     node_metrics: Dict[str, NodeMetrics]
     theme_inheritance: List[ThemeInheritance]
+
+class UnifiedClusterAlignment(BaseModel):
+    alignment_id: int
+    community_id: int
+    structural_cluster_id: int
+    jaccard_score: float
+    alignment_type: str  # "isomorphic_fusion", "relational_composition", or "orthogonal"
+    intersection_nodes: List[str]
+    union_nodes: List[str]
+
+class UnifiedTopologyResult(BaseModel):
+    alignments: List[UnifiedClusterAlignment] = []
+    fused_clusters: List[Dict[str, Any]] = []
+    compositional_links: List[Dict[str, Any]] = []
+    unmatched_communities: List[int] = []
+    unmatched_structural_clusters: List[int] = []
+    global_hubs: List[str] = []
+    orphans: List[str] = []
+    node_metrics: Dict[str, NodeMetrics] = {}
+

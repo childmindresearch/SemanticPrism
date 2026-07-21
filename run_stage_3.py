@@ -24,10 +24,14 @@ def main():
     try:
         results = pipeline.execute(refined_triplets)
         
+        if "community" in results and "embedding" in results and pipeline.enable_unification:
+            pipeline.align_and_unify_paths(results["community"], results["embedding"])
+            
         # Verify outputs
         norm_triplets_out = Path("outputs/03_topology/normalized_triplets.json")
         comm_out = Path("outputs/03_topology/community/topology_partitions.json")
         emb_out = Path("outputs/03_topology/embedding/topology_partitions.json")
+        unified_out = Path("outputs/03_topology/unified/topology_partitions.json")
         
         if norm_triplets_out.exists():
             print(f"   [OK] Normalized Triplets Saved: {norm_triplets_out}")
@@ -35,6 +39,8 @@ def main():
             print(f"   [OK] Path 1 (Community) Partitions: {comm_out}")
         if emb_out.exists():
             print(f"   [OK] Path 2 (Embedding) Partitions: {emb_out}")
+        if unified_out.exists():
+            print(f"   [OK] Dual-Path Unified Partitions: {unified_out}")
             
         print("=== Stage 3 Topology Completed Successfully ===")
     except Exception as e:
