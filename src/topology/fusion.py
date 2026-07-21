@@ -358,24 +358,16 @@ class TargetResolver:
     @staticmethod
     def filter_and_cap_triplets(target_nodes: set, triplets: List[Dict[str, Any]], topology: Dict[str, Any], max_triplets_cap: int) -> List[Dict[str, Any]]:
         """
-        Filters triplets incident to target_nodes. If matching count exceeds max_triplets_cap,
-        scores statements using PageRank + Intra-Cluster edge bonus (+1.0) and caps at max_triplets_cap.
+        Filters triplets incident to target_nodes, scores each statement using PageRank + Intra-Cluster edge bonus (+1.0),
+        sorts descending by pagerank_score, and caps at max_triplets_cap.
         """
-        matching_indices = []
+        metrics = topology.get("node_metrics", {})
+        scored_triplets = []
+        
         for idx, t in enumerate(triplets):
             subj = str(t.get('subject', '')).lower().strip()
             obj = str(t.get('object', '')).lower().strip()
             if subj in target_nodes or obj in target_nodes:
-                matching_indices.append(idx)
-                
-        if len(matching_indices) > max_triplets_cap:
-            metrics = topology.get("node_metrics", {})
-            scored_indices = []
-            for idx in matching_indices:
-                t = triplets[idx]
-                subj = str(t.get('subject', '')).lower().strip()
-                obj = str(t.get('object', '')).lower().strip()
-                
                 subj_m = metrics.get(subj, {})
                 obj_m = metrics.get(obj, {})
                 
@@ -386,12 +378,12 @@ class TargetResolver:
                 if (subj in target_nodes) and (obj in target_nodes):
                     base_score += 1.0
                     
-                scored_indices.append((base_score, idx))
+                t_copy = dict(t)
+                t_copy["pagerank_score"] = round(float(base_score), 6)
+                scored_triplets.append((base_score, t_copy))
                 
-            scored_indices.sort(key=lambda x: x[0], reverse=True)
-            matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
-            
-        return [triplets[idx] for idx in matching_indices]
+        scored_triplets.sort(key=lambda x: x[0], reverse=True)
+        return [t for _, t in scored_triplets[:max_triplets_cap]]
 
     @staticmethod
     def export_resolved_targets_json(
@@ -403,13 +395,14 @@ class TargetResolver:
     ) -> Path:
         """
         Executes target qualification and triplet PageRank capping, and exports
-        resolved_<path_type>_targets.json to output_dir.
+        resolved_<path_type>_targets.json to output_dir with explicit rank scores.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         synth_cfg = config.get('synthesis', {})
         min_cluster_size = synth_cfg.get('min_cluster_size', 32)
         max_hub_targets = synth_cfg.get('max_hub_targets', 4)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1000)
+        metrics = topology.get("node_metrics", {})
         
         # 1. Resolve target qualification & enum nodes
         targets, all_enum_nodes = TargetResolver.qualify_and_resolve_targets(topology, path_type, config)
@@ -429,16 +422,39 @@ class TargetResolver:
             filename_suffix = f"{path_type}_{c_id}" if target_type != "hub" else f"hub_{c_id}"
             output_module_name = f"{i:02d}_{filename_suffix}.py"
             
-            target_payloads.append({
+            # Compute target-level ranking metrics
+            if target_type == "hub":
+                hub_m = metrics.get(c_id, {})
+                betw_score = hub_m.get("betweenness_centrality", 0.0) if isinstance(hub_m, dict) else getattr(hub_m, "betweenness_centrality", 0.0)
+                deg_score = hub_m.get("degree_centrality", 0.0) if isinstance(hub_m, dict) else getattr(hub_m, "degree_centrality", 0.0)
+                rank_score = round(float(betw_score), 6)
+                target_metrics = {
+                    "rank_score": rank_score,
+                    "betweenness_centrality": round(float(betw_score), 6),
+                    "degree_centrality": round(float(deg_score), 6)
+                }
+            else:
+                rank_score = float(len(target_nodes))
+                target_metrics = {
+                    "rank_score": rank_score
+                }
+            
+            payload_item = {
                 "target_index": i,
                 "target_type": target_type,
                 "target_id": c_id,
                 "output_module_name": output_module_name,
+                "rank_score": rank_score,
                 "nodes_count": len(target_nodes),
                 "nodes": sorted(list(target_nodes)),
                 "triplets_count": len(capped_triplets),
                 "triplets": capped_triplets
-            })
+            }
+            if target_type == "hub":
+                payload_item["betweenness_centrality"] = target_metrics["betweenness_centrality"]
+                payload_item["degree_centrality"] = target_metrics["degree_centrality"]
+                
+            target_payloads.append(payload_item)
             
         # 3. Construct master audit record
         audit_payload = {
