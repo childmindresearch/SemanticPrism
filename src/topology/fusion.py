@@ -20,15 +20,21 @@ class TopologyFusionPipeline:
         self.fusion_threshold = self.fusion_cfg.get('fusion_threshold', 0.70)
         self.composition_threshold = self.fusion_cfg.get('composition_threshold', 0.20)
 
-    def align_and_unify_paths(self, comm_result: TopologyResult, emb_result: TopologyResult) -> UnifiedTopologyResult:
-        print("   ==> Executing Dual-Path Jaccard Fusion & Unification (fusion.py)...")
+    def align_and_unify_paths(
+        self,
+        comm_resolved_data: Dict[str, Any],
+        emb_resolved_data: Dict[str, Any],
+        comm_result: TopologyResult = None,
+        emb_result: TopologyResult = None
+    ) -> UnifiedTopologyResult:
+        print("   ==> Executing Dual-Path Jaccard Fusion & Unification on Resolved Target Payloads (fusion.py)...")
         
-        # Filter qualified spoke targets (>= min_cluster_size) via TargetResolver
-        comm_targets, _ = TargetResolver.qualify_and_resolve_targets(comm_result.model_dump(), "community", self.full_config)
-        emb_targets, _ = TargetResolver.qualify_and_resolve_targets(emb_result.model_dump(), "embedding", self.full_config)
+        # Read resolved spoke targets directly from resolved target JSON payloads
+        comm_targets = comm_resolved_data.get("targets", [])
+        emb_targets = emb_resolved_data.get("targets", [])
         
-        comm_spokes = [t for t in comm_targets if t["type"] != "hub"]
-        emb_spokes = [t for t in emb_targets if t["type"] != "hub"]
+        comm_spokes = [t for t in comm_targets if t.get("target_type") != "hub" and t.get("type") != "hub"]
+        emb_spokes = [t for t in emb_targets if t.get("target_type") != "hub" and t.get("type") != "hub"]
         
         alignments = []
         fused_clusters = []
@@ -40,11 +46,11 @@ class TopologyFusionPipeline:
         
         for comm_t in comm_spokes:
             c_nodes = set(comm_t["nodes"])
-            c_id = comm_t["id"]
+            c_id = comm_t.get("target_id", comm_t.get("id"))
             
             for emb_t in emb_spokes:
                 s_nodes = set(emb_t["nodes"])
-                s_id = emb_t["id"]
+                s_id = emb_t.get("target_id", emb_t.get("id"))
                 
                 if not c_nodes or not s_nodes:
                     continue
@@ -88,14 +94,20 @@ class TopologyFusionPipeline:
                         union_nodes=sorted(list(union))
                     ))
                     
-        all_comm_ids = set(t["id"] for t in comm_spokes)
-        all_sc_ids = set(t["id"] for t in emb_spokes)
+        all_comm_ids = set(t.get("target_id", t.get("id")) for t in comm_spokes)
+        all_sc_ids = set(t.get("target_id", t.get("id")) for t in emb_spokes)
         
         unmatched_comm = sorted(list(all_comm_ids - matched_comm_ids))
         unmatched_sc = sorted(list(all_sc_ids - matched_sc_ids))
         
-        combined_hubs = sorted(list(set(comm_result.global_hubs + emb_result.global_hubs)))
-        combined_orphans = sorted(list(set(comm_result.orphans + emb_result.orphans)))
+        comm_hubs = comm_result.global_hubs if comm_result else []
+        emb_hubs = emb_result.global_hubs if emb_result else []
+        comm_orphans = comm_result.orphans if comm_result else []
+        emb_orphans = emb_result.orphans if emb_result else []
+        node_metrics = comm_result.node_metrics if comm_result else {}
+        
+        combined_hubs = sorted(list(set(comm_hubs + emb_hubs)))
+        combined_orphans = sorted(list(set(comm_orphans + emb_orphans)))
         
         unified_result = UnifiedTopologyResult(
             alignments=alignments,
