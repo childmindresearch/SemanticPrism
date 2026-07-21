@@ -124,9 +124,9 @@ graph TD
 *   **Theme Inheritance Overlap:** Computes node overlap ratios across themes (`inheritance_overlap_threshold`), persisting parent-child theme inheritance relationships inside `topology_partitions.json`.
 *   **Output Locations:**
     *   `outputs/03_topology/normalized_triplets.json`: Normalized S-P-O statements used for graph construction.
-    *   `outputs/03_topology/community/topology_partitions.json`: Path 1 community assignments, hubs, orphans, and centrality metrics.
-    *   `outputs/03_topology/embedding/topology_partitions.json`: Path 2 structural cluster assignments, hubs, orphans, and centrality metrics.
-    *   `outputs/03_topology/unified/topology_partitions.json`: Dual-Path Jaccard Fused cluster assignments, relational composition links, and alignment matrix.
+    *   `outputs/03_topology/community/topology_partitions.json` & `outputs/03_topology/community/resolved_community_targets.json`: Path 1 community assignments, resolved synthesis targets, and PageRank-scored triplets.
+    *   `outputs/03_topology/embedding/topology_partitions.json` & `outputs/03_topology/embedding/resolved_embedded_targets.json`: Path 2 structural cluster assignments, resolved synthesis targets, and PageRank-scored triplets.
+    *   `outputs/03_topology/unified/topology_partitions.json` & `outputs/03_topology/unified/resolved_unified_targets.json`: Dual-Path Jaccard Fused cluster assignments, relational composition links, and resolved unified targets.
 *   **Interactive HTML Visualizations:** Exports interactive HTML dashboards under `outputs/visuals/community/`, `outputs/visuals/embedding/`, and `outputs/visuals/unified/` (including standard topology graphs, hubs & ego networks, global hubs, community/cluster networks, workflow narratives, participation dispersion maps, Stage 4 LLM payload gallery, collapsed module architecture diagrams, 2D Node2Vec PCA scatter plots, and unified Jaccard alignment heatmaps & bipartite alignment networks). Visual degree and node capping options (`min_node_degree`, `max_total_visual_nodes`) optimize canvas browser rendering performance.
 
 ---

@@ -392,3 +392,76 @@ class TargetResolver:
             matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
             
         return [triplets[idx] for idx in matching_indices]
+
+    @staticmethod
+    def export_resolved_targets_json(
+        topology: Dict[str, Any],
+        path_type: str,
+        refined_triplets: List[Dict[str, Any]],
+        config: Dict[str, Any],
+        output_dir: Path
+    ) -> Path:
+        """
+        Executes target qualification and triplet PageRank capping, and exports
+        resolved_<path_type>_targets.json to output_dir.
+        """
+        output_dir.mkdir(parents=True, exist_ok=True)
+        synth_cfg = config.get('synthesis', {})
+        min_cluster_size = synth_cfg.get('min_cluster_size', 32)
+        max_hub_targets = synth_cfg.get('max_hub_targets', 4)
+        max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1000)
+        
+        # 1. Resolve target qualification & enum nodes
+        targets, all_enum_nodes = TargetResolver.qualify_and_resolve_targets(topology, path_type, config)
+        
+        # 2. Build target payload records with sorted & capped triplets
+        target_payloads = []
+        for i, target in enumerate(targets, start=1):
+            target_type = target["type"]
+            c_id = target["id"]
+            target_nodes = set(target["nodes"])
+            
+            # Filter, score, and cap triplets (top 1000 PageRank + Intra-cluster)
+            capped_triplets = TargetResolver.filter_and_cap_triplets(
+                target_nodes, refined_triplets, topology, max_triplets_cap
+            )
+            
+            filename_suffix = f"{path_type}_{c_id}" if target_type != "hub" else f"hub_{c_id}"
+            output_module_name = f"{i:02d}_{filename_suffix}.py"
+            
+            target_payloads.append({
+                "target_index": i,
+                "target_type": target_type,
+                "target_id": c_id,
+                "output_module_name": output_module_name,
+                "nodes_count": len(target_nodes),
+                "nodes": sorted(list(target_nodes)),
+                "triplets_count": len(capped_triplets),
+                "triplets": capped_triplets
+            })
+            
+        # 3. Construct master audit record
+        audit_payload = {
+            "path_type": path_type,
+            "min_cluster_size": min_cluster_size,
+            "max_hub_targets": max_hub_targets,
+            "max_triplets_per_target": max_triplets_cap,
+            "enum_nodes_count": len(all_enum_nodes),
+            "enum_nodes": all_enum_nodes,
+            "targets_count": len(target_payloads),
+            "targets": target_payloads
+        }
+        
+        if path_type == "community":
+            target_filename = "resolved_community_targets.json"
+        elif path_type == "embedding":
+            target_filename = "resolved_embedded_targets.json"
+        else:
+            target_filename = f"resolved_{path_type}_targets.json"
+            
+        target_file = output_dir / target_filename
+        with open(target_file, "w") as f:
+            json.dump(audit_payload, f, indent=2)
+            
+        print(f"   [OK] Resolved Targets Saved: {target_file}")
+        return target_file

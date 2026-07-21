@@ -26,8 +26,22 @@ def main():
     try:
         results = pipeline.execute(refined_triplets)
         
+        # Export Resolved Synthesis Target JSON files for Stage 4
+        from src.topology.fusion import TargetResolver
+        if "community" in results:
+            TargetResolver.export_resolved_targets_json(
+                results["community"].model_dump(), "community", refined_triplets, settings, Path("outputs/03_topology/community")
+            )
+        if "embedding" in results:
+            TargetResolver.export_resolved_targets_json(
+                results["embedding"].model_dump(), "embedding", refined_triplets, settings, Path("outputs/03_topology/embedding")
+            )
+        
         if "community" in results and "embedding" in results and fusion_pipeline.enable_unification:
-            fusion_pipeline.align_and_unify_paths(results["community"], results["embedding"])
+            unified_res = fusion_pipeline.align_and_unify_paths(results["community"], results["embedding"])
+            TargetResolver.export_resolved_targets_json(
+                unified_res.model_dump(), "unified", refined_triplets, settings, Path("outputs/03_topology/unified")
+            )
             
         # Verify outputs
         norm_triplets_out = Path("outputs/03_topology/normalized_triplets.json")
