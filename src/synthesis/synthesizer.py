@@ -38,36 +38,29 @@ class SynthesisPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
-    def execute(self, comm_topology: Dict[str, Any] = None, emb_topology: Dict[str, Any] = None, unified_topology: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
+    def execute(self, comm_targets: Dict[str, Any] = None, emb_targets: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
         print("[Synthesis] Starting Stage 4 Pipeline...")
         synth_mode = self.config.get('synthesis', {}).get('execution_mode', 'community')
         print(f"   -> Synthesis Execution Mode: '{synth_mode}'")
         
-        if synth_mode == "unified":
-            if unified_topology:
-                print("   ==> Executing Dual-Path Unified Fusion Synthesis...")
-                self.execute_path_synthesis(unified_topology, "unified", refined_triplets, original_triplets, master_themes)
-            else:
-                print("   [Warning] Unified topology partition not found. Skipping Unified synthesis.")
-
         if synth_mode in ("both", "community"):
-            if comm_topology:
+            if comm_targets:
                 print("   ==> Executing Path 1: Community Path Synthesis...")
-                self.execute_path_synthesis(comm_topology, "community", refined_triplets, original_triplets, master_themes)
+                self.execute_path_synthesis(comm_targets, "community", refined_triplets, original_triplets, master_themes)
             else:
-                print("   [Warning] Community topology partition not found. Skipping Path 1 synthesis.")
+                print("   [Warning] Community resolved targets file not found. Skipping Path 1 synthesis.")
 
         if synth_mode in ("both", "embedding"):
-            if emb_topology:
+            if emb_targets:
                 print("   ==> Executing Path 2: Embedding Path Synthesis...")
-                self.execute_path_synthesis(emb_topology, "embedding", refined_triplets, original_triplets, master_themes)
+                self.execute_path_synthesis(emb_targets, "embedding", refined_triplets, original_triplets, master_themes)
             else:
-                print("   [Warning] Embedding topology partition not found. Skipping Path 2 synthesis.")
+                print("   [Warning] Embedding resolved targets file not found. Skipping Path 2 synthesis.")
 
         print("[Synthesis] Stage 4 Pipeline complete.")
 
-    def execute_path_synthesis(self, topology: Dict[str, Any], path_type: str, refined_triplets: List[dict], original_triplets: List[dict], master_themes: List[str]):
-        path_label = "Dual-Path Unified Fusion" if path_type == "unified" else ("Path 1: Community Workflow" if path_type == "community" else "Path 2: Embedding Categorical")
+    def execute_path_synthesis(self, targets_data: Dict[str, Any], path_type: str, refined_triplets: List[dict], original_triplets: List[dict], master_themes: List[str]):
+        path_label = "Path 1: Community Workflow" if path_type == "community" else "Path 2: Embedding Categorical"
         print(f"   -> Starting Synthesis Pass for [{path_label}]...")
 
         # Read config options
@@ -160,8 +153,9 @@ class SynthesisPipeline:
         if run_raw:
             raw_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve Targets and Enum Nodes via TargetResolver (fusion.py)
-        targets, all_enum_nodes = TargetResolver.qualify_and_resolve_targets(topology, path_type, self.config)
+        # Ingest pre-resolved Targets and Enum Nodes directly from target JSON payload
+        targets = targets_data.get("targets", [])
+        all_enum_nodes = targets_data.get("enum_nodes", [])
         active_agent = node2vec_schema_agent if path_type == "embedding" else leiden_schema_agent
         
         # Phase 1: Orphan & Low-Density Node Aggregation (Enums)
@@ -192,8 +186,8 @@ class SynthesisPipeline:
 
         # Phase 2: Schema Generation
         print(f"   -> [{path_label}] Phase 2: Schema Generation...")
-        spoke_count = sum(1 for t in targets if t["type"] != "hub")
-        hub_count = sum(1 for t in targets if t["type"] == "hub")
+        spoke_count = sum(1 for t in targets if t.get("target_type") != "hub" and t.get("type") != "hub")
+        hub_count = sum(1 for t in targets if t.get("target_type") == "hub" or t.get("type") == "hub")
         print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {hub_count} global hubs)")
             
         synth_ctx = SynthesisContext(
@@ -202,7 +196,6 @@ class SynthesisPipeline:
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
         max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
-        synthesis_cap = self.config.get('synthesis', {}).get('context_window_cap', 16384)
 
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
@@ -245,39 +238,42 @@ class SynthesisPipeline:
             async def run_phase2_async():
                 sem = asyncio.Semaphore(max_async)
                 tasks = []
-                max_triplets_cap = self.config.get('synthesis', {}).get('max_triplets_per_target', 1000)
                 
                 for i, target in enumerate(targets, start=1):
                     target_nodes = set(target["nodes"])
+                    target_type = target.get("target_type", target.get("type", "spoke"))
+                    target_id = target.get("target_id", target.get("id"))
                     
                     if run_norm:
-                        norm_subset = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, topology, max_triplets_cap)
+                        norm_subset = target.get("triplets", [])
                         if norm_subset:
-                            tasks.append(run_single_pass(norm_subset, True, i, target["type"], target["id"], sem, len(target_nodes)))
+                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, len(target_nodes)))
                     
                     if run_raw:
-                        raw_subset = TargetResolver.filter_and_cap_triplets(target_nodes, original_triplets, topology, max_triplets_cap)
+                        raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
                         if raw_subset:
-                            tasks.append(run_single_pass(raw_subset, False, i, target["type"], target["id"], sem, len(target_nodes)))
+                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, len(target_nodes)))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
 
             asyncio.run(run_phase2_async())
         else:
-            max_triplets_cap = self.config.get('synthesis', {}).get('max_triplets_per_target', 1000)
             for i, target in enumerate(targets, start=1):
                 target_nodes = set(target["nodes"])
+                target_type = target.get("target_type", target.get("type", "spoke"))
+                target_id = target.get("target_id", target.get("id"))
                 node_count = len(target_nodes)
                 
                 if run_norm:
-                    norm_subset = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, topology, max_triplets_cap)
+                    norm_subset = target.get("triplets", [])
                     if norm_subset:
-                        run_single_pass_sync(norm_subset, True, i, target["type"], target["id"], node_count)
+                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, node_count)
                         
                 if run_raw:
-                    raw_subset = TargetResolver.filter_and_cap_triplets(target_nodes, original_triplets, topology, max_triplets_cap)
+                    raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
                     if raw_subset:
+                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, node_count)
                         run_single_pass_sync(raw_subset, False, i, target["type"], target["id"], node_count)
                         
                     scored_indices.sort(key=lambda x: x[0], reverse=True)
@@ -365,6 +361,7 @@ class SynthesisPipeline:
             code = re.sub(r'\n\s*\n', '\n', code)
             return code.strip()
 
+        synthesis_cap = self.config.get('synthesis', {}).get('context_window_cap', 16384)
         sys_tokens = estimate_tokens(synth_prompts.CONSOLIDATION_SYSTEM_PROMPT)
         max_payload_tokens = max(500, synthesis_cap - sys_tokens - 1000)
 

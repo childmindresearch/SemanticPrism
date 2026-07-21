@@ -21,18 +21,14 @@ def main():
     synth_mode = config.get('synthesis', {}).get('execution_mode', 'community')
     print(f"   -> Synthesis Execution Mode: '{synth_mode}'")
 
-    comm_topology = None
-    emb_topology = None
-    unified_topology = None
+    comm_targets = None
+    emb_targets = None
 
     if synth_mode in ("both", "community"):
-        comm_topology = load_json("outputs/03_topology/community/topology_partitions.json")
+        comm_targets = load_json("outputs/03_topology/community/resolved_community_targets.json")
 
     if synth_mode in ("both", "embedding"):
-        emb_topology = load_json("outputs/03_topology/embedding/topology_partitions.json")
-
-    if synth_mode == "unified":
-        unified_topology = load_json("outputs/03_topology/unified/topology_partitions.json")
+        emb_targets = load_json("outputs/03_topology/embedding/resolved_embedded_targets.json")
 
     refined_triplets = load_json("outputs/02_refinement/refined_triplets.json")
     original_triplets = load_json("outputs/01_extraction/original_triplets.json")
@@ -40,7 +36,7 @@ def main():
     master_themes_raw = load_json("outputs/01_extraction/master_themes.json")
     
     # Check if files exist
-    if not (comm_topology or emb_topology or unified_topology) or not all([refined_triplets, original_triplets, taxonomic_map, master_themes_raw]):
+    if not (comm_targets or emb_targets) or not all([refined_triplets, original_triplets, taxonomic_map, master_themes_raw]):
         print("Error: Cannot run Stage 4. Missing required preceding stage outputs.")
         return
 
@@ -51,7 +47,7 @@ def main():
         master_themes = master_themes_raw
 
     pipeline = SynthesisPipeline(config)
-    pipeline.execute(comm_topology=comm_topology, emb_topology=emb_topology, unified_topology=unified_topology, refined_triplets=refined_triplets, original_triplets=original_triplets, taxonomic_map=taxonomic_map, master_themes=master_themes)
+    pipeline.execute(comm_targets=comm_targets, emb_targets=emb_targets, refined_triplets=refined_triplets, original_triplets=original_triplets, taxonomic_map=taxonomic_map, master_themes=master_themes)
     
     print("=== Stage 4 Synthesis Completed Successfully ===")
 
