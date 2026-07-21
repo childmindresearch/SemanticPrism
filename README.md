@@ -77,19 +77,19 @@ graph TD
 
 ---
 
-### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](run_stage_3.py))
-**Purpose:** To map refined triplets into a network graph and execute **Dual-Path Topological Partitioning** to discover workflow sequences and structural category taxonomies.
+### Stage 3: Dual-Path Graph Topology & Fusion ([run_stage_3.py](run_stage_3.py))
+**Purpose:** To map refined triplets into a network graph, execute **Dual-Path Topological Partitioning** to discover workflow sequences and structural category taxonomies, and align/unify the two paths using **Jaccard Graph Distance Isomorphic Fusion**.
 
 ```mermaid
 graph TD
-    Triplets["refined_triplets.json"] --> Graph["NetworkX Directed Graph"]
-    Graph --> HubDetect{"Hub Detection"}
+    Triplets["refined_triplets.json"] --> Graph["NetworkX Directed Graph (graph_builder.py)"]
+    Graph --> HubDetect{"Hub Detection (P_i, Betweenness, Modularity Vitality)"}
     
     subgraph path1 ["Path 1: Community Workflow (Leiden)"]
         HubDetect -->|"Participation Coeff >= 0.65 OR Betweenness Top 5%"| Hubs1["Prune Global Hubs"]
         Hubs1 --> GraphPruned1["Pruned Subgraph"]
         GraphPruned1 --> Leiden["Leiden Modularity Algorithm"]
-        Leiden --> CommPart["Leiden Spoke Communities"]
+        Leiden --> CommPart["Leiden Spoke Communities (W_i)"]
     end
 
     subgraph path2 ["Path 2: Embedding Categorical (Node2Vec)"]
@@ -97,19 +97,30 @@ graph TD
         Hubs2 --> GraphPruned2["Pruned Subgraph"]
         GraphPruned2 --> Node2Vec["Node2Vec Random Walks & Embeddings"]
         Node2Vec --> KMeans["K-Means Silhouette Optimization"]
-        KMeans --> StructPart["Structural Clusters"]
+        KMeans --> StructPart["Structural Clusters (K_j)"]
+    end
+
+    subgraph fusion_module ["Dual-Path Jaccard Fusion & Unification (fusion.py)"]
+        CommPart --> JaccardEngine["TopologyFusionPipeline (Jaccard Index Evaluation)"]
+        StructPart --> JaccardEngine
+        JaccardEngine --> IsoFusion["Isomorphic Fusion (J >= 0.70)"]
+        JaccardEngine --> RelComp["Relational Composition (0.20 <= J < 0.70)"]
     end
     
-    CommPart --> S3_Out["Stage 3 JSON Outputs & HTML Visuals"]
-    StructPart --> S3_Out
-    Hubs1 --> S3_Out
-    Hubs2 --> S3_Out
+    CommPart --> S3_Comm["outputs/03_topology/community/topology_partitions.json"]
+    StructPart --> S3_Emb["outputs/03_topology/embedding/topology_partitions.json"]
+    IsoFusion --> S3_Unif["outputs/03_topology/unified/topology_partitions.json"]
+    RelComp --> S3_Unif
 ```
 
 #### Detailed Stage 3 Process Flow & Updates
+*   **Modular Architecture Split:**
+    *   `src/topology/graph_builder.py`: Builds directed NetworkX graph, calculates centrality metrics ($P_i$, PageRank, Betweenness, Modularity Vitality), executes Path 1 (Leiden Modularity) and Path 2 (Node2Vec + K-Means), and exports primary path partitions and visual HTML charts.
+    *   `src/topology/fusion.py` [NEW]: Encapsulates `TopologyFusionPipeline` (computes pairwise Jaccard similarity $J(W_i, K_j)$, classifies `isomorphic_fusion` vs `relational_composition`, and renders interactive unified dashboards) and `TargetResolver` (Stage 4 target qualification and triplet capping).
 *   **Dual-Path Split:** The network graph is partitioned down two paths:
     1.  **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (using Participation Coefficient $P_i \ge 0.65$ or top 5% shortest-path betweenness centrality) to isolate tight modular event-sequences. Partitioned via the **Leiden Modularity Algorithm**.
     2.  **Path 2 (Embedding Categorical Path):** Prunes nodes based on Modularity Vitality ($\Delta Q < -0.005$) and Participation Coefficient ($P_i \ge 0.45$). Generates **Node2Vec** random walk embeddings, clustered via **Silhouette K-Means Optimization**.
+*   **Dual-Path Jaccard Fusion (`topology.fusion`):** Evaluates pairwise overlap $J(W_i, K_j) = \frac{|W_i \cap K_j|}{|W_i \cup K_j|}$. Fuses clusters into single targets when $J \ge 0.70$ (`fusion_threshold`) and creates relational sub-class composition links when $0.20 \le J < 0.70$ (`composition_threshold`).
 *   **Theme Inheritance Overlap:** Computes node overlap ratios across themes (`inheritance_overlap_threshold`), persisting parent-child theme inheritance relationships inside `topology_partitions.json`.
 *   **Output Locations:**
     *   `outputs/03_topology/normalized_triplets.json`: Normalized S-P-O statements used for graph construction.
@@ -122,7 +133,7 @@ graph TD
 
 ### Transition: Stage 3 to Stage 4 Data Flow
 
-This diagram maps how raw partitions and metrics exported by Stage 3 are dynamically resolved and routed by the Stage 4 synthesis target controller:
+This diagram maps how raw partitions and metrics exported by Stage 3 are dynamically resolved and routed by `TargetResolver` in [src/topology/fusion.py](src/topology/fusion.py):
 
 ```mermaid
 graph TD
@@ -130,6 +141,7 @@ graph TD
         direction TB
         S3_Comm["outputs/03_topology/community/topology_partitions.json"]
         S3_Emb["outputs/03_topology/embedding/topology_partitions.json"]
+        S3_Unif["outputs/03_topology/unified/topology_partitions.json"]
     end
 
     subgraph config_ingestion ["Config Ingestion"]
@@ -137,13 +149,14 @@ graph TD
         Conf["config.yaml"]
     end
 
-    subgraph routing_engine ["Routing Engine"]
+    subgraph routing_engine ["Target Resolver (fusion.py)"]
         direction TB
-        TargetResolv{"Target Resolver"}
+        TargetResolv{"TargetResolver Engine"}
     end
 
     S3_Comm --> TargetResolv
     S3_Emb --> TargetResolv
+    S3_Unif --> TargetResolv
     Conf -->|"min_cluster_size & max_hub_targets"| TargetResolv
 
     subgraph stage4_targets ["Stage 4 Targets"]

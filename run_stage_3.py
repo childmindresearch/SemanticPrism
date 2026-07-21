@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from src.config import settings
 from src.topology.graph_builder import TopologyPipeline
+from src.topology.fusion import TopologyFusionPipeline
 
 def main():
     print("=== SemanticPrism Stage 3: Topology Pipeline (Dual-Path Architecture) ===")
@@ -20,12 +21,13 @@ def main():
         return
         
     pipeline = TopologyPipeline(config=settings)
+    fusion_pipeline = TopologyFusionPipeline(config=settings)
     
     try:
         results = pipeline.execute(refined_triplets)
         
-        if "community" in results and "embedding" in results and pipeline.enable_unification:
-            pipeline.align_and_unify_paths(results["community"], results["embedding"])
+        if "community" in results and "embedding" in results and fusion_pipeline.enable_unification:
+            fusion_pipeline.align_and_unify_paths(results["community"], results["embedding"])
             
         # Verify outputs
         norm_triplets_out = Path("outputs/03_topology/normalized_triplets.json")

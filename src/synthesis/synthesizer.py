@@ -1,10 +1,8 @@
 import json
-import os
 import subprocess
 import shutil
 import asyncio
 from pathlib import Path
-from dataclasses import dataclass
 from typing import List, Dict, Any
 from datetime import datetime
 
@@ -16,6 +14,7 @@ from src.agents.synthesis_agents import (
     schema_reformat_agent,
     last_llm_responses
 )
+from src.topology.fusion import TargetResolver
 
 def clean_python_code(code: str) -> str:
     """Removes markdown formatting and escapes that LLMs often inject."""
@@ -73,7 +72,7 @@ class SynthesisPipeline:
 
         # Read config options
         schema_pass_mode = self.config.get('synthesis', {}).get('schema_pass_mode', 'both')
-        min_cluster_size = self.config.get('synthesis', {}).get('min_cluster_size', 5)
+        min_cluster_size = self.config.get('synthesis', {}).get('min_cluster_size', 32)
         run_norm = schema_pass_mode in ("both", "normalized")
         run_raw = schema_pass_mode in ("both", "raw")
         print(f"      -> Schema Pass Mode: '{schema_pass_mode}' (Normalized: {run_norm}, Raw: {run_raw})")
@@ -161,42 +160,13 @@ class SynthesisPipeline:
         if run_raw:
             raw_dir.mkdir(parents=True, exist_ok=True)
 
-        # Resolve Hubs and Filter Count based on Centrality Metrics
-        raw_hubs = topology.get("global_hubs", [])
-        max_hub_targets = self.config.get('synthesis', {}).get('max_hub_targets', 10)
-        metrics = topology.get("node_metrics", {})
+        # Resolve Targets and Enum Nodes via TargetResolver (fusion.py)
+        targets, all_enum_nodes = TargetResolver.qualify_and_resolve_targets(topology, path_type, self.config)
+        active_agent = node2vec_schema_agent if path_type == "embedding" else leiden_schema_agent
         
-        def get_hub_sort_key(node_id):
-            node_m = metrics.get(node_id, {})
-            return (node_m.get("betweenness_centrality", 0.0), node_m.get("degree_centrality", 0.0))
-            
-        sorted_hubs = sorted(raw_hubs, key=get_hub_sort_key, reverse=True)
-        hubs = sorted_hubs[:max_hub_targets]
-        discarded_hubs = sorted_hubs[max_hub_targets:]
-
         # Phase 1: Orphan & Low-Density Node Aggregation (Enums)
         print(f"   -> [{path_label}] Phase 1: Orphan & Low-Density Node Aggregation (Enums)...")
-        orphans = list(topology.get("orphans", []))
-        small_cluster_nodes = []
-
-        if path_type == "embedding":
-            for cluster in topology.get("structural_clusters", []):
-                nodes = cluster.get("nodes", [])
-                if len(nodes) < min_cluster_size:
-                    small_cluster_nodes.extend(nodes)
-        elif path_type == "unified":
-            for fc in topology.get("fused_clusters", []):
-                nodes = fc.get("nodes", [])
-                if len(nodes) < min_cluster_size:
-                    small_cluster_nodes.extend(nodes)
-        else:
-            for comm in topology.get("communities", []):
-                nodes = comm.get("nodes", [])
-                if len(nodes) < min_cluster_size:
-                    small_cluster_nodes.extend(nodes)
-
-        all_enum_nodes = sorted(list(set(orphans + small_cluster_nodes + discarded_hubs)))
-        print(f"      -> Total Enum Nodes: {len(all_enum_nodes)} ({len(orphans)} orphans + {len(small_cluster_nodes)} from low-density clusters + {len(discarded_hubs)} discarded hubs < {min_cluster_size} nodes)")
+        print(f"      -> Total Enum Nodes: {len(all_enum_nodes)}")
         global_enums_code = ""
         
         if all_enum_nodes:
@@ -222,39 +192,9 @@ class SynthesisPipeline:
 
         # Phase 2: Schema Generation
         print(f"   -> [{path_label}] Phase 2: Schema Generation...")
-        
-        # Consolidate Targets (>= min_cluster_size)
-        targets = []
-        
-        if path_type == "embedding":
-            active_agent = node2vec_schema_agent
-            for cluster in topology.get("structural_clusters", []):
-                nodes_in_cluster = cluster.get("nodes", [])
-                if len(nodes_in_cluster) >= min_cluster_size:
-                    targets.append({"type": "structural_cluster", "id": cluster.get("cluster_id"), "nodes": nodes_in_cluster})
-            print(f"      -> Qualified Structural Clusters (>= {min_cluster_size} nodes): {len(targets)} targets")
-        elif path_type == "unified":
-            active_agent = leiden_schema_agent
-            for fc in topology.get("fused_clusters", []):
-                nodes_in_fc = fc.get("nodes", [])
-                if len(nodes_in_fc) >= min_cluster_size:
-                    targets.append({"type": "fused_cluster", "id": fc.get("fused_cluster_id"), "nodes": nodes_in_fc})
-            print(f"      -> Qualified Fused Clusters (>= {min_cluster_size} nodes): {len(targets)} targets")
-        else:
-            active_agent = leiden_schema_agent
-            for comm in topology.get("communities", []):
-                nodes_in_comm = comm.get("nodes", [])
-                if len(nodes_in_comm) >= min_cluster_size:
-                    targets.append({"type": "community", "id": comm.get("community_id"), "nodes": nodes_in_comm})
-            print(f"      -> Qualified Communities (>= {min_cluster_size} nodes): {len(targets)} targets")
-            
-        targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
-        spoke_count = len(targets)
-        
-        for hub in hubs:
-            targets.append({"type": "hub", "id": hub, "nodes": [hub]})
-            
-        print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {len(hubs)} global hubs)")
+        spoke_count = sum(1 for t in targets if t["type"] != "hub")
+        hub_count = sum(1 for t in targets if t["type"] == "hub")
+        print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {hub_count} global hubs)")
             
         synth_ctx = SynthesisContext(
             global_enums=global_enums_code
@@ -310,43 +250,13 @@ class SynthesisPipeline:
                 for i, target in enumerate(targets, start=1):
                     target_nodes = set(target["nodes"])
                     
-                    # Find all triplet indices associated with this target's nodes
-                    matching_indices = []
-                    for idx, refined_t in enumerate(refined_triplets):
-                        subj = str(refined_t.get('subject', '')).lower().strip()
-                        obj = str(refined_t.get('object', '')).lower().strip()
-                        if subj in target_nodes or obj in target_nodes:
-                            matching_indices.append(idx)
-                            
-                    # Prune matching indices if they exceed the cap based on centrality PageRank and intra-community status
-                    if len(matching_indices) > max_triplets_cap:
-                        metrics = topology.get("node_metrics", {})
-                        scored_indices = []
-                        for idx in matching_indices:
-                            refined_t = refined_triplets[idx]
-                            subj = str(refined_t.get('subject', '')).lower().strip()
-                            obj = str(refined_t.get('object', '')).lower().strip()
-                            
-                            subj_pr = metrics.get(subj, {}).get("pagerank", 0.0)
-                            obj_pr = metrics.get(obj, {}).get("pagerank", 0.0)
-                            base_score = subj_pr + obj_pr
-                            
-                            # Prioritize intra-community connections
-                            if (subj in target_nodes) and (obj in target_nodes):
-                                base_score += 1.0
-                                
-                            scored_indices.append((base_score, idx))
-                            
-                        scored_indices.sort(key=lambda x: x[0], reverse=True)
-                        matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
-                    
                     if run_norm:
-                        norm_subset = [refined_triplets[idx] for idx in matching_indices]
+                        norm_subset = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, topology, max_triplets_cap)
                         if norm_subset:
                             tasks.append(run_single_pass(norm_subset, True, i, target["type"], target["id"], sem, len(target_nodes)))
                     
                     if run_raw:
-                        raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
+                        raw_subset = TargetResolver.filter_and_cap_triplets(target_nodes, original_triplets, topology, max_triplets_cap)
                         if raw_subset:
                             tasks.append(run_single_pass(raw_subset, False, i, target["type"], target["id"], sem, len(target_nodes)))
                 
@@ -360,32 +270,15 @@ class SynthesisPipeline:
                 target_nodes = set(target["nodes"])
                 node_count = len(target_nodes)
                 
-                # Find all triplet indices associated with this target's nodes
-                matching_indices = []
-                for idx, refined_t in enumerate(refined_triplets):
-                    subj = str(refined_t.get('subject', '')).lower().strip()
-                    obj = str(refined_t.get('object', '')).lower().strip()
-                    if subj in target_nodes or obj in target_nodes:
-                        matching_indices.append(idx)
+                if run_norm:
+                    norm_subset = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, topology, max_triplets_cap)
+                    if norm_subset:
+                        run_single_pass_sync(norm_subset, True, i, target["type"], target["id"], node_count)
                         
-                # Prune matching indices if they exceed the cap based on centrality PageRank and intra-community status
-                if len(matching_indices) > max_triplets_cap:
-                    metrics = topology.get("node_metrics", {})
-                    scored_indices = []
-                    for idx in matching_indices:
-                        refined_t = refined_triplets[idx]
-                        subj = str(refined_t.get('subject', '')).lower().strip()
-                        obj = str(refined_t.get('object', '')).lower().strip()
-                        
-                        subj_pr = metrics.get(subj, {}).get("pagerank", 0.0)
-                        obj_pr = metrics.get(obj, {}).get("pagerank", 0.0)
-                        base_score = subj_pr + obj_pr
-                        
-                        # Prioritize intra-community connections
-                        if (subj in target_nodes) and (obj in target_nodes):
-                            base_score += 1.0
-                            
-                        scored_indices.append((base_score, idx))
+                if run_raw:
+                    raw_subset = TargetResolver.filter_and_cap_triplets(target_nodes, original_triplets, topology, max_triplets_cap)
+                    if raw_subset:
+                        run_single_pass_sync(raw_subset, False, i, target["type"], target["id"], node_count)
                         
                     scored_indices.sort(key=lambda x: x[0], reverse=True)
                     matching_indices = [idx for _, idx in scored_indices[:max_triplets_cap]]
@@ -425,7 +318,7 @@ class SynthesisPipeline:
                                     log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), "normalized", f"{target['type']} {target['id']}", i)
 
                 if run_raw:
-                    raw_subset = [original_triplets[idx] for idx in matching_indices if idx < len(original_triplets)]
+                    raw_subset = TargetResolver.filter_and_cap_triplets(target_nodes, original_triplets, topology, max_triplets_cap)
                     if raw_subset:
                         print(f"         -> API call for Target {i}/{len(targets)} ({target['type']} {target['id']}) - raw (Size: {node_count} nodes, {len(raw_subset)} triplets)...")
                         last_llm_responses.set([])
