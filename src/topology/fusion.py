@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from collections import defaultdict
 from typing import Dict, Any, List, Tuple
 from pyvis.network import Network
 from src.topology.schemas import TopologyResult, UnifiedClusterAlignment, UnifiedTopologyResult
@@ -356,31 +357,110 @@ class TargetResolver:
         return targets, all_enum_nodes
 
     @staticmethod
-    def filter_and_cap_triplets(target_nodes: set, triplets: List[Dict[str, Any]], topology: Dict[str, Any], max_triplets_cap: int) -> List[Dict[str, Any]]:
+    def _compute_node_specificity_map(topology: Dict[str, Any], triplets: List[Dict[str, Any]], path_type: str) -> Tuple[Dict[str, float], Dict[Tuple[Any, str], float]]:
         """
-        Filters triplets incident to target_nodes, scores each statement using PageRank + Intra-Cluster edge bonus (+1.0),
-        sorts descending by pagerank_score, and caps at max_triplets_cap.
+        Computes Inverse Global Concept Rarity and TF-IDF Cluster Concentration Ratio.
+        Returns:
+            (global_rarity_map, cluster_node_spec_map)
         """
-        metrics = topology.get("node_metrics", {})
+        import math
+        from collections import Counter, defaultdict
+        
+        global_node_counts = Counter()
+        for t in triplets:
+            subj = str(t.get('subject', '')).lower().strip()
+            obj = str(t.get('object', '')).lower().strip()
+            if subj: global_node_counts[subj] += 1
+            if obj: global_node_counts[obj] += 1
+            
+        total_global_nodes = len(global_node_counts) or 1
+        global_rarity_map = {}
+        for node, cnt in global_node_counts.items():
+            global_rarity_map[node] = math.log(1.0 + (total_global_nodes / (cnt + 1.0)))
+            
+        cluster_node_counts = defaultdict(Counter)
+        if path_type == "embedding":
+            clusters = topology.get("structural_clusters", [])
+            for c in clusters:
+                c_id = c.get("cluster_id")
+                for n in c.get("nodes", []):
+                    cluster_node_counts[c_id][str(n).lower().strip()] += 1
+        elif path_type == "unified":
+            fused = topology.get("fused_clusters", [])
+            for fc in fused:
+                fc_id = fc.get("fused_cluster_id")
+                for n in fc.get("nodes", []):
+                    cluster_node_counts[fc_id][str(n).lower().strip()] += 1
+        else:
+            communities = topology.get("communities", [])
+            for comm in communities:
+                c_id = comm.get("community_id")
+                for n in comm.get("nodes", []):
+                    cluster_node_counts[c_id][str(n).lower().strip()] += 1
+
+        cluster_node_spec_map = {}
+        for cid, c_counts in cluster_node_counts.items():
+            for node, c_cnt in c_counts.items():
+                global_cnt = global_node_counts.get(node, c_cnt)
+                other_cnt = global_cnt - c_cnt
+                cluster_spec = math.log(1.0 + (c_cnt / (other_cnt + 1.0)))
+                g_rarity = global_rarity_map.get(node, 1.0)
+                cluster_node_spec_map[(cid, node)] = g_rarity * (1.0 + cluster_spec)
+                
+        return global_rarity_map, cluster_node_spec_map
+
+    @staticmethod
+    def filter_and_cap_triplets(
+        target_nodes: set,
+        triplets: List[Dict[str, Any]],
+        topology: Dict[str, Any],
+        max_triplets_cap: int,
+        target_id: Any = "global",
+        path_type: str = "community"
+    ) -> List[Dict[str, Any]]:
+        """
+        Filters triplets incident to target_nodes, scores each statement using
+        Unified Semantic-Topological Triplet Scoring Engine with Asymmetric Pairwise Node Synergy,
+        sorts descending by triplet_rank_score, and caps at max_triplets_cap.
+        """
+        global_rarity_map, cluster_node_spec_map = TargetResolver._compute_node_specificity_map(topology, triplets, path_type)
+        
+        # Calculate local cluster degrees for graph connectedness
+        local_degrees = defaultdict(int)
+        for t in triplets:
+            subj = str(t.get('subject', '')).lower().strip()
+            obj = str(t.get('object', '')).lower().strip()
+            if subj in target_nodes and obj in target_nodes:
+                local_degrees[subj] += 1
+                local_degrees[obj] += 1
+                
+        cluster_size = len(target_nodes) or 1
         scored_triplets = []
         
         for idx, t in enumerate(triplets):
             subj = str(t.get('subject', '')).lower().strip()
             obj = str(t.get('object', '')).lower().strip()
+            
             if subj in target_nodes or obj in target_nodes:
-                subj_m = metrics.get(subj, {})
-                obj_m = metrics.get(obj, {})
+                # 1. Topological Graph Connectedness
+                intra_bonus = 1.0 if (subj in target_nodes and obj in target_nodes) else 0.5
+                local_density = (local_degrees.get(subj, 0) + local_degrees.get(obj, 0)) / (2.0 * cluster_size)
+                topology_score = intra_bonus + local_density
                 
-                subj_pr = subj_m.get("pagerank", 0.0) if isinstance(subj_m, dict) else getattr(subj_m, "pagerank", 0.0)
-                obj_pr = obj_m.get("pagerank", 0.0) if isinstance(obj_m, dict) else getattr(obj_m, "pagerank", 0.0)
+                # 2. Node-Level Specificities
+                subj_spec = cluster_node_spec_map.get((target_id, subj), global_rarity_map.get(subj, 0.5))
+                obj_spec = cluster_node_spec_map.get((target_id, obj), global_rarity_map.get(obj, 0.5))
                 
-                base_score = subj_pr + obj_pr
-                if (subj in target_nodes) and (obj in target_nodes):
-                    base_score += 1.0
-                    
+                # 3. Asymmetric Pairwise Synergy (Partner Concept Preservation)
+                asymmetric_synergy = max(subj_spec, obj_spec) + 0.5 * (subj_spec + obj_spec)
+                
+                # 4. Final Composite Triplet Rank Score
+                final_score = topology_score * asymmetric_synergy
+                
                 t_copy = dict(t)
-                t_copy["pagerank_score"] = round(float(base_score), 6)
-                scored_triplets.append((base_score, t_copy))
+                t_copy["triplet_rank_score"] = round(float(final_score), 6)
+                t_copy["pagerank_score"] = round(float(final_score), 6)  # Backward compatibility
+                scored_triplets.append((final_score, t_copy))
                 
         scored_triplets.sort(key=lambda x: x[0], reverse=True)
         return [t for _, t in scored_triplets[:max_triplets_cap]]
@@ -414,9 +494,9 @@ class TargetResolver:
             c_id = target["id"]
             target_nodes = set(target["nodes"])
             
-            # Filter, score, and cap triplets (top 1000 PageRank + Intra-cluster)
+            # Filter, score, and cap triplets with Asymmetric Synergy Engine
             capped_triplets = TargetResolver.filter_and_cap_triplets(
-                target_nodes, refined_triplets, topology, max_triplets_cap
+                target_nodes, refined_triplets, topology, max_triplets_cap, target_id=c_id, path_type=path_type
             )
             
             filename_suffix = f"{path_type}_{c_id}" if target_type != "hub" else f"hub_{c_id}"
