@@ -23,8 +23,12 @@ class TopologyFusionPipeline:
     def align_and_unify_paths(self, comm_result: TopologyResult, emb_result: TopologyResult) -> UnifiedTopologyResult:
         print("   ==> Executing Dual-Path Jaccard Fusion & Unification (fusion.py)...")
         
-        communities = comm_result.communities
-        structural_clusters = emb_result.structural_clusters
+        # Filter qualified spoke targets (>= min_cluster_size) via TargetResolver
+        comm_targets, _ = TargetResolver.qualify_and_resolve_targets(comm_result.model_dump(), "community", self.full_config)
+        emb_targets, _ = TargetResolver.qualify_and_resolve_targets(emb_result.model_dump(), "embedding", self.full_config)
+        
+        comm_spokes = [t for t in comm_targets if t["type"] != "hub"]
+        emb_spokes = [t for t in emb_targets if t["type"] != "hub"]
         
         alignments = []
         fused_clusters = []
@@ -34,13 +38,13 @@ class TopologyFusionPipeline:
         matched_sc_ids = set()
         alignment_counter = 0
         
-        for comm in communities:
-            c_nodes = set(comm.nodes)
-            c_id = comm.community_id
+        for comm_t in comm_spokes:
+            c_nodes = set(comm_t["nodes"])
+            c_id = comm_t["id"]
             
-            for sc in structural_clusters:
-                s_nodes = set(sc.nodes)
-                s_id = sc.cluster_id
+            for emb_t in emb_spokes:
+                s_nodes = set(emb_t["nodes"])
+                s_id = emb_t["id"]
                 
                 if not c_nodes or not s_nodes:
                     continue
@@ -84,8 +88,8 @@ class TopologyFusionPipeline:
                         union_nodes=sorted(list(union))
                     ))
                     
-        all_comm_ids = set(c.community_id for c in communities)
-        all_sc_ids = set(sc.cluster_id for sc in structural_clusters)
+        all_comm_ids = set(t["id"] for t in comm_spokes)
+        all_sc_ids = set(t["id"] for t in emb_spokes)
         
         unmatched_comm = sorted(list(all_comm_ids - matched_comm_ids))
         unmatched_sc = sorted(list(all_sc_ids - matched_sc_ids))
