@@ -9,9 +9,9 @@ directories:
 ingestion:
   source_type: "parquet" # Options: "directory" or "parquet"
   parquet:
-    filename: "inputs/testdocs.parquet"
-    id_field: "unique_val"
-    text_field: "report"
+    filename: "inputs/summary_reports_100.parquet"
+    id_field: "identifier"
+    text_field: "anonymized"
 
 llm:
   # --- GEMINI TESTING BLOCK ---
@@ -32,7 +32,7 @@ llm:
 
 extraction:
   domain: "General Subjects"
-  max_async_calls: 2
+  max_async_calls: 3
   theme_chunk_max_words: 3500
   triple_chunk_max_words: 1200
   # Context Window Cap (in tokens) to optimize KV cache and prevent GPU memory overflow.
@@ -43,18 +43,18 @@ extraction:
   # Stage-specific model overrides (Optional: define separate theme and triple extraction models)
   llm_theme:
     provider: "ollama"
-    model_name: "gemma4:26b"
+    model_name: "SemP32k-Qwen:v1"
     api_key: ""
     temperature: 0.0
   llm_triple:
     provider: "ollama"
-    model_name: "gemma4:26b"
+    model_name: "SemP32k-Qwen:v1"
     base_url: "http://127.0.0.1:11434/v1"
     api_key: ""
     temperature: 0.0
   llm:
     provider: "ollama"
-    model_name: "gemma4:26b"
+    model_name: "SemP32k-Qwen:v1"
     base_url: "http://127.0.0.1:11434/v1"
     api_key: ""
     temperature: 0.0
@@ -77,7 +77,7 @@ refinement:
   # Stage-specific model overrides
   llm:
     provider: "ollama"
-    model_name: "gemma4:26b"
+    model_name: "SemP32k-Qwen:v1"
     base_url: "http://127.0.0.1:11434/v1"
     api_key: ""
     temperature: 0.0
@@ -207,7 +207,7 @@ synthesis:
   #   - "embedding"  : Synthesize Path 2 categorical schemas from outputs/03_topology/embedding/.
   #   - "unified"    : Synthesize Dual-Path Jaccard Fused schemas from outputs/03_topology/unified/.
   #   - "both"       : Synthesize both Path 1 and Path 2 schemas in sequence.
-  execution_mode: "community"
+  execution_mode: "both"
 
   # Stage 4 Schema Pass Execution Mode
   # Options:
@@ -233,11 +233,11 @@ synthesis:
   # Context Window Cap (in tokens) for schema generation and consolidation.
   # Consolidation parses multiple Python file schemas, which can grow large.
   # Set higher (e.g., 16384) to prevent truncation of target schemas.
-  context_window_cap: 16384
+  context_window_cap: 28000
   # Stage-specific model overrides
   llm:
     provider: "ollama"
-    model_name: "SemP16k-Qwen122:latest" #"gemma4:26b"
+    model_name: "SemP32k-Qwen:v1" #"gemma4:26b"
     base_url: "http://127.0.0.1:11434/v1"
     api_key: ""
     temperature: 0.0
