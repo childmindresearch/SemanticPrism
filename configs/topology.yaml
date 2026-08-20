@@ -1,0 +1,48 @@
+# =========================================================================
+# STAGE 3: GRAPH TOPOLOGY & DUAL-PATH FUSION CONFIGURATION
+# =========================================================================
+# Controls graph partitioning, community workflow discovery, embedding
+# categorizations, Jaccard fusion cutoffs, and HTML canvas visual rendering.
+# =========================================================================
+
+topology:
+  # Execution Mode for Stage 3 Topology Pipeline
+  # Options: "both" (Concurrent Leiden & Node2Vec), "community" (Leiden only), "embedding" (Node2Vec only)
+  execution_mode: "both"
+  inheritance_overlap_threshold: 0.3
+
+  # =========================================================================
+  # DUAL-PATH JACCARD FUSION & UNIFICATION (Path 1 + Path 2 Alignment)
+  # =========================================================================
+  fusion:
+    enable_unification: true
+    fusion_threshold: 0.70        # Jaccard >= 0.70 -> Isomorphic Fusion (Merged target)
+    composition_threshold: 0.20   # 0.20 <= Jaccard < 0.70 -> Relational Composition (Sub-class link)
+
+  # =========================================================================
+  # PATH 1: COMMUNITY PATH (Approach A - Workflow & Event Isolation)
+  # =========================================================================
+  community_path:
+    participation_threshold: 0.65 # Cutoff for cross-community hubs (P_i in [0, 1])
+    betweenness_percentile: 0.95  # Shortest-path narrative chokepoint cutoff (e.g. top 5%)
+    leiden_resolution: 1.0        # Leiden modularity resolution density parameter
+
+  # =========================================================================
+  # PATH 2: EMBEDDING PATH (Approach B - Pure Category & Role Isolation)
+  # =========================================================================
+  embedding_path:
+    participation_threshold: 0.45            # Cutoff for cross-theme structural hubs
+    enable_modularity_vitality_pruning: true # Prunes boundary-blurring nodes (Delta Q < -0.005)
+    max_structural_clusters: 12              # Max K evaluated during K-Means Silhouette optimization
+    node2vec_dimensions: 128                 # Vector space dimensionality for Node2Vec
+    node2vec_walk_length: 10                 # Length of random walk trajectories per node
+    node2vec_num_walks: 100                  # Number of random walk iterations per node
+
+  # =========================================================================
+  # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
+  # =========================================================================
+  visualizations:
+    min_node_degree: 3           # Minimum node degree to render on global diagnostic HTML charts
+    max_nodes_per_cluster: 30     # Max central nodes per cluster to render on global diagnostic HTML charts
+    max_total_visual_nodes: 0.25 # Max nodes as fraction of total graph nodes (e.g. 0.25 = top 25%)
+    freeze_physics: true         # Disable live physics engine after stabilization for smooth panning

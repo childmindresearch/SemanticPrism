@@ -1,67 +1,54 @@
 """
-Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline
+SemanticPrism Stage 2: Full Refinement Pipeline Orchestrator
+This script sequentially executes Stage 2 Lexical Normalization and Stage 2 Taxonomic Lifting
+in isolated subprocesses to ensure memory and VRAM are cleanly garbage collected.
 """
 
-import json
-from pathlib import Path
+import subprocess
+import sys
+import time
 
-from src.config import settings
-from src.extraction.schemas import RawTriple
-from src.refinement.refiner import RefinementPipeline, PipelineRunContext
+def run_substage(script_name: str, substage_desc: str):
+    print("\n" + "="*60)
+    print(f"🚀 INITIATING {substage_desc.upper()}")
+    print("="*60)
+    
+    start_time = time.time()
+    
+    try:
+        result = subprocess.run(
+            [sys.executable, script_name],
+            check=True,
+            text=True
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ CRITICAL ERROR in {script_name}!")
+        print(f"Stage 2 halted at {substage_desc}.")
+        sys.exit(1)
+        
+    duration = time.time() - start_time
+    print(f"\n✅ {substage_desc} completed in {duration:.2f} seconds.")
 
 def main():
-    print("=== SemanticPrism Stage 2: Refinement Pipeline ===")
+    print("=== SemanticPrism Stage 2: Full Refinement Pipeline ===")
     
-    # Define paths
-    input_dir = Path("outputs/01_extraction")
-    if not input_dir.exists():
-        print(f"Error: Required input directory '{input_dir}' not found.")
-        print("Please run Stage 1 first.")
-        return
-
-    # Load master themes
-    try:
-        with open(input_dir / "master_themes.json", "r") as f:
-            master_data = json.load(f)
-            master_domain = master_data.get("master_domain", settings.get('extraction', {}).get('domain', 'Unknown'))
-            master_themes = master_data.get("master_themes", [])
-    except Exception as e:
-        print(f"Failed to load master themes: {e}")
-        return
-
-    # Load original themes
-    try:
-        with open(input_dir / "all_themes.json", "r") as f:
-            original_themes = json.load(f)
-    except Exception as e:
-        print(f"Failed to load original themes: {e}")
-        return
-
-    # Load original triplets
-    try:
-        with open(input_dir / "original_triplets.json", "r") as f:
-            triplets_data = json.load(f)
-            # Parse into Pydantic models
-            raw_triples = [RawTriple(**t) for t in triplets_data]
-    except Exception as e:
-        print(f"Failed to load original triplets: {e}")
-        return
-
-    # Initialize Pipeline Context
-    context = PipelineRunContext(master_domain=master_domain)
-
-    # Execute Refinement Pipeline
-    pipeline = RefinementPipeline(config=settings, context=context)
+    stage_start = time.time()
     
-    try:
-        pipeline.execute(
-            raw_triples=raw_triples,
-            original_themes=original_themes,
-            master_themes=master_themes
-        )
-        print("=== Stage 2 Refinement Completed Successfully ===")
-    except Exception as e:
-        print(f"Error during Refinement execution: {e}")
+    run_substage("run_stage_2_normalization.py", "Stage 2 Part 1: Lexical Normalization")
+    run_substage("run_stage_2_taxonomic_lifting.py", "Stage 2 Part 2: Taxonomic Lifting & Theme Mapping")
+    
+    total_duration = time.time() - stage_start
+    print("\n" + "="*60)
+    print(f"🎉 STAGE 2 FULL REFINEMENT PIPELINE COMPLETE!")
+    print(f"Total Stage 2 Time: {total_duration:.2f} seconds")
+    print("Outputs saved in 'outputs/02_refinement':")
+    print(" - subject_normalization_map.json")
+    print(" - predicate_normalization_map.json")
+    print(" - object_normalization_map.json")
+    print(" - refined_triplets.json")
+    print(" - entity_clusters.json")
+    print(" - theme_taxonomy_mapping.json")
+    print("="*60 + "\n")
 
 if __name__ == "__main__":
     main()

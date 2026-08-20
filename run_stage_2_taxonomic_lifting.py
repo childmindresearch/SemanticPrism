@@ -1,5 +1,5 @@
 """
-Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline (Part 2 - Clustering, Taxonomic Lifting, Theme Mapping)
+Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline (Clustering, Taxonomic Lifting, Theme Mapping)
 """
 
 import json
@@ -10,7 +10,7 @@ from src.extraction.schemas import RawTriple
 from src.refinement.refiner import RefinementPipeline, PipelineRunContext
 
 def main():
-    print("=== SemanticPrism Stage 2: Refinement Pipeline (Part 2 - Clustering, Taxonomic Lifting, Theme Mapping) ===")
+    print("=== SemanticPrism Stage 2: Refinement Pipeline (Clustering, Taxonomic Lifting, Theme Mapping) ===")
     
     # Define paths
     input_dir = Path("outputs/01_extraction")
@@ -21,14 +21,14 @@ def main():
         print("Please run Stage 1 first.")
         return
 
-    # Check if Part 1 outputs exist
+    # Check if Normalization outputs exist
     sub_map_path = refinement_dir / "subject_normalization_map.json"
     pred_map_path = refinement_dir / "predicate_normalization_map.json"
     obj_map_path = refinement_dir / "object_normalization_map.json"
     
     if not (sub_map_path.exists() and pred_map_path.exists() and obj_map_path.exists()):
-        print("Error: Normalization maps from Stage 2 Part 1 not found in outputs/02_refinement/.")
-        print("Please run Stage 2 Part 1 first using: python run_stage_2_part_1.py")
+        print("Error: Normalization maps from Stage 2 Normalization not found in outputs/02_refinement/.")
+        print("Please run Stage 2 Normalization first using: python run_stage_2_normalization.py")
         return
 
     # Load master themes
@@ -73,7 +73,7 @@ def main():
     # Initialize Pipeline Context
     context = PipelineRunContext(master_domain=master_domain)
 
-    # Execute Refinement Pipeline Part 2
+    # Execute Refinement Pipeline (Taxonomic Lifting & Theme Mapping)
     pipeline = RefinementPipeline(config=settings, context=context)
     
     try:
@@ -85,9 +85,9 @@ def main():
             predicate_map=predicate_map,
             object_map=object_map
         )
-        print("=== Stage 2 Refinement Part 2 Completed Successfully ===")
+        print("=== Stage 2 Taxonomic Lifting & Theme Mapping Completed Successfully ===")
     except Exception as e:
-        print(f"Error during Refinement execution (Part 2): {e}")
+        print(f"Error during Taxonomic Lifting execution: {e}")
 
 if __name__ == "__main__":
     main()

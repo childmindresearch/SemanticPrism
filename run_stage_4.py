@@ -1,6 +1,6 @@
 import json
-import yaml
 from pathlib import Path
+from src.config import settings
 from src.synthesis.synthesizer import SynthesisPipeline
 
 def load_json(filepath):
@@ -14,8 +14,7 @@ def load_json(filepath):
 def main():
     print("=== SemanticPrism Stage 4: Synthesis Pipeline ===")
     
-    with open("config.yaml", "r") as f:
-        config = yaml.safe_load(f)
+    config = settings
 
     # Check synthesis execution mode
     synth_mode = config.get('synthesis', {}).get('execution_mode', 'community')

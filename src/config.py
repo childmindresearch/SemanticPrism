@@ -13,16 +13,24 @@ import yaml
 from pathlib import Path
 from dotenv import load_dotenv
 
+def deep_merge(dict_a: dict, dict_b: dict) -> dict:
+    """Recursively merges dict_b into dict_a."""
+    for key, value in dict_b.items():
+        if key in dict_a and isinstance(dict_a[key], dict) and isinstance(value, dict):
+            deep_merge(dict_a[key], value)
+        else:
+            dict_a[key] = value
+    return dict_a
+
 class ConfigLoader:
     _config = None
 
     @classmethod
     def get_config(cls):
-        """Loads and caches the configuration from config.yaml."""
+        """Loads, merges, and caches configuration from configs/*.yaml and config.yaml."""
         if cls._config is None:
-            # Dynamically calculate the root directory relative to this file
-            # src/config.py -> parent is src/ -> parent is SemanticPrism/
             root_dir = Path(__file__).parent.parent
+            configs_dir = root_dir / 'configs'
             config_path = root_dir / 'config.yaml'
             env_path = root_dir / '.env'
             
@@ -30,13 +38,28 @@ class ConfigLoader:
             if env_path.exists():
                 load_dotenv(dotenv_path=env_path)
             
-            with open(config_path, 'r', encoding='utf-8') as f:
-                cls._config = yaml.safe_load(f)
+            merged_config = {}
+
+            # Load modular config files from configs/ directory if present
+            if configs_dir.exists() and configs_dir.is_dir():
+                yaml_files = sorted(configs_dir.glob('*.yaml'))
+                for yf in yaml_files:
+                    with open(yf, 'r', encoding='utf-8') as f:
+                        data = yaml.safe_load(f) or {}
+                        deep_merge(merged_config, data)
+
+            # Supplementary load from legacy config.yaml if present
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    legacy_data = yaml.safe_load(f) or {}
+                    deep_merge(merged_config, legacy_data)
+
+            cls._config = merged_config
                 
             # Automatically override the API key from the environment
             env_key = os.getenv("GEMINI_API_KEY")
             if env_key:
-                if "llm" in cls._config:
+                if "llm" in cls._config and isinstance(cls._config["llm"], dict):
                     cls._config["llm"]["api_key"] = env_key
                 for stage in ["extraction", "refinement", "synthesis"]:
                     if stage in cls._config and isinstance(cls._config[stage], dict):

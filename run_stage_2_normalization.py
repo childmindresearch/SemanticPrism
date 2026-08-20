@@ -1,5 +1,5 @@
 """
-Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline (Part 1 - Lexical Normalization)
+Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline (Lexical Normalization)
 """
 
 import json
@@ -10,7 +10,7 @@ from src.extraction.schemas import RawTriple
 from src.refinement.refiner import RefinementPipeline, PipelineRunContext
 
 def main():
-    print("=== SemanticPrism Stage 2: Refinement Pipeline (Part 1 - Lexical Normalization) ===")
+    print("=== SemanticPrism Stage 2: Refinement Pipeline (Lexical Normalization) ===")
     
     # Define paths
     input_dir = Path("outputs/01_extraction")
@@ -42,7 +42,7 @@ def main():
     # Initialize Pipeline Context
     context = PipelineRunContext(master_domain=master_domain)
 
-    # Execute Refinement Pipeline Part 1
+    # Execute Refinement Pipeline (Lexical Normalization)
     pipeline = RefinementPipeline(config=settings, context=context)
     
     try:
@@ -50,9 +50,9 @@ def main():
             raw_triples=raw_triples,
             master_themes=master_themes
         )
-        print("=== Stage 2 Refinement Part 1 Completed Successfully ===")
+        print("=== Stage 2 Lexical Normalization Completed Successfully ===")
     except Exception as e:
-        print(f"Error during Refinement execution (Part 1): {e}")
+        print(f"Error during Lexical Normalization execution: {e}")
 
 if __name__ == "__main__":
     main()

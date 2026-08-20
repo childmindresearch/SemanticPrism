@@ -1,0 +1,39 @@
+# =========================================================================
+# LLM & TOKEN CONFIGURATION
+# =========================================================================
+# Controls model selection, API endpoints, context window caps, VRAM purging,
+# and async concurrency limits across all pipeline stages.
+# =========================================================================
+
+llm:
+  provider: "ollama"           # Options: "ollama", "google", "openai", etc.
+  model_name: "qwen2.5:7b"
+  base_url: "http://127.0.0.1:11434/v1"
+  api_key: ""                  # Overridden automatically if GEMINI_API_KEY is set in .env
+  temperature: 0.0
+  manage_vram: true            # Purges model VRAM between stage transitions
+
+# Stage 1 (Extraction) Token & Concurrency Parameters
+extraction:
+  domain: "General Subjects"   # Context domain injected into extraction prompts
+  max_async_calls: 3
+  theme_chunk_max_words: 3500
+  triple_chunk_max_words: 1200
+  context_window_cap: 8192     # Max tokens per extraction prompt payload
+
+# Stage 2 (Refinement) Token & Concurrency Parameters
+refinement:
+  max_async_calls: 6
+  context_window_cap: 2048     # Max tokens per lexical normalization prompt payload
+
+# Stage 4 (Synthesis) Token & Concurrency Parameters
+synthesis:
+  max_async_calls: 3
+  context_window_cap: 28000    # Max tokens for Pydantic schema synthesis and consolidation
+  # Stage-specific model override (optional)
+  llm:
+    provider: "ollama"
+    model_name: "qwen2.5:7b"
+    base_url: "http://127.0.0.1:11434/v1"
+    api_key: ""
+    temperature: 0.0

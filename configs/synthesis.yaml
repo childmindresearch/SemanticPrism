@@ -1,0 +1,27 @@
+# =========================================================================
+# STAGE 4: PYDANTIC SCHEMA SYNTHESIS CONFIGURATION
+# =========================================================================
+# Controls target qualification, hub target limits, PageRank triplet payload
+# pruning, and schema execution modes.
+# =========================================================================
+
+synthesis:
+  # Stage 4 Synthesis Path Execution Mode
+  # Options: "community", "embedding", "unified", "both"
+  execution_mode: "both"
+
+  # Stage 4 Schema Pass Execution Mode
+  # Options: "normalized" (refined_triplets.json), "raw" (original_triplets.json), "both"
+  schema_pass_mode: "normalized"
+
+  # Entity threshold for Stage 4 target qualification.
+  # Clusters with < 32 entities are routed directly to Phase 1 Enum synthesis (enums.py).
+  min_cluster_size: 32
+
+  # Maximum number of global hub nodes to process as individual schema targets.
+  # Hubs exceeding this limit are routed directly to Phase 1 Enum synthesis (enums.py).
+  max_hub_targets: 4
+
+  # Maximum number of triplets sent to the LLM per schema generation target.
+  # Subsets exceeding this cap are pruned based on PageRank and intra-community status.
+  max_triplets_per_target: 1200
