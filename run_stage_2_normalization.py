@@ -12,6 +12,10 @@ from src.refinement.refiner import RefinementPipeline, PipelineRunContext
 def main():
     print("=== SemanticPrism Stage 2: Refinement Pipeline (Lexical Normalization) ===")
     
+    # Determine resume mode settings
+    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
+    print(f"Pipeline Resume Mode: {resume_mode}\n")
+    
     # Define paths
     input_dir = Path("outputs/01_extraction")
     if not input_dir.exists():

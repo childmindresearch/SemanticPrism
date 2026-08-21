@@ -55,7 +55,12 @@ class RefinementPipeline:
             log_file.unlink()
 
         # Setup SQLite Database and Lock for WAL-safe async operations
-        self.resume = self.config.get('refinement', {}).get('resume', True)
+        pipeline_resume_mode = self.config.get('pipeline', {}).get('resume_mode', 'skip')
+        self.resume = (str(pipeline_resume_mode).lower() == 'skip')
+
+        mode_str = "skip (resume existing cache)" if self.resume else "overwrite (clear cache & restart)"
+        print(f"[Refinement] Pipeline Resume Mode: {mode_str}\n")
+
         db_dir = Path(base_out_dir) / "02_refinement"
         db_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = db_dir / "refinement_state.db"
@@ -87,7 +92,12 @@ class RefinementPipeline:
             term_type TEXT
         );
         """)
-        conn.execute("DROP TABLE IF EXISTS taxonomic_lifting;")
+        conn.execute("""
+        CREATE TABLE IF NOT EXISTS taxonomic_lifting (
+            cluster_key TEXT PRIMARY KEY,
+            mapped_term TEXT
+        );
+        """)
         conn.commit()
         conn.close()
 
@@ -490,6 +500,19 @@ class RefinementPipeline:
                 target_map[cluster_terms[0]] = cluster_terms[0]
                 return
             
+            cluster_key = ",".join(sorted(cluster_terms))
+            if self.resume:
+                rows = await self._run_db_query(
+                    "SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?",
+                    (cluster_key,)
+                )
+                if rows and rows[0][0]:
+                    cached_mapped = rows[0][0]
+                    print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
+                    for t in cluster_terms:
+                        target_map[t] = cached_mapped
+                    return
+
             async with sem:
                 print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
                 idx = [terms_list.index(t) for t in cluster_terms]
@@ -544,6 +567,12 @@ class RefinementPipeline:
                     print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
                     for t in cluster_terms:
                         target_map[t] = mapped_term
+                    if self.resume:
+                        await self._run_db_query(
+                            "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
+                            (cluster_key, mapped_term),
+                            is_write=True
+                        )
                 except Exception as e:
                     print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
                     error_record = {
@@ -556,13 +585,34 @@ class RefinementPipeline:
                     print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
                     for t in cluster_terms:
                         target_map[t] = mapped_term
+                    if self.resume:
+                        await self._run_db_query(
+                            "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
+                            (cluster_key, mapped_term),
+                            is_write=True
+                        )
 
         def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
+            import sqlite3
             cluster_terms = cluster["members"]
             label = cluster["cluster_number"]
             if len(cluster_terms) == 1:
                 target_map[cluster_terms[0]] = cluster_terms[0]
                 return
+            
+            cluster_key = ",".join(sorted(cluster_terms))
+            if self.resume:
+                conn = sqlite3.connect(self.db_path, timeout=30.0)
+                cursor = conn.cursor()
+                cursor.execute("SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?", (cluster_key,))
+                row = cursor.fetchone()
+                conn.close()
+                if row and row[0]:
+                    cached_mapped = row[0]
+                    print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
+                    for t in cluster_terms:
+                        target_map[t] = cached_mapped
+                    return
             
             print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
             idx = [terms_list.index(t) for t in cluster_terms]
@@ -617,6 +667,12 @@ class RefinementPipeline:
                 print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
                 for t in cluster_terms:
                     target_map[t] = mapped_term
+                if self.resume:
+                    conn = sqlite3.connect(self.db_path, timeout=30.0)
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
+                    conn.commit()
+                    conn.close()
             except Exception as e:
                 print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
                 error_record = {
@@ -629,6 +685,12 @@ class RefinementPipeline:
                 print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
                 for t in cluster_terms:
                     target_map[t] = mapped_term
+                if self.resume:
+                    conn = sqlite3.connect(self.db_path, timeout=30.0)
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
+                    conn.commit()
+                    conn.close()
 
         # Count clusters that need LLM resolution vs those resolved locally (singletons)
         subj_singletons = sum(1 for c in subj_clusters if len(c["members"]) == 1)

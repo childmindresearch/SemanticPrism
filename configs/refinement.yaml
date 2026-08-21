@@ -6,7 +6,6 @@
 # =========================================================================
 
 refinement:
-  resume: true                 # Options: true (resume from SQLite DB cache) or false (start fresh)
   batch_size: 25               # Terms per API payload batch during lexical normalization
   timeout: 300.0               # Timeout limit in seconds per normalization API batch
   embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model

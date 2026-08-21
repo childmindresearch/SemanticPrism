@@ -8,6 +8,8 @@ import subprocess
 import sys
 import time
 
+from src.config import settings
+
 def run_substage(script_name: str, substage_desc: str):
     print("\n" + "="*60)
     print(f"🚀 INITIATING {substage_desc.upper()}")
@@ -31,6 +33,9 @@ def run_substage(script_name: str, substage_desc: str):
 
 def main():
     print("=== SemanticPrism Stage 2: Full Refinement Pipeline ===")
+    
+    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
+    print(f"Pipeline Resume Mode: {resume_mode}\n")
     
     stage_start = time.time()
     
