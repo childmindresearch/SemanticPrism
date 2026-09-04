@@ -287,9 +287,14 @@ class TopologyPipeline:
         hub_partitions = []
         if algorithms:
             try:
-                coms = algorithms.leiden(ug_hubs)
+                node_list = list(ug_hubs.nodes())
+                mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                int_ug_hubs = nx.relabel_nodes(ug_hubs, mapping)
+                coms = algorithms.leiden(int_ug_hubs)
                 for i, c_nodes in enumerate(coms.communities):
-                    hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=list(c_nodes)))
+                    orig_nodes = [rev_mapping[n] for n in c_nodes]
+                    hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=orig_nodes))
             except Exception:
                 for i, comp in enumerate(nx.connected_components(ug_hubs)):
                     hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=list(comp)))
@@ -324,9 +329,14 @@ class TopologyPipeline:
         communities = []
         if algorithms and len(sub_graph.nodes()) > 0:
             try:
-                coms = algorithms.leiden(sub_graph)
+                node_list = list(sub_graph.nodes())
+                mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                int_sub_graph = nx.relabel_nodes(sub_graph, mapping)
+                coms = algorithms.leiden(int_sub_graph)
                 for i, community_nodes in enumerate(coms.communities):
-                    communities.append(CommunityPartition(community_id=i, nodes=list(community_nodes)))
+                    orig_nodes = [rev_mapping[n] for n in community_nodes]
+                    communities.append(CommunityPartition(community_id=i, nodes=orig_nodes))
             except Exception as e:
                 print(f"[Topology Community] Error in Leiden clustering: {e}. Falling back to connected components...")
                 for i, comp in enumerate(nx.connected_components(sub_graph)):

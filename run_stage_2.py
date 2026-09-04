@@ -50,9 +50,14 @@ def main():
     print(" - subject_normalization_map.json")
     print(" - predicate_normalization_map.json")
     print(" - object_normalization_map.json")
+    print(" - subject_clusters.json")
+    print(" - predicate_clusters.json")
+    print(" - object_clusters.json")
+    print(" - subject_taxonomic_map.json")
+    print(" - predicate_taxonomic_map.json")
+    print(" - object_taxonomic_map.json")
+    print(" - theme_mapping_clusters.json")
     print(" - refined_triplets.json")
-    print(" - entity_clusters.json")
-    print(" - theme_taxonomy_mapping.json")
     print("="*60 + "\n")
 
 if __name__ == "__main__":

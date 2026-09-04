@@ -30,11 +30,6 @@ def main():
     pred_map_path = refinement_dir / "predicate_normalization_map.json"
     obj_map_path = refinement_dir / "object_normalization_map.json"
     
-    if not (sub_map_path.exists() and pred_map_path.exists() and obj_map_path.exists()):
-        print("Error: Normalization maps from Stage 2 Normalization not found in outputs/02_refinement/.")
-        print("Please run Stage 2 Normalization first using: python run_stage_2_normalization.py")
-        return
-
     # Load master themes
     try:
         with open(input_dir / "master_themes.json", "r") as f:
@@ -62,23 +57,32 @@ def main():
         print(f"Failed to load original triplets: {e}")
         return
 
-    # Load normalization maps
-    try:
+    # Initialize Pipeline Context and Pipeline
+    context = PipelineRunContext(master_domain=master_domain)
+    pipeline = RefinementPipeline(config=settings, context=context)
+
+    # Load normalization maps or fallback to preprocessed identity mapping
+    if sub_map_path.exists():
         with open(sub_map_path, "r") as f:
             subject_map = json.load(f)
+    else:
+        print("   -> subject_normalization_map.json not found; using preprocessed identity map.")
+        subject_map = {t.subject: pipeline._nlp_preprocess(t.subject) for t in raw_triples}
+
+    if pred_map_path.exists():
         with open(pred_map_path, "r") as f:
             predicate_map = json.load(f)
+    else:
+        print("   -> predicate_normalization_map.json not found; using preprocessed identity map.")
+        predicate_map = {t.predicate: pipeline._nlp_preprocess(t.predicate) for t in raw_triples}
+
+    if obj_map_path.exists():
         with open(obj_map_path, "r") as f:
             object_map = json.load(f)
-    except Exception as e:
-        print(f"Failed to load normalization maps: {e}")
-        return
+    else:
+        print("   -> object_normalization_map.json not found; using preprocessed identity map.")
+        object_map = {t.object: pipeline._nlp_preprocess(t.object) for t in raw_triples}
 
-    # Initialize Pipeline Context
-    context = PipelineRunContext(master_domain=master_domain)
-
-    # Execute Refinement Pipeline (Taxonomic Lifting & Theme Mapping)
-    pipeline = RefinementPipeline(config=settings, context=context)
     
     try:
         pipeline.execute_part_2(

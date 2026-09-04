@@ -7,15 +7,15 @@
 
 pipeline:
   use_async: true
-  resume_mode: "overwrite" # Options: "skip" (resume existing stage runs) or "overwrite" (clear stage outputs)
+  resume_mode: "skip" # Options: "skip" (resume existing stage runs) or "overwrite" (clear stage outputs)
 
 directories:
   inputs: "inputs/testdocs"
   outputs: "outputs"
 
 ingestion:
-  source_type: "directory"   # Options: "directory" (text files) or "parquet" (dataset file)
+  source_type: "parquet"   # Options: "directory" (text files) or "parquet" (dataset file)
   parquet:
-    filename: "inputs/summary_reports_100.parquet"
+    filename: "inputs/testdocs.parquet"
     id_field: "identifier"
     text_field: "anonymized"

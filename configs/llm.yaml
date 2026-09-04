@@ -16,19 +16,19 @@ llm:
 # Stage 1 (Extraction) Token & Concurrency Parameters
 extraction:
   domain: "General Subjects"   # Context domain injected into extraction prompts
-  max_async_calls: 3
+  max_async_calls: 2
   theme_chunk_max_words: 3500
   triple_chunk_max_words: 1200
   context_window_cap: 8192     # Max tokens per extraction prompt payload
 
 # Stage 2 (Refinement) Token & Concurrency Parameters
 refinement:
-  max_async_calls: 6
+  max_async_calls: 2
   context_window_cap: 2048     # Max tokens per lexical normalization prompt payload
 
 # Stage 4 (Synthesis) Token & Concurrency Parameters
 synthesis:
-  max_async_calls: 3
+  max_async_calls: 2
   context_window_cap: 28000    # Max tokens for Pydantic schema synthesis and consolidation
   # Stage-specific model override (optional)
   llm:

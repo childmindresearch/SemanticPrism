@@ -12,15 +12,28 @@ from collections import defaultdict
 import numpy as np
 
 try:
+    import pyarrow as pa
+    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
+    if _orig_unregister:
+        def _safe_unregister(type_name):
+            try:
+                _orig_unregister(type_name)
+            except Exception:
+                pass
+        pa.unregister_extension_type = _safe_unregister
+except Exception:
+    pass
+
+try:
     from sentence_transformers import SentenceTransformer
-except ImportError:
+except Exception:
     SentenceTransformer = None
 
 try:
     from sklearn.preprocessing import normalize
     from sklearn.cluster import AgglomerativeClustering
     from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
-except ImportError:
+except Exception:
     normalize = None
     AgglomerativeClustering = None
     cosine_distances = None
@@ -122,6 +135,27 @@ class RefinementPipeline:
         else:
             return await asyncio.to_thread(_execute)
 
+    async def _run_db_executemany(self, query: str, param_list: list):
+        """Helper to execute bulk SQLite insertions safely."""
+        if not param_list:
+            return
+        import sqlite3
+
+        def _execute():
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            cursor = conn.cursor()
+            try:
+                cursor.executemany(query, param_list)
+                conn.commit()
+            finally:
+                conn.close()
+
+        async with self.db_lock:
+            await asyncio.to_thread(_execute)
+
+
     def _log_error(self, record: Dict[str, Any]):
         """Helper to append error records to stage_02_refinement_errors.json."""
         try:
@@ -144,6 +178,9 @@ class RefinementPipeline:
 
     def _load_embedding_model(self):
         if not self.embedding_model:
+            global SentenceTransformer
+            if SentenceTransformer is None:
+                from sentence_transformers import SentenceTransformer
             model_name = self.config.get('refinement', {}).get('embedding_model', 'all-MiniLM-L6-v2')
             
             # Ensure model is downloaded and stored locally in the project directory
@@ -172,8 +209,28 @@ class RefinementPipeline:
 
     def execute_part_1(self, raw_triples: List[RawTriple], master_themes: List[str]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
         print("[Refinement] Starting Stage 2 Pipeline Part 1 (Lexical Normalization)...")
-        # 1. Lexical Normalization
-        print("[Refinement] Step 1: Lexical Normalization")
+        ref_cfg = self.config.get('refinement', {})
+        enable_norm = ref_cfg.get('enable_normalization', True)
+        norm_subj = ref_cfg.get('normalize_subjects', True) if enable_norm else False
+        norm_pred = ref_cfg.get('normalize_predicates', True) if enable_norm else False
+        norm_obj = ref_cfg.get('normalize_objects', True) if enable_norm else False
+
+        out_dir = Path("outputs/02_refinement")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        if not enable_norm or not (norm_subj or norm_pred or norm_obj):
+            print("   -> Lexical Normalization is DISABLED or all fields toggled off in config.")
+            print("   -> Bypassing LLM normalization passes and preserving raw/preprocessed terms.")
+            subject_map = {t.subject: self._nlp_preprocess(t.subject) for t in raw_triples}
+            predicate_map = {t.predicate: self._nlp_preprocess(t.predicate) for t in raw_triples}
+            object_map = {t.object: self._nlp_preprocess(t.object) for t in raw_triples}
+            for t in raw_triples:
+                self.context.term_frequencies[self._nlp_preprocess(t.subject)] += 1
+                self.context.term_frequencies[self._nlp_preprocess(t.predicate)] += 1
+                self.context.term_frequencies[self._nlp_preprocess(t.object)] += 1
+            return subject_map, predicate_map, object_map
+
+        print("   -> Step 1: Lexical Normalization")
         normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
         
         unique_subjects = set()
@@ -196,9 +253,6 @@ class RefinementPipeline:
         batch_size = self.config.get('refinement', {}).get('batch_size', 15)
         max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
         refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
-        
-        out_dir = Path("outputs/02_refinement")
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int, target_map: dict, term_type: str):
             async with sem:
@@ -208,7 +262,6 @@ class RefinementPipeline:
                     batch_json=json.dumps(batch)
                 )
                 try:
-                    # Read timeout from config (default to 300.0s). Set to 0 or null to disable timeouts entirely.
                     timeout_val = self.config.get('refinement', {}).get('timeout', 300.0)
                     if timeout_val and timeout_val > 0:
                         result = await asyncio.wait_for(
@@ -223,13 +276,14 @@ class RefinementPipeline:
                             user_prompt,
                             deps=self.context.master_domain
                         )
+                    db_tuples = []
                     for pair in result.output.tokens:
                         target_map[pair.original] = pair.normalized
-                        await self._run_db_query(
-                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                            (pair.original, pair.normalized, term_type),
-                            is_write=True
-                        )
+                        db_tuples.append((pair.original, pair.normalized, term_type))
+                    await self._run_db_executemany(
+                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                        db_tuples
+                    )
                 except asyncio.TimeoutError:
                     print(f"      -> Timeout error on API call for batch {batch_idx}/{total_batches}")
                     error_record = {
@@ -239,13 +293,14 @@ class RefinementPipeline:
                         "error": "TimeoutError: API call exceeded configured limit"
                     }
                     self._log_error(error_record)
+                    db_tuples = []
                     for term in batch:
                         target_map[term] = term
-                        await self._run_db_query(
-                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                            (term, term, term_type),
-                            is_write=True
-                        )
+                        db_tuples.append((term, term, term_type))
+                    await self._run_db_executemany(
+                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                        db_tuples
+                    )
                 except Exception as e:
                     print(f"      -> Error normalizing batch {batch_idx}/{total_batches}: {e}")
                     error_record = {
@@ -255,20 +310,20 @@ class RefinementPipeline:
                         "error": str(e)
                     }
                     self._log_error(error_record)
+                    db_tuples = []
                     for term in batch:
                         target_map[term] = term
-                        await self._run_db_query(
-                            "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                            (term, term, term_type),
-                            is_write=True
-                        )
+                        db_tuples.append((term, term, term_type))
+                    await self._run_db_executemany(
+                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
+                        db_tuples
+                    )
 
         async def run_all_batches(term_set: set, agent, target_map: dict, term_type: str):
             term_list = sorted(list(term_set))
             sem = asyncio.Semaphore(max_async)
             tasks = []
             
-            # Estimate maximum allowed tokens for prompt JSON payload
             from src.utils.token_helper import estimate_tokens
             from src.refinement import prompts as ref_prompts
             
@@ -278,13 +333,11 @@ class RefinementPipeline:
                     batch_json="[]"
                 )
             )
-            # Normalize with sys prompt size and output buffer (500 tokens)
             sys_prompt_tokens = estimate_tokens(ref_prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
             max_json_tokens = refinement_cap - base_prompt_tokens - sys_prompt_tokens - 500
             if max_json_tokens < 100:
                 max_json_tokens = 100
                 
-            # Dynamic batch grouping
             batches = []
             current_batch = []
             for term in term_list:
@@ -339,20 +392,27 @@ class RefinementPipeline:
             else:
                 print("   -> Starting fresh run (skipping cached database loading)...")
 
-            subjects_to_process = unique_subjects - set(pre_subject_map.keys())
-            predicates_to_process = unique_predicates - set(pre_predicate_map.keys())
-            objects_to_process = unique_objects - set(pre_object_map.keys())
+            if norm_subj:
+                subjects_to_process = unique_subjects - set(pre_subject_map.keys())
+                print(f"   -> Normalizing Subjects ({len(subjects_to_process)} remaining)...")
+                await run_all_batches(subjects_to_process, subject_norm_agent, pre_subject_map, "subject")
+            else:
+                print("   -> Normalizing Subjects SKIPPED (toggled off in config).")
 
-            print(f"   -> Normalizing Subjects ({len(subjects_to_process)} remaining)...")
-            await run_all_batches(subjects_to_process, subject_norm_agent, pre_subject_map, "subject")
-                
-            print(f"   -> Normalizing Predicates ({len(predicates_to_process)} remaining)...")
-            await run_all_batches(predicates_to_process, predicate_norm_agent, pre_predicate_map, "predicate")
-                
-            print(f"   -> Normalizing Objects ({len(objects_to_process)} remaining)...")
-            await run_all_batches(objects_to_process, object_norm_agent, pre_object_map, "object")
+            if norm_pred:
+                predicates_to_process = unique_predicates - set(pre_predicate_map.keys())
+                print(f"   -> Normalizing Predicates ({len(predicates_to_process)} remaining)...")
+                await run_all_batches(predicates_to_process, predicate_norm_agent, pre_predicate_map, "predicate")
+            else:
+                print("   -> Normalizing Predicates SKIPPED (toggled off in config).")
+
+            if norm_obj:
+                objects_to_process = unique_objects - set(pre_object_map.keys())
+                print(f"   -> Normalizing Objects ({len(objects_to_process)} remaining)...")
+                await run_all_batches(objects_to_process, object_norm_agent, pre_object_map, "object")
+            else:
+                print("   -> Normalizing Objects SKIPPED (toggled off in config).")
             
-        # Execute all normalization passes inside a single shared event loop
         asyncio.run(process_all_terms())
 
         # Construct final case-sensitive maps using the original raw string keys
@@ -365,45 +425,50 @@ class RefinementPipeline:
             pre_pred = self._nlp_preprocess(t.predicate)
             pre_obj = self._nlp_preprocess(t.object)
             
-            subject_map[t.subject] = pre_subject_map.get(pre_subj, pre_subj)
-            predicate_map[t.predicate] = pre_predicate_map.get(pre_pred, pre_pred)
-            object_map[t.object] = pre_object_map.get(pre_obj, pre_obj)
+            subject_map[t.subject] = pre_subject_map.get(pre_subj, pre_subj) if norm_subj else pre_subj
+            predicate_map[t.predicate] = pre_predicate_map.get(pre_pred, pre_pred) if norm_pred else pre_pred
+            object_map[t.object] = pre_object_map.get(pre_obj, pre_obj) if norm_obj else pre_obj
 
-        with open(out_dir / "subject_normalization_map.json", "w") as f:
-            json.dump(subject_map, f, indent=2)
-
-        with open(out_dir / "predicate_normalization_map.json", "w") as f:
-            json.dump(predicate_map, f, indent=2)
-
-        with open(out_dir / "object_normalization_map.json", "w") as f:
-            json.dump(object_map, f, indent=2)
-
-        # Consolidate global normalization map for backwards compatibility
         normalization_map = {}
-        normalization_map.update(subject_map)
-        normalization_map.update(predicate_map)
-        normalization_map.update(object_map)
+        if norm_subj:
+            with open(out_dir / "subject_normalization_map.json", "w") as f:
+                json.dump(subject_map, f, indent=2)
+            normalization_map.update(subject_map)
 
-        with open(out_dir / "normalization_map.json", "w") as f:
-            json.dump(normalization_map, f, indent=2)
+        if norm_pred:
+            with open(out_dir / "predicate_normalization_map.json", "w") as f:
+                json.dump(predicate_map, f, indent=2)
+            normalization_map.update(predicate_map)
+
+        if norm_obj:
+            with open(out_dir / "object_normalization_map.json", "w") as f:
+                json.dump(object_map, f, indent=2)
+            normalization_map.update(object_map)
+
+        if normalization_map:
+            with open(out_dir / "normalization_map.json", "w") as f:
+                json.dump(normalization_map, f, indent=2)
 
         print("[Refinement] Stage 2 Pipeline Part 1 Completed.")
         return subject_map, predicate_map, object_map
 
     def execute_part_2(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str], subject_map: Dict[str, str], predicate_map: Dict[str, str], object_map: Dict[str, str]) -> List[RawTriple]:
         print("[Refinement] Starting Stage 2 Pipeline Part 2 (Clustering, Lifting, Theme Mapping)...")
-        refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
-        max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
+        ref_cfg = self.config.get('refinement', {})
+        refinement_cap = ref_cfg.get('context_window_cap', 2048)
+        max_async = ref_cfg.get('max_async_calls', 1)
+        
+        enable_lift = ref_cfg.get('enable_taxonomic_lifting', True)
+        lift_subj = ref_cfg.get('lift_subjects', True) if enable_lift else False
+        lift_pred = ref_cfg.get('lift_predicates', False) if enable_lift else False
+        lift_obj = ref_cfg.get('lift_objects', True) if enable_lift else False
+
         out_dir = Path("outputs/02_refinement")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # Before loading embeddings, explicitly purge VRAM
-        print("[Refinement] Purging VRAM before embedding initialization...")
-        purge_vram()
-
-        # 2. SVO Vector Clustering
-        print("[Refinement] Step 2: SVO Vector Clustering")
-        self._load_embedding_model()
+        subj_clusters, subj_embeddings_l2, subj_terms = [], None, []
+        pred_clusters, pred_embeddings_l2, pred_terms = [], None, []
+        obj_clusters, obj_embeddings_l2, obj_terms = [], None, []
 
         # Calculate normalized frequencies for weighting centroids
         normalized_frequencies = defaultdict(int)
@@ -417,7 +482,7 @@ class RefinementPipeline:
             norm_obj = object_map.get(t.object, t.object)
             normalized_frequencies[norm_obj] += 1
 
-        threshold = self.config.get('refinement', {}).get('clustering_threshold', 0.4)
+        threshold = ref_cfg.get('clustering_threshold', 0.4)
 
         def cluster_field(terms_list: List[str], label_prefix: str):
             if not terms_list:
@@ -467,53 +532,172 @@ class RefinementPipeline:
             cluster_records.sort(key=lambda c: c["cluster_number"])
             return cluster_records, term_embeddings_l2, terms_list
 
-        unique_subjects_norm = sorted(list(set(subject_map.values())))
-        unique_predicates_norm = sorted(list(set(predicate_map.values())))
-        unique_objects_norm = sorted(list(set(object_map.values())))
+        if enable_lift and (lift_subj or lift_pred or lift_obj):
+            # Before loading embeddings, explicitly purge VRAM
+            print("[Refinement] Purging VRAM before embedding initialization...")
+            purge_vram()
 
-        print("   -> Clustering Subjects...")
-        subj_clusters, subj_embeddings_l2, subj_terms = cluster_field(unique_subjects_norm, "Subject")
-        with open(out_dir / "subject_clusters.json", "w") as f:
-            json.dump(subj_clusters, f, indent=2)
+            # 2. SVO Vector Clustering
+            print("[Refinement] Step 2: SVO Vector Clustering")
+            self._load_embedding_model()
 
-        print("   -> Clustering Predicates...")
-        pred_clusters, pred_embeddings_l2, pred_terms = cluster_field(unique_predicates_norm, "Predicate")
-        with open(out_dir / "predicate_clusters.json", "w") as f:
-            json.dump(pred_clusters, f, indent=2)
+            if lift_subj:
+                unique_subjects_norm = sorted(list(set(subject_map.values())))
+                print("   -> Clustering Subjects...")
+                subj_clusters, subj_embeddings_l2, subj_terms = cluster_field(unique_subjects_norm, "Subject")
+                with open(out_dir / "subject_clusters.json", "w") as f:
+                    json.dump(subj_clusters, f, indent=2)
+            else:
+                print("   -> Clustering Subjects SKIPPED (toggled off in config).")
 
-        print("   -> Clustering Objects...")
-        obj_clusters, obj_embeddings_l2, obj_terms = cluster_field(unique_objects_norm, "Object")
-        with open(out_dir / "object_clusters.json", "w") as f:
-            json.dump(obj_clusters, f, indent=2)
+            if lift_pred:
+                unique_predicates_norm = sorted(list(set(predicate_map.values())))
+                print("   -> Clustering Predicates...")
+                pred_clusters, pred_embeddings_l2, pred_terms = cluster_field(unique_predicates_norm, "Predicate")
+                with open(out_dir / "predicate_clusters.json", "w") as f:
+                    json.dump(pred_clusters, f, indent=2)
+            else:
+                print("   -> Clustering Predicates SKIPPED (toggled off in config).")
+
+            if lift_obj:
+                unique_objects_norm = sorted(list(set(object_map.values())))
+                print("   -> Clustering Objects...")
+                obj_clusters, obj_embeddings_l2, obj_terms = cluster_field(unique_objects_norm, "Object")
+                with open(out_dir / "object_clusters.json", "w") as f:
+                    json.dump(obj_clusters, f, indent=2)
+            else:
+                print("   -> Clustering Objects SKIPPED (toggled off in config).")
+        else:
+            print("[Refinement] Step 2 & 3: Taxonomic Lifting SKIPPED (toggled off in config).")
 
         # 3. Taxonomic Lifting
-        print("[Refinement] Step 3: Taxonomic Lifting")
-
         subject_taxonomic_map = {}
-        predicate_taxonomic_map = {p: p for p in unique_predicates_norm}
+        predicate_taxonomic_map = {}
         object_taxonomic_map = {}
 
-        async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
-            cluster_terms = cluster["members"]
-            label = cluster["cluster_number"]
-            if len(cluster_terms) == 1:
-                target_map[cluster_terms[0]] = cluster_terms[0]
-                return
-            
-            cluster_key = ",".join(sorted(cluster_terms))
-            if self.resume:
-                rows = await self._run_db_query(
-                    "SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?",
-                    (cluster_key,)
-                )
-                if rows and rows[0][0]:
-                    cached_mapped = rows[0][0]
-                    print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
-                    for t in cluster_terms:
-                        target_map[t] = cached_mapped
-                    return
+        if enable_lift and (lift_subj or lift_pred or lift_obj):
+            print("[Refinement] Step 3: Taxonomic Lifting")
 
-            async with sem:
+            async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
+                cluster_terms = cluster["members"]
+                label = cluster["cluster_number"]
+                if len(cluster_terms) == 1:
+                    target_map[cluster_terms[0]] = cluster_terms[0]
+                    return
+                
+                cluster_key = ",".join(sorted(cluster_terms))
+                if self.resume:
+                    rows = await self._run_db_query(
+                        "SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?",
+                        (cluster_key,)
+                    )
+                    if rows and rows[0][0]:
+                        cached_mapped = rows[0][0]
+                        print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
+                        for t in cluster_terms:
+                            target_map[t] = cached_mapped
+                        return
+
+                async with sem:
+                    print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
+                    idx = [terms_list.index(t) for t in cluster_terms]
+                    cluster_vecs = term_embeddings_l2[idx]
+                    weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
+                    
+                    centroid = np.average(cluster_vecs, axis=0, weights=weights)
+                    distances = cosine_distances([centroid], cluster_vecs)[0]
+                    closest_indices = np.argsort(distances)[:3]
+                    fallback_candidates = [cluster_terms[i] for i in closest_indices]
+                    
+                    payload = {
+                        "cluster_terms": cluster_terms,
+                        "top_3_centroid_fallbacks": fallback_candidates
+                    }
+                    
+                    from src.utils.token_helper import estimate_tokens
+                    from src.refinement import prompts as ref_prompts
+                    
+                    base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
+                    sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
+                    max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
+                    
+                    if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
+                        trimmed_terms = list(fallback_candidates)
+                        for term in cluster_terms:
+                            if term not in trimmed_terms:
+                                test_payload = {
+                                    "cluster_terms": trimmed_terms + [term],
+                                    "top_3_centroid_fallbacks": fallback_candidates
+                                }
+                                if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
+                                    trimmed_terms.append(term)
+                                else:
+                                    break
+                        cluster_terms = trimmed_terms
+                        payload = {
+                            "cluster_terms": cluster_terms,
+                            "top_3_centroid_fallbacks": fallback_candidates
+                        }
+                    
+                    user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
+                        payload_json=json.dumps(payload)
+                    )
+                    try:
+                        result = await lift_agent.run(
+                            user_prompt,
+                            deps=self.context.master_domain
+                        )
+                        mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                        print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
+                        for t in cluster_terms:
+                            target_map[t] = mapped_term
+                        if self.resume:
+                            await self._run_db_query(
+                                "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
+                                (cluster_key, mapped_term),
+                                is_write=True
+                            )
+                    except Exception as e:
+                        print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
+                        error_record = {
+                            "phase": f"taxonomic_lifting_{label_prefix}",
+                            "cluster_label": label,
+                            "error": str(e)
+                        }
+                        self._log_error(error_record)
+                        mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
+                        print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
+                        for t in cluster_terms:
+                            target_map[t] = mapped_term
+                        if self.resume:
+                            await self._run_db_query(
+                                "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
+                                (cluster_key, mapped_term),
+                                is_write=True
+                            )
+
+            def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
+                import sqlite3
+                cluster_terms = cluster["members"]
+                label = cluster["cluster_number"]
+                if len(cluster_terms) == 1:
+                    target_map[cluster_terms[0]] = cluster_terms[0]
+                    return
+                
+                cluster_key = ",".join(sorted(cluster_terms))
+                if self.resume:
+                    conn = sqlite3.connect(self.db_path, timeout=30.0)
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?", (cluster_key,))
+                    row = cursor.fetchone()
+                    conn.close()
+                    if row and row[0]:
+                        cached_mapped = row[0]
+                        print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
+                        for t in cluster_terms:
+                            target_map[t] = cached_mapped
+                        return
+                
                 print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
                 idx = [terms_list.index(t) for t in cluster_terms]
                 cluster_vecs = term_embeddings_l2[idx]
@@ -529,7 +713,6 @@ class RefinementPipeline:
                     "top_3_centroid_fallbacks": fallback_candidates
                 }
                 
-                # Validate cluster payload size
                 from src.utils.token_helper import estimate_tokens
                 from src.refinement import prompts as ref_prompts
                 
@@ -559,7 +742,7 @@ class RefinementPipeline:
                     payload_json=json.dumps(payload)
                 )
                 try:
-                    result = await lift_agent.run(
+                    result = lift_agent.run_sync(
                         user_prompt,
                         deps=self.context.master_domain
                     )
@@ -568,11 +751,11 @@ class RefinementPipeline:
                     for t in cluster_terms:
                         target_map[t] = mapped_term
                     if self.resume:
-                        await self._run_db_query(
-                            "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
-                            (cluster_key, mapped_term),
-                            is_write=True
-                        )
+                        conn = sqlite3.connect(self.db_path, timeout=30.0)
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
+                        conn.commit()
+                        conn.close()
                 except Exception as e:
                     print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
                     error_record = {
@@ -586,156 +769,72 @@ class RefinementPipeline:
                     for t in cluster_terms:
                         target_map[t] = mapped_term
                     if self.resume:
-                        await self._run_db_query(
-                            "INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)",
-                            (cluster_key, mapped_term),
-                            is_write=True
-                        )
+                        conn = sqlite3.connect(self.db_path, timeout=30.0)
+                        cursor = conn.cursor()
+                        cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
+                        conn.commit()
+                        conn.close()
 
-        def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
-            import sqlite3
-            cluster_terms = cluster["members"]
-            label = cluster["cluster_number"]
-            if len(cluster_terms) == 1:
-                target_map[cluster_terms[0]] = cluster_terms[0]
-                return
-            
-            cluster_key = ",".join(sorted(cluster_terms))
-            if self.resume:
-                conn = sqlite3.connect(self.db_path, timeout=30.0)
-                cursor = conn.cursor()
-                cursor.execute("SELECT mapped_term FROM taxonomic_lifting WHERE cluster_key = ?", (cluster_key,))
-                row = cursor.fetchone()
-                conn.close()
-                if row and row[0]:
-                    cached_mapped = row[0]
-                    print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
-                    for t in cluster_terms:
-                        target_map[t] = cached_mapped
-                    return
-            
-            print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
-            idx = [terms_list.index(t) for t in cluster_terms]
-            cluster_vecs = term_embeddings_l2[idx]
-            weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
-            
-            centroid = np.average(cluster_vecs, axis=0, weights=weights)
-            distances = cosine_distances([centroid], cluster_vecs)[0]
-            closest_indices = np.argsort(distances)[:3]
-            fallback_candidates = [cluster_terms[i] for i in closest_indices]
-            
-            payload = {
-                "cluster_terms": cluster_terms,
-                "top_3_centroid_fallbacks": fallback_candidates
-            }
-            
-            # Validate cluster payload size
-            from src.utils.token_helper import estimate_tokens
-            from src.refinement import prompts as ref_prompts
-            
-            base_tokens = estimate_tokens(prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(payload_json="[]"))
-            sys_tokens = estimate_tokens(ref_prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
-            max_payload_tokens = refinement_cap - base_tokens - sys_tokens - 500
-            
-            if estimate_tokens(json.dumps(payload)) > max_payload_tokens:
-                trimmed_terms = list(fallback_candidates)
-                for term in cluster_terms:
-                    if term not in trimmed_terms:
-                        test_payload = {
-                            "cluster_terms": trimmed_terms + [term],
-                            "top_3_centroid_fallbacks": fallback_candidates
-                        }
-                        if estimate_tokens(json.dumps(test_payload)) <= max_payload_tokens:
-                            trimmed_terms.append(term)
-                        else:
-                            break
-                cluster_terms = trimmed_terms
-                payload = {
-                    "cluster_terms": cluster_terms,
-                    "top_3_centroid_fallbacks": fallback_candidates
-                }
-            
-            user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
-                payload_json=json.dumps(payload)
-            )
-            try:
-                result = lift_agent.run_sync(
-                    user_prompt,
-                    deps=self.context.master_domain
-                )
-                mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
-                print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
-                for t in cluster_terms:
-                    target_map[t] = mapped_term
-                if self.resume:
-                    conn = sqlite3.connect(self.db_path, timeout=30.0)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
-                    conn.commit()
-                    conn.close()
-            except Exception as e:
-                print(f"      -> [{label_prefix}] Error lifting cluster #{label}: {e}")
-                error_record = {
-                    "phase": f"taxonomic_lifting_{label_prefix}",
-                    "cluster_label": label,
-                    "error": str(e)
-                }
-                self._log_error(error_record)
-                mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
-                print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
-                for t in cluster_terms:
-                    target_map[t] = mapped_term
-                if self.resume:
-                    conn = sqlite3.connect(self.db_path, timeout=30.0)
-                    cursor = conn.cursor()
-                    cursor.execute("INSERT OR REPLACE INTO taxonomic_lifting (cluster_key, mapped_term) VALUES (?, ?)", (cluster_key, mapped_term))
-                    conn.commit()
-                    conn.close()
+            subj_singletons = sum(1 for c in subj_clusters if len(c["members"]) == 1)
+            subj_multi = len(subj_clusters) - subj_singletons
+            pred_singletons = sum(1 for c in pred_clusters if len(c["members"]) == 1)
+            pred_multi = len(pred_clusters) - pred_singletons
+            obj_singletons = sum(1 for c in obj_clusters if len(c["members"]) == 1)
+            obj_multi = len(obj_clusters) - obj_singletons
 
-        # Count clusters that need LLM resolution vs those resolved locally (singletons)
-        subj_singletons = sum(1 for c in subj_clusters if len(c["members"]) == 1)
-        subj_multi = len(subj_clusters) - subj_singletons
-        obj_singletons = sum(1 for c in obj_clusters if len(c["members"]) == 1)
-        obj_multi = len(obj_clusters) - obj_singletons
+            if lift_subj:
+                print(f"   -> Subjects: {len(subj_clusters)} total clusters ({subj_singletons} single-member resolved locally, {subj_multi} multi-member requiring lifting)")
+            if lift_pred:
+                print(f"   -> Predicates: {len(pred_clusters)} total clusters ({pred_singletons} single-member resolved locally, {pred_multi} multi-member requiring lifting)")
+            if lift_obj:
+                print(f"   -> Objects: {len(obj_clusters)} total clusters ({obj_singletons} single-member resolved locally, {obj_multi} multi-member requiring lifting)")
 
-        print(f"   -> Subjects: {len(subj_clusters)} total clusters ({subj_singletons} single-member resolved locally, {subj_multi} multi-member requiring lifting)")
-        print(f"   -> Objects: {len(obj_clusters)} total clusters ({obj_singletons} single-member resolved locally, {obj_multi} multi-member requiring lifting)")
+            if self.use_async:
+                async def run_lifting():
+                    sem = asyncio.Semaphore(max_async)
+                    tasks = []
+                    if lift_subj:
+                        for cluster in subj_clusters:
+                            tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map))
+                    if lift_pred:
+                        for cluster in pred_clusters:
+                            tasks.append(lift_cluster_async(cluster, sem, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map))
+                    if lift_obj:
+                        for cluster in obj_clusters:
+                            tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map))
+                    if tasks:
+                        await asyncio.gather(*tasks)
+                asyncio.run(run_lifting())
+            else:
+                if lift_subj:
+                    for cluster in subj_clusters:
+                        lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map)
+                if lift_pred:
+                    for cluster in pred_clusters:
+                        lift_cluster_sync(cluster, pred_embeddings_l2, pred_terms, "Predicate", predicate_taxonomic_map)
+                if lift_obj:
+                    for cluster in obj_clusters:
+                        lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map)
 
-        if self.use_async:
-            async def run_lifting():
-                sem = asyncio.Semaphore(max_async)
-                tasks = []
-                for cluster in subj_clusters:
-                    tasks.append(lift_cluster_async(cluster, sem, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map))
-                for cluster in obj_clusters:
-                    tasks.append(lift_cluster_async(cluster, sem, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map))
-                await asyncio.gather(*tasks)
-            asyncio.run(run_lifting())
-        else:
-            for cluster in subj_clusters:
-                lift_cluster_sync(cluster, subj_embeddings_l2, subj_terms, "Subject", subject_taxonomic_map)
-            for cluster in obj_clusters:
-                lift_cluster_sync(cluster, obj_embeddings_l2, obj_terms, "Object", object_taxonomic_map)
-
-        # Write individual taxonomic maps to disk
-        with open(out_dir / "subject_taxonomic_map.json", "w") as f:
-            json.dump(subject_taxonomic_map, f, indent=2)
-
-        # Re-verify and clean up other maps
-        with open(out_dir / "predicate_taxonomic_map.json", "w") as f:
-            json.dump(predicate_taxonomic_map, f, indent=2)
-
-        with open(out_dir / "object_taxonomic_map.json", "w") as f:
-            json.dump(object_taxonomic_map, f, indent=2)
-
-        # Consolidate global taxonomic map for backwards compatibility
         taxonomic_map = {}
-        taxonomic_map.update(subject_taxonomic_map)
-        taxonomic_map.update(predicate_taxonomic_map)
-        taxonomic_map.update(object_taxonomic_map)
+        if lift_subj:
+            with open(out_dir / "subject_taxonomic_map.json", "w") as f:
+                json.dump(subject_taxonomic_map, f, indent=2)
+            taxonomic_map.update(subject_taxonomic_map)
 
-        with open(out_dir / "taxonomic_map.json", "w") as f:
-            json.dump(taxonomic_map, f, indent=2)
+        if lift_pred:
+            with open(out_dir / "predicate_taxonomic_map.json", "w") as f:
+                json.dump(predicate_taxonomic_map, f, indent=2)
+            taxonomic_map.update(predicate_taxonomic_map)
+
+        if lift_obj:
+            with open(out_dir / "object_taxonomic_map.json", "w") as f:
+                json.dump(object_taxonomic_map, f, indent=2)
+            taxonomic_map.update(object_taxonomic_map)
+
+        if taxonomic_map:
+            with open(out_dir / "taxonomic_map.json", "w") as f:
+                json.dump(taxonomic_map, f, indent=2)
 
         # Build case-insensitive maps for final triple re-mapping lookups
         lower_subj_norm = {k.lower(): v for k, v in subject_map.items()}
@@ -788,6 +887,8 @@ class RefinementPipeline:
 
         # 4. Theme-Based Embedding Mapping
         print("[Refinement] Step 4: Theme-Based Embedding Mapping")
+        if not self.embedding_model:
+            self._load_embedding_model()
         
         orig_theme_texts = []
         for theme in original_themes:

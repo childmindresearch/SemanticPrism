@@ -6,6 +6,28 @@ Rather than relying on single-shot LLM schema generation—which often leads to 
 
 ---
 
+## Prerequisites & Quickstart
+
+### Prerequisites
+- **Python**: 3.10 or higher
+- **LLM Provider**: Local [Ollama](https://ollama.com/) instance (e.g., `qwen2.5:7b`) or API provider (OpenAI, Gemini, etc.)
+
+### Installation
+1. Clone the repository and navigate to the root directory:
+   ```bash
+   cd SemanticPrism
+   ```
+2. Install Python dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. (Optional) Create a `.env` file for API keys if using cloud LLM providers:
+   ```bash
+   echo "GEMINI_API_KEY=your_api_key_here" > .env
+   ```
+
+---
+
 ## Overall Pipeline Execution Flow
 
 The full end-to-end pipeline is executed via the master orchestrator script [run_pipeline.py](run_pipeline.py):
@@ -45,24 +67,26 @@ Individual stage runner scripts are available for isolated execution or debuggin
 
 ### Stage 2: Refinement ([run_stage_2.py](run_stage_2.py))
 
-**Purpose:** Clean, deduplicate, and normalize raw triplets into a standardized taxonomy.
+**Purpose:** Clean, deduplicate, and normalize raw triplets into a standardized taxonomy with granular component-level control.
 
 ```mermaid
 graph TD
-    RawTriplets["Raw Triples"] --> LexicalNorm["Lexical Normalization (LLM Batches)"]
-    LexicalNorm --> CacheDB[("SQLite Cache")]
-    LexicalNorm --> Embeddings["Sentence Transformers Embeddings"]
-    Embeddings --> CosineClust["Agglomerative Clustering (Cosine Distance)"]
-    CosineClust --> CentroidResolv["Centroid Term Selection"]
-    CentroidResolv --> TaxoLifting["Taxonomic Lifting (LLM Parent Resolution)"]
-    TaxoLifting --> Remap["Triple & Theme Remapping"]
-    Remap --> RefinedOut["Refined Triples & Taxonomy Mappings"]
+    RawTriplets["Raw Triples"] --> LexicalNorm{"Lexical Normalization (Optional)"}
+    LexicalNorm -->|"Enabled per S-V-O"| NormPass["LLM Normalization Batches + SQLite Cache"]
+    LexicalNorm -->|"Bypassed"| DirectRemap["Identity Mapping"]
+    NormPass --> VectorClust{"Taxonomic Lifting (Optional)"}
+    DirectRemap --> VectorClust
+    VectorClust -->|"Enabled per S-V-O"| VectorEmbed["Sentence Transformers Embeddings + Agglomerative Clustering"]
+    VectorEmbed --> TaxoLifting["LLM Hypernym Resolution"]
+    VectorClust -->|"Bypassed"| RefinedOut["Refined Triplets (refined_triplets.json)"]
+    TaxoLifting --> RefinedOut
 ```
 
-* **Lexical Normalization:** Cleans syntax, standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache to avoid redundant API calls.
-* **Sentence Embeddings & Vector Clustering:** Converts normalized terms into vector representations using `SentenceTransformers` (`all-MiniLM-L6-v2`) and groups similar concepts via `AgglomerativeClustering`.
-* **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents (e.g., mapping *"WISC-5"*, *"wisc-v"*, and *"cognitive test"* to *"WISC psychometric assessment"*).
-* **Triple & Theme Remapping:** Remaps raw triplets to their elevated hypernyms and maps lower-level themes to master themes using cosine vector similarity.
+* **Granular Component Control:** Normalization and taxonomic lifting can be toggled globally or independently for **Subjects**, **Predicates**, and **Objects** via `configs/refinement.yaml`.
+* **Lexical Normalization:** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache. When normalization is disabled, raw terms are preserved and normalization JSON map files are cleanly omitted.
+* **Sentence Embeddings & Vector Clustering:** Converts normalized or raw terms into vector representations using `SentenceTransformers` (`all-MiniLM-L6-v2`) and groups similar concepts via `AgglomerativeClustering`. Supports predicate verb clustering (`lift_predicates`).
+* **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents.
+* **Outputs:** Always outputs `outputs/02_refinement/refined_triplets.json` for downstream compatibility. Emits specific component map JSON files (`subject_clusters.json`, `predicate_clusters.json`, `object_clusters.json`, `subject_taxonomic_map.json`, etc.) only when active.
 
 ---
 
@@ -77,7 +101,7 @@ graph TD
     
     subgraph path1 ["Path 1: Community Workflow (Leiden)"]
         HubDetect -->|"Prune Global Hubs (Participation >= 0.65)"| GraphPruned1["Pruned Subgraph"]
-        GraphPruned1 --> Leiden["Leiden Modularity Algorithm"]
+        GraphPruned1 --> Leiden["Leiden Modularity Algorithm (Integer Node Mapping)"]
         Leiden --> CommPart["Spoke Communities"]
     end
 
@@ -97,7 +121,7 @@ graph TD
 ```
 
 * **Dual-Path Partitioning:**
-  1. **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (via Participation Coefficient $P_i$ and betweenness centrality) to isolate tight event sequences using the **Leiden Modularity Algorithm**.
+  1. **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (via Participation Coefficient $P_i$ and betweenness centrality) to isolate tight event sequences using the **Leiden Modularity Algorithm** (backed by integer node index mapping for fast, error-free execution).
   2. **Path 2 (Embedding Categorical Path):** Prunes boundary-blurring nodes via Modularity Vitality ($\Delta Q$), generates **Node2Vec** random walk embeddings, and clusters them using **K-Means Silhouette Optimization**.
 * **Dual-Path Jaccard Fusion:** Evaluates pairwise overlap $J(W_i, K_j) = \frac{|W_i \cap K_j|}{|W_i \cup K_j|}$. Fuses overlapping clusters into unified targets when $J \ge 0.70$ and establishes sub-class composition links when $0.20 \le J < 0.70$.
 * **Interactive Visualizations:** Renders interactive PyVis HTML dashboards (topology graphs, ego networks, modularity plots, and Jaccard alignment heatmaps) under `outputs/visuals/`.
@@ -146,7 +170,7 @@ graph TD
 ```
 
 * **Target Resolution & Payload Pruning:** Filters graph nodes into orphan enum pools vs primary schema targets based on cluster size, PageRank scoring, and hub centrality caps (`max_hub_targets`, `max_triplets_per_target`).
-* **Multi-Pass Schema Synthesis:** Passes capped triplet payloads to synthesis agents to generate Pydantic schemas. Schemas enforce relational database compatibility (no arbitrary UUID keys, strict Enum/Literal types, optional attributes, and JSONB dictionary collapsing).
+* **Multi-Pass Schema Synthesis:** Passes capped triplet payloads to synthesis agents to generate Pydantic schemas. Gracefully handles optional `taxonomic_map.json` input when taxonomic lifting is bypassed.
 * **Consolidation & Code Formatting:** Combines multi-pass outputs into a single comprehensive ontology (`comprehensive_ontology.py`), formatted automatically using Ruff.
 
 ---
@@ -157,6 +181,6 @@ Pipeline behavior is configured via modular YAML files in the `configs/` directo
 
 - **[configs/llm.yaml](configs/llm.yaml)**: Provider endpoints, LLM model names, temperature, VRAM management (`manage_vram`), context window limits, and async concurrency caps.
 - **[configs/io.yaml](configs/io.yaml)**: Input/output paths, ingestion settings (directory vs. Parquet), and execution modes (`resume_mode`, `use_async`).
-- **[configs/refinement.yaml](configs/refinement.yaml)**: Normalization batching, timeout thresholds, embedding models (`all-MiniLM-L6-v2`), and clustering distance cutoffs.
+- **[configs/refinement.yaml](configs/refinement.yaml)**: Master and component-level normalization/lifting toggles (`enable_normalization`, `normalize_subjects`, `normalize_predicates`, `normalize_objects`, `enable_taxonomic_lifting`, `lift_subjects`, `lift_predicates`, `lift_objects`), batching, timeout thresholds, embedding models, and clustering distance cutoffs.
 - **[configs/topology.yaml](configs/topology.yaml)**: Dual-path execution modes, Jaccard fusion thresholds, Leiden resolution, Node2Vec parameters, and visualization limits.
 - **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster size for schema targets, max hub schema targets, and per-target triplet payload caps.

@@ -73,26 +73,9 @@ class ExtractionPipeline:
 
     def _ensure_fit(self, chunk: str, template: str, system_prompt: str) -> str:
         """Estimates token footprint and slices/truncates chunk to fit within the extraction context window cap."""
-        from src.utils.token_helper import estimate_tokens
-        # Casing buffer of 1000 tokens for output generation + some prompt overhead
-        base_tokens = estimate_tokens(system_prompt) + estimate_tokens(template.replace("{text_content}", ""))
-        available = self.context_cap - base_tokens - 1000
-        
-        if available <= 0:
-            available = max(100, self.context_cap - 1000)
-            
-        chunk_tokens = estimate_tokens(chunk)
-        if chunk_tokens <= available:
-            return chunk
-            
-        # Truncate
-        approx_chars = int(available * 4)
-        truncated = chunk[:approx_chars]
-        while estimate_tokens(truncated) > available and len(truncated) > 10:
-            truncated = truncated[:-max(10, int(len(truncated) * 0.1))]
-            
-        print(f"[Extraction] Warning: Input text chunk truncated from {chunk_tokens} to {estimate_tokens(truncated)} tokens to stay under context cap of {self.context_cap}.")
-        return truncated
+        from src.utils.token_helper import validate_and_trim_prompt
+        full_sys_prompt = system_prompt + "\n" + template.replace("{text_content}", "")
+        return validate_and_trim_prompt(chunk, full_sys_prompt, self.context_cap, output_buffer=1000)
 
     def _extract_malformed_text(self, messages, exception: Exception) -> str:
         """Extracts the raw malformed output string from the agent's message history or exception."""

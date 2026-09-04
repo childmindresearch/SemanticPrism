@@ -2,10 +2,8 @@
 Global Configuration Loader
 Acts as the single source of truth for all application settings.
 
-WARNING: This file should NOT be edited directly by the user!
-This module automatically loads its definitions and imports strictly from 
-the central `config.yaml` file located at the project root. 
-To modify system behavior, please edit `config.yaml` instead.
+Loads modular configuration files from the `configs/` directory.
+To modify system behavior, please edit the respective `.yaml` files in `configs/`.
 """
 
 import os
@@ -27,11 +25,10 @@ class ConfigLoader:
 
     @classmethod
     def get_config(cls):
-        """Loads, merges, and caches configuration from configs/*.yaml and config.yaml."""
+        """Loads, merges, and caches configuration from configs/*.yaml."""
         if cls._config is None:
             root_dir = Path(__file__).parent.parent
             configs_dir = root_dir / 'configs'
-            config_path = root_dir / 'config.yaml'
             env_path = root_dir / '.env'
             
             # Load environment variables
@@ -47,12 +44,6 @@ class ConfigLoader:
                     with open(yf, 'r', encoding='utf-8') as f:
                         data = yaml.safe_load(f) or {}
                         deep_merge(merged_config, data)
-
-            # Supplementary load from legacy config.yaml if present
-            if config_path.exists():
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    legacy_data = yaml.safe_load(f) or {}
-                    deep_merge(merged_config, legacy_data)
 
             cls._config = merged_config
                 

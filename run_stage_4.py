@@ -3,12 +3,13 @@ from pathlib import Path
 from src.config import settings
 from src.synthesis.synthesizer import SynthesisPipeline
 
-def load_json(filepath):
+def load_json(filepath, required=True):
     try:
         with open(filepath, "r") as f:
             return json.load(f)
     except FileNotFoundError:
-        print(f"Error: Required file {filepath} not found.")
+        if required:
+            print(f"Error: Required file {filepath} not found.")
         return None
 
 def main():
@@ -31,11 +32,11 @@ def main():
 
     refined_triplets = load_json("outputs/02_refinement/refined_triplets.json")
     original_triplets = load_json("outputs/01_extraction/original_triplets.json")
-    taxonomic_map = load_json("outputs/02_refinement/taxonomic_map.json")
+    taxonomic_map = load_json("outputs/02_refinement/taxonomic_map.json", required=False) or {}
     master_themes_raw = load_json("outputs/01_extraction/master_themes.json")
     
-    # Check if files exist
-    if not (comm_targets or emb_targets) or not all([refined_triplets, original_triplets, taxonomic_map, master_themes_raw]):
+    # Check if required files exist
+    if not (comm_targets or emb_targets) or not all([refined_triplets, original_triplets, master_themes_raw]):
         print("Error: Cannot run Stage 4. Missing required preceding stage outputs.")
         return
 

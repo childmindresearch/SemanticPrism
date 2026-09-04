@@ -1,0 +1,3 @@
+Initializing Stage 1: Triple Extraction & Aggregation...
+Loading input documents from Parquet file: /home/dlobue/Synth/HBNReports/anonymized/full_reports/full_reports_250.parquet
+Error loading input documents: Parquet file not found at: /home/dlobue/Synth/HBNReports/anonymized/full_reports/full_reports_250.parquet

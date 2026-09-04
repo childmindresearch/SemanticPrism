@@ -14,3 +14,24 @@ refinement:
   # Lower values (e.g. 0.5): Tighter, more precise clusters -> more numerous granular categories.
   # Higher values (e.g. 0.9): Broader, looser clusters -> fewer, higher-level abstract categories.
   clustering_threshold: 0.6
+
+  # =========================================================================
+  # STAGE 2 PART 1: LEXICAL NORMALIZATION TOGGLES
+  # =========================================================================
+  # Toggles LLM lexical normalization pass. If disabled or component is false,
+  # terms bypass normalization and no normalization JSON maps are created.
+  enable_normalization: false
+  normalize_subjects: false
+  normalize_predicates: false
+  normalize_objects: false
+
+  # =========================================================================
+  # STAGE 2 PART 2: TAXONOMIC LIFTING & VECTOR CLUSTERING TOGGLES
+  # =========================================================================
+  # Controls SentenceTransformers vector clustering and LLM hypernym resolution.
+  # Can be toggled independently for subjects, predicates, and objects.
+  enable_taxonomic_lifting: false
+  lift_subjects: false
+  lift_predicates: false       # Set to true to enable vector clustering & hypernym lifting on predicate verbs
+  lift_objects: false
+
