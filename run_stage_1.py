@@ -34,8 +34,8 @@ def main():
     
     stage_start = time.time()
     
-    run_substage("run_stage_1_themes.py", "Stage 1 Part 1: Theme Discovery & Synthesis")
-    run_substage("run_stage_1_triples.py", "Stage 1 Part 2: Triple Extraction & Aggregation")
+    run_substage("substages/run_stage_1_themes.py", "Stage 1 Part 1: Theme Discovery & Synthesis")
+    run_substage("substages/run_stage_1_triples.py", "Stage 1 Part 2: Triple Extraction & Aggregation")
     
     total_duration = time.time() - stage_start
     print("\n" + "="*60)

@@ -11,9 +11,9 @@ refinement:
   embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model
   
   # Agglomerative Clustering Distance Threshold
-  # Lower values (e.g. 0.5): Tighter, more precise clusters -> more numerous granular categories.
+  # Lower values (e.g. 0.3): Tighter, more precise clusters -> more numerous granular categories.
   # Higher values (e.g. 0.9): Broader, looser clusters -> fewer, higher-level abstract categories.
-  clustering_threshold: 0.6
+  clustering_threshold: 0.4
 
   # =========================================================================
   # STAGE 2 PART 1: LEXICAL NORMALIZATION TOGGLES
@@ -30,8 +30,8 @@ refinement:
   # =========================================================================
   # Controls SentenceTransformers vector clustering and LLM hypernym resolution.
   # Can be toggled independently for subjects, predicates, and objects.
-  enable_taxonomic_lifting: false
-  lift_subjects: false
-  lift_predicates: false       # Set to true to enable vector clustering & hypernym lifting on predicate verbs
-  lift_objects: false
+  enable_taxonomic_lifting: true
+  lift_subjects: true
+  lift_predicates: true
+  lift_objects: true
 

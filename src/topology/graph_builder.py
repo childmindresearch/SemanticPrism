@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 from collections import defaultdict
 from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult, HubPartition
-from src.topology.fusion import TargetResolver
+from src.topology.resolver import TargetResolver
 
 try:
     from cdlib import algorithms
@@ -557,32 +557,6 @@ class TopologyPipeline:
         net_hubs.set_options(options_json)
         net_hubs.save_graph(str(vis_dir / "interactive_hubs_ego_network.html"))
 
-        # 2b. Global Hubs Only Topology Graph (Inter-Hub Edges Only)
-        net_hubs_only = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a2e", font_color="white", heading=f"[{path_label}] Global Hubs Only Topology")
-        
-        hub_cluster_map = {}
-        for hp in result.hub_partitions:
-            for n in hp.nodes:
-                hub_cluster_map[n] = hp.hub_cluster_id
-
-        for node in hubs_set:
-            metrics = result.node_metrics.get(node)
-            centrality = metrics.degree_centrality if metrics else 0.0
-            p_val = metrics.participation_coefficient if metrics else 0.0
-            c_id = hub_cluster_map.get(node, 0)
-            color = colors[c_id % len(colors)]
-            size = (centrality * 200) + 35
-            title = f"[{path_label}]\nRole: Global Hub\nHub Cluster ID: {c_id}\nDegree Centrality: {centrality:.4f}\nParticipation Coeff (P_i): {p_val:.4f}"
-            net_hubs_only.add_node(node, label=node, color=color, shape="star", size=size, title=title, borderWidth=3, shadow=True)
-
-        for u, v, data in dg.edges(data=True):
-            if u in hubs_set and v in hubs_set:
-                if hub_cluster_map.get(u) == hub_cluster_map.get(v):
-                    net_hubs_only.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 215, 0, 0.8)", width=3)
-                
-        net_hubs_only.set_options(options_json)
-        net_hubs_only.save_graph(str(vis_dir / "interactive_global_hubs.html"))
-
         # PATH 1 SPECIFIC VISUALIZATIONS
         if path_type == "community":
             comm_map = {}
@@ -716,7 +690,7 @@ class TopologyPipeline:
         max_hub_targets = synth_cfg.get('max_hub_targets', 4)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1000)
         
-        # Resolve targets via TargetResolver (fusion.py)
+        # Resolve targets via TargetResolver (resolver.py)
         targets, _ = TargetResolver.qualify_and_resolve_targets(result.model_dump(), path_type, self.full_config)
             
         payload_data = []
@@ -725,7 +699,7 @@ class TopologyPipeline:
             c_id = target["id"]
             target_nodes = set(target["nodes"])
             
-            # Filter and cap triplets via TargetResolver (fusion.py)
+            # Filter and cap triplets via TargetResolver (resolver.py)
             capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, result.model_dump(), max_triplets_cap)
             
             associated_triplets = [

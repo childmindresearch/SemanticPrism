@@ -2,8 +2,13 @@
 Isolated Execution Script for SemanticPrism Stage 2: Refinement Pipeline (Lexical Normalization)
 """
 
+import sys
+import os
 import json
 from pathlib import Path
+
+# Append project root to sys.path to ensure modules can be imported directly
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.config import settings
 from src.extraction.schemas import RawTriple

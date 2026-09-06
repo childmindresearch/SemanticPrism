@@ -7,20 +7,21 @@
 
 synthesis:
   # Stage 4 Synthesis Path Execution Mode
-  # Options: "community", "embedding", "unified", "both"
+  # Options: "community", "embedding", "both"
   execution_mode: "both"
 
   # Stage 4 Schema Pass Execution Mode
-  # Options: "normalized" (refined_triplets.json), "raw" (original_triplets.json), "both"
+  # Options: Use "normalized" text (refined_triplets.json), the original text: "raw" (original_triplets.json), "both"
   schema_pass_mode: "normalized"
 
-  # Entity threshold for Stage 4 target qualification.
-  # Clusters with < 32 entities are routed directly to Phase 1 Enum synthesis (enums.py).
-  min_cluster_size: 32
+  # Entity threshold for Synthesis schema creation.
+  # Clusters with < min_cluster_size entities are routed directly to Enum synthesis (enums.py).
+  # Use 2 for small test datasets; 16+ for large production corpora.
+  min_cluster_size: 8
 
   # Maximum number of global hub nodes to process as individual schema targets.
-  # Hubs exceeding this limit are routed directly to Phase 1 Enum synthesis (enums.py).
-  max_hub_targets: 4
+  # Hubs exceeding this limit are routed directly to Enum synthesis (enums.py).
+  max_hub_targets: 2
 
   # Maximum number of triplets sent to the LLM per schema generation target.
   # Subsets exceeding this cap are pruned based on PageRank and intra-community status.

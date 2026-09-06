@@ -43,11 +43,11 @@ Each stage runs in an isolated subprocess to ensure system memory and GPU VRAM a
 Individual stage runner scripts are available for isolated execution or debugging:
 
 - **Stage 1 (Extraction)**: `python3 run_stage_1.py`
-  - Theme Discovery & Synthesis: `python3 run_stage_1_themes.py`
-  - Triple Extraction & Aggregation: `python3 run_stage_1_triples.py`
+  - Theme Discovery & Synthesis: `python3 substages/run_stage_1_themes.py`
+  - Triple Extraction & Aggregation: `python3 substages/run_stage_1_triples.py`
 - **Stage 2 (Refinement)**: `python3 run_stage_2.py`
-  - Lexical Normalization: `python3 run_stage_2_normalization.py`
-  - Taxonomic Lifting & Theme Mapping: `python3 run_stage_2_taxonomic_lifting.py`
+  - Lexical Normalization: `python3 substages/run_stage_2_normalization.py`
+  - Taxonomic Lifting & Theme Mapping: `python3 substages/run_stage_2_taxonomic_lifting.py`
 - **Stage 3 (Topology)**: `python3 run_stage_3.py`
 - **Stage 4 (Synthesis)**: `python3 run_stage_4.py`
 
@@ -90,9 +90,9 @@ graph TD
 
 ---
 
-### Stage 3: Dual-Path Graph Topology & Fusion ([run_stage_3.py](run_stage_3.py))
+### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](run_stage_3.py))
 
-**Purpose:** Map refined triplets into a directed network graph, partition the graph down dual topological paths, and unify the paths using Jaccard graph distance.
+**Purpose:** Map refined triplets into a directed network graph and partition the graph down isolated topological execution paths (Path 1: Leiden Community Modularity, Path 2: Node2Vec Embedding Categorical).
 
 ```mermaid
 graph TD
@@ -112,19 +112,15 @@ graph TD
         KMeans --> StructPart["Structural Clusters"]
     end
 
-    subgraph fusion_module ["Dual-Path Jaccard Fusion & Alignment"]
-        CommPart --> JaccardEngine["Jaccard Index Evaluation Engine"]
-        StructPart --> JaccardEngine
-        JaccardEngine --> IsoFusion["Isomorphic Fusion (J >= 0.70)"]
-        JaccardEngine --> RelComp["Relational Composition (0.20 <= J < 0.70)"]
-    end
+    CommPart --> TargetRes["Target Resolver (resolver.py)"]
+    StructPart --> TargetRes
 ```
 
 * **Dual-Path Partitioning:**
   1. **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (via Participation Coefficient $P_i$ and betweenness centrality) to isolate tight event sequences using the **Leiden Modularity Algorithm** (backed by integer node index mapping for fast, error-free execution).
   2. **Path 2 (Embedding Categorical Path):** Prunes boundary-blurring nodes via Modularity Vitality ($\Delta Q$), generates **Node2Vec** random walk embeddings, and clusters them using **K-Means Silhouette Optimization**.
-* **Dual-Path Jaccard Fusion:** Evaluates pairwise overlap $J(W_i, K_j) = \frac{|W_i \cap K_j|}{|W_i \cup K_j|}$. Fuses overlapping clusters into unified targets when $J \ge 0.70$ and establishes sub-class composition links when $0.20 \le J < 0.70$.
-* **Interactive Visualizations:** Renders interactive PyVis HTML dashboards (topology graphs, ego networks, modularity plots, and Jaccard alignment heatmaps) under `outputs/visuals/`.
+* **Target Resolution:** Uses `TargetResolver` to qualify valid community/embedding clusters vs. hub/orphan enum pools for isolated downstream synthesis.
+* **Interactive Visualizations:** Renders interactive PyVis HTML dashboards (topology graphs, ego networks, and modularity plots) under `outputs/visuals/`.
 
 ---
 
@@ -182,5 +178,5 @@ Pipeline behavior is configured via modular YAML files in the `configs/` directo
 - **[configs/llm.yaml](configs/llm.yaml)**: Provider endpoints, LLM model names, temperature, VRAM management (`manage_vram`), context window limits, and async concurrency caps.
 - **[configs/io.yaml](configs/io.yaml)**: Input/output paths, ingestion settings (directory vs. Parquet), and execution modes (`resume_mode`, `use_async`).
 - **[configs/refinement.yaml](configs/refinement.yaml)**: Master and component-level normalization/lifting toggles (`enable_normalization`, `normalize_subjects`, `normalize_predicates`, `normalize_objects`, `enable_taxonomic_lifting`, `lift_subjects`, `lift_predicates`, `lift_objects`), batching, timeout thresholds, embedding models, and clustering distance cutoffs.
-- **[configs/topology.yaml](configs/topology.yaml)**: Dual-path execution modes, Jaccard fusion thresholds, Leiden resolution, Node2Vec parameters, and visualization limits.
+- **[configs/topology.yaml](configs/topology.yaml)**: Execution modes (`community`, `embedding`, `both`), Leiden resolution, Node2Vec parameters, and visualization limits.
 - **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster size for schema targets, max hub schema targets, and per-target triplet payload caps.

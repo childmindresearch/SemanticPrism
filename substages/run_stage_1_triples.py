@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 
 # Append project root to sys.path to ensure modules can be imported directly
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.config import settings
 from src.extraction.extractor import ExtractionPipeline, PipelineRunContext

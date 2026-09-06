@@ -39,8 +39,8 @@ def main():
     
     stage_start = time.time()
     
-    run_substage("run_stage_2_normalization.py", "Stage 2 Part 1: Lexical Normalization")
-    run_substage("run_stage_2_taxonomic_lifting.py", "Stage 2 Part 2: Taxonomic Lifting & Theme Mapping")
+    run_substage("substages/run_stage_2_normalization.py", "Stage 2 Part 1: Lexical Normalization")
+    run_substage("substages/run_stage_2_taxonomic_lifting.py", "Stage 2 Part 2: Taxonomic Lifting & Theme Mapping")
     
     total_duration = time.time() - stage_start
     print("\n" + "="*60)
