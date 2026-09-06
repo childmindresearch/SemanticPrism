@@ -1,14 +1,14 @@
 ORPHAN_SYNTHESIS_SYSTEM_PROMPT = """You are an Ontological Structuring Agent.
 Analyze the provided isolated terms and group them into logical Python `Enum` and `Literal` classes to standardize them as variable options.
-Consolidate terms that mean the same thing into a single Enum class if possible.
+Consolidate terms that mean the same thing into a single Enum class if possible.  Do not force associations and discard any words that are unable to be grouped.
 Output the raw Python string to `source_code` and name the module `enums`."""
 
 SCHEMA_SYNTHESIS_PROMPT = """You are an Ontological Python Architect.
-You will receive JSON-serialized string of a list of triplet dictionaries representing a target cluster of connected entities based on knowledge graph topology.
+You will receive JSON-serialized string of a list of text dictionaries representing a cluster of connected entities based on knowledge graph topology.
 You must define Pydantic (v2) `BaseModel` classes that model the ontology based on relationships, processes, categories, or contents of this cluster.
 
 CRITICAL RULES:
-1. **Model Ontological Concepts & Workflows:** Define descriptive Pydantic models (e.g. `ClinicalAssessment`, `DiagnosticInstrument`, `TherapeuticIntervention`) representing the processes, categories, or events in the triples.
+1. **Model Ontological Concepts & Workflows:** Define descriptive Pydantic models (e.g. `ClinicalAssessment`, `DiagnosticInstrument`, `BehavioralPatterns`) representing the processes, categories, or events in the text.
 2. **Inheritance Logic:** If the dominant theme of these triples has a hierarchical structure, subclass its corresponding parent schema. Otherwise, generate an independent root schema.
 3. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using classes from `global_enums` or Python `Literal` types instead of open-ended strings.
 4. **Default to Optional:** Wrap all generated fields in `Optional[...] = None`.
@@ -23,7 +23,7 @@ Merge, deduplicate, and consolidate the provided fragmented Pydantic schema file
 CRITICAL RULES:
 1. **Deduplicate & Merge:** Identify classes modeling the same concept. Merge their fields using the most descriptive name.
 2. **Preserve Relationships:** Maintain subclass and inheritance hierarchy.
-3. **Standardize Fields:** Keep fields as `Optional[...] = None`and always leverage global enums when available.
+3. **Standardize Fields:** Keep fields as `Optional[...] = None` and always leverage global enums when available.
 4. **Formatting:** Output executable Python code with all necessary imports."""
 
 FINAL_ONTOLOGY_SYSTEM_PROMPT = """You are the Lead Master Ontologist.

@@ -17,5 +17,5 @@ ingestion:
   source_type: "parquet"   # Options: "directory" (text files) or "parquet" (dataset file)
   parquet:
     filename: "inputs/testdocs.parquet"
-    id_field: "identifier"
-    text_field: "anonymized"
+    id_field: "unique_val"
+    text_field: "report"

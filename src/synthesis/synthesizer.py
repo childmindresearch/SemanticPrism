@@ -16,50 +16,7 @@ from src.agents.synthesis_agents import (
 )
 from src.topology.resolver import TargetResolver
 
-def prune_unused_enums(code: str) -> str:
-    """
-    Parses generated Python code via AST, discovers Enum class definitions,
-    finds all identifier references in BaseModel field annotations,
-    and removes Enum definitions whose names are never referenced by any BaseModel.
-    """
-    import ast
 
-    if not code or not code.strip():
-        return code
-
-    try:
-        tree = ast.parse(code)
-    except Exception:
-        return code
-
-    enum_class_names = set()
-    model_field_annotation_refs = set()
-
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            bases = []
-            for b in node.bases:
-                if isinstance(b, ast.Name):
-                    bases.append(b.id)
-                elif isinstance(b, ast.Attribute):
-                    bases.append(b.attr)
-            
-            if any("Enum" in b for b in bases):
-                enum_class_names.add(node.name)
-            else:
-                for item in ast.walk(node):
-                    if isinstance(item, ast.Name):
-                        model_field_annotation_refs.add(item.id)
-
-    unused_enums = enum_class_names - model_field_annotation_refs
-    if not unused_enums:
-        return code
-
-    tree.body = [node for node in tree.body if not (isinstance(node, ast.ClassDef) and node.name in unused_enums)]
-    try:
-        return ast.unparse(tree)
-    except Exception:
-        return code
 
 def clean_python_code(code: str) -> str:
     """Removes markdown formatting and escapes that LLMs often inject."""
@@ -198,6 +155,22 @@ class SynthesisPipeline:
         if run_raw:
             raw_dir.mkdir(parents=True, exist_ok=True)
 
+        # Payload dumping directory
+        save_llm_payloads = self.config.get('synthesis', {}).get('save_llm_payloads', False)
+        payload_base_dir = Path(self.config.get('synthesis', {}).get('payload_output_dir', 'outputs/synthesis_payloads')) / path_type
+        if save_llm_payloads:
+            if payload_base_dir.exists():
+                shutil.rmtree(payload_base_dir)
+            payload_base_dir.mkdir(parents=True, exist_ok=True)
+
+        def save_payload_file(filename: str, payload_str: str):
+            if save_llm_payloads:
+                try:
+                    with open(payload_base_dir / filename, "w", encoding="utf-8") as pf:
+                        pf.write(payload_str)
+                except Exception as err:
+                    log_error(f"[Synthesis {path_type}] Error saving payload {filename}: {err}")
+
         # Ingest pre-resolved Targets and Enum Nodes directly from target JSON payload
         targets = targets_data.get("targets", [])
         all_enum_nodes = targets_data.get("enum_nodes", [])
@@ -211,6 +184,7 @@ class SynthesisPipeline:
         if all_enum_nodes:
             orphan_ctx = OrphanContext(master_themes=master_themes)
             payload = json.dumps(all_enum_nodes)
+            save_payload_file("phase1_enums_payload.txt", f"=== SYSTEM CONTEXT ===\nMaster Themes: {json.dumps(master_themes)}\n\n=== USER PAYLOAD ===\n{payload}")
             last_llm_responses.set([])
             from pydantic_ai import capture_run_messages
             with capture_run_messages() as messages:
@@ -254,6 +228,49 @@ class SynthesisPipeline:
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
         max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
+        payload_mode = self.config.get('synthesis', {}).get('payload_values', 'triples')
+
+        def format_phase2_payload(subset: List[dict], mode: str) -> str:
+            formatted_items = []
+            for t in subset:
+                subj = str(t.get('subject', '')).strip()
+                pred = str(t.get('predicate', '')).strip()
+                obj = str(t.get('object', '')).strip()
+                
+                if subj and pred and obj:
+                    concatenated_svo = f"{subj} {pred} {obj}."
+                elif subj or pred or obj:
+                    concatenated_svo = f"{' '.join(x for x in [subj, pred, obj] if x)}."
+                else:
+                    concatenated_svo = ""
+                    
+                quote = str(t.get('source_quote', '')).strip()
+                theme = t.get('theme_association', None)
+
+                if mode == "triples":
+                    item = {
+                        "text": concatenated_svo,
+                        "theme_association": theme
+                    }
+                elif mode == "raw_text":
+                    item = {
+                        "text": quote,
+                        "theme_association": theme
+                    }
+                elif mode == "both":
+                    item = {
+                        "triple": concatenated_svo,
+                        "text": quote,
+                        "theme_association": theme
+                    }
+                else:
+                    item = {
+                        "text": concatenated_svo,
+                        "theme_association": theme
+                    }
+                formatted_items.append(item)
+                
+            return json.dumps(formatted_items, indent=2)
 
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
@@ -263,11 +280,13 @@ class SynthesisPipeline:
                     pass_name = "normalized" if is_normalized else "raw"
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
+                    user_payload = format_phase2_payload(subset, payload_mode)
+                    save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM CONTEXT ===\nGlobal Enums:\n{global_enums_code}\n\n=== USER PAYLOAD ===\n{user_payload}")
                     last_llm_responses.set([])
                     from pydantic_ai import capture_run_messages
                     with capture_run_messages() as messages:
                         try:
-                            res = await active_agent.run(json.dumps(subset), deps=synth_ctx)
+                            res = await active_agent.run(user_payload, deps=synth_ctx)
                             filename = f"{i:02d}_{res.output.module_name}.py"
                             with open(target_dir / filename, "w") as f:
                                 f.write(clean_python_code(res.output.source_code))
@@ -277,7 +296,7 @@ class SynthesisPipeline:
                             print(f"            [Warning] Initial {pass_name} extraction failed for Target {i} after 2 tries. Running Schema Reformat Agent...")
                             
                             reformat_prompt = (
-                                f"Original Schema Generation Task context was:\n{json.dumps(subset)}\n\n"
+                                f"Original Schema Generation Task context was:\n{user_payload}\n\n"
                                 f"The malformed Python output from the failed attempts was:\n{malformed_text}\n\n"
                                 f"The parsing validation error that occurred was:\n{str(e)}\n\n"
                                 f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
@@ -321,11 +340,13 @@ class SynthesisPipeline:
                 pass_name = "normalized" if is_normalized else "raw"
                 target_dir = norm_dir if is_normalized else raw_dir
                 print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
+                user_payload = format_phase2_payload(subset, payload_mode)
+                save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM CONTEXT ===\nGlobal Enums:\n{global_enums_code}\n\n=== USER PAYLOAD ===\n{user_payload}")
                 last_llm_responses.set([])
                 from pydantic_ai import capture_run_messages
                 with capture_run_messages() as messages:
                     try:
-                        res = active_agent.run_sync(json.dumps(subset), deps=synth_ctx)
+                        res = active_agent.run_sync(user_payload, deps=synth_ctx)
                         filename = f"{i:02d}_{res.output.module_name}.py"
                         with open(target_dir / filename, "w") as f:
                             f.write(clean_python_code(res.output.source_code))
@@ -395,6 +416,7 @@ class SynthesisPipeline:
 
         async def process_consolidation_async(files_list: List[dict], schema_dir: Path) -> str:
             payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
+            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", payload)
             if estimate_tokens(payload) <= max_payload_tokens:
                 return await run_consolidation_agent_async(payload)
                 
@@ -425,6 +447,7 @@ class SynthesisPipeline:
 
         def process_consolidation_sync(files_list: List[dict], schema_dir: Path) -> str:
             payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
+            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", payload)
             if estimate_tokens(payload) <= max_payload_tokens:
                 return run_consolidation_agent_sync(payload)
                 
@@ -499,6 +522,7 @@ class SynthesisPipeline:
                     enums_code = open(raw_dir / "enums.py").read()
                     
                 final_payload = f"--- ENUMS ---\n{enums_code}\n\n--- RAW MASTER ONTOLOGY ---\n{raw_master}\n\n--- NORMALIZED MASTER ONTOLOGY ---\n{norm_master}"
+                save_payload_file("phase4_comprehensive_ontology_payload.txt", final_payload)
                 final_res = comprehensive_ontology_agent.run_sync(final_payload)
                 final_code = clean_python_code(final_res.output.source_code)
             except Exception as e:
@@ -519,9 +543,8 @@ class SynthesisPipeline:
                     log_error(f"[Synthesis {path_type}] Error generating comprehensive_ontology: {ref_err}")
                     final_code = "# Error generating comprehensive ontology"
 
-        pruned_final_code = prune_unused_enums(final_code)
         with open(output_base_dir / "comprehensive_ontology.py", "w") as f:
-            f.write(pruned_final_code)
+            f.write(final_code)
 
         # Finalization
         if run_norm:

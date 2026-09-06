@@ -12,12 +12,12 @@ synthesis:
 
   # Stage 4 Schema Pass Execution Mode
   # Options: Use "normalized" text (refined_triplets.json), the original text: "raw" (original_triplets.json), "both"
-  schema_pass_mode: "normalized"
+  schema_pass_mode: "raw"
 
   # Entity threshold for Synthesis schema creation.
   # Clusters with < min_cluster_size entities are routed directly to Enum synthesis (enums.py).
   # Use 2 for small test datasets; 16+ for large production corpora.
-  min_cluster_size: 8
+  min_cluster_size: 2
 
   # Maximum number of global hub nodes to process as individual schema targets.
   # Hubs exceeding this limit are routed directly to Enum synthesis (enums.py).
@@ -26,3 +26,15 @@ synthesis:
   # Maximum number of triplets sent to the LLM per schema generation target.
   # Subsets exceeding this cap are pruned based on PageRank and intra-community status.
   max_triplets_per_target: 1200
+
+  # Controls whether to save the full text payloads sent to the LLM during Stage 4 Synthesis.
+  # When true, payloads are saved to the directory specified in payload_output_dir.
+  save_llm_payloads: true
+  payload_output_dir: "outputs/synthesis_payloads"
+
+  # Specifies the item structure of Phase 2 schema synthesis payloads sent to the LLM.
+  # Options:
+  #   "triples"  - {'text': 'subject predicate object.', 'theme_association': ...}
+  #   "raw_text" - {'text': source_quote, 'theme_association': ...}
+  #   "both"     - {'triple': 'subject predicate object.', 'text': source_quote, 'theme_association': ...}
+  payload_values: "both"
