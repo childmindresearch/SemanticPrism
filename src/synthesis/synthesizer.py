@@ -16,6 +16,51 @@ from src.agents.synthesis_agents import (
 )
 from src.topology.resolver import TargetResolver
 
+def prune_unused_enums(code: str) -> str:
+    """
+    Parses generated Python code via AST, discovers Enum class definitions,
+    finds all identifier references in BaseModel field annotations,
+    and removes Enum definitions whose names are never referenced by any BaseModel.
+    """
+    import ast
+
+    if not code or not code.strip():
+        return code
+
+    try:
+        tree = ast.parse(code)
+    except Exception:
+        return code
+
+    enum_class_names = set()
+    model_field_annotation_refs = set()
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            bases = []
+            for b in node.bases:
+                if isinstance(b, ast.Name):
+                    bases.append(b.id)
+                elif isinstance(b, ast.Attribute):
+                    bases.append(b.attr)
+            
+            if any("Enum" in b for b in bases):
+                enum_class_names.add(node.name)
+            else:
+                for item in ast.walk(node):
+                    if isinstance(item, ast.Name):
+                        model_field_annotation_refs.add(item.id)
+
+    unused_enums = enum_class_names - model_field_annotation_refs
+    if not unused_enums:
+        return code
+
+    tree.body = [node for node in tree.body if not (isinstance(node, ast.ClassDef) and node.name in unused_enums)]
+    try:
+        return ast.unparse(tree)
+    except Exception:
+        return code
+
 def clean_python_code(code: str) -> str:
     """Removes markdown formatting and escapes that LLMs often inject."""
     code = code.strip()
@@ -167,22 +212,35 @@ class SynthesisPipeline:
             orphan_ctx = OrphanContext(master_themes=master_themes)
             payload = json.dumps(all_enum_nodes)
             last_llm_responses.set([])
-            try:
-                result = orphan_agent.run_sync(payload, deps=orphan_ctx)
-                global_enums_code = clean_python_code(result.output.source_code)
-                
-                if run_norm:
-                    with open(norm_dir / "enums.py", "w") as f:
-                        f.write(global_enums_code)
-                if run_raw:
-                    with open(raw_dir / "enums.py", "w") as f:
-                        f.write(global_enums_code)
-            except Exception as e:
-                log_error(f"[Synthesis {path_type}] Error generating enums: {e}")
-                attempts = last_llm_responses.get()
-                if attempts:
-                    log_error(f"[Synthesis {path_type}] Attempted extract from LLM:\n{json.dumps(attempts, indent=2)}")
-                global_enums_code = "# Error generating enums"
+            from pydantic_ai import capture_run_messages
+            with capture_run_messages() as messages:
+                try:
+                    result = orphan_agent.run_sync(payload, deps=orphan_ctx)
+                    global_enums_code = clean_python_code(result.output.source_code)
+                except Exception as e:
+                    malformed_text = extract_malformed_text(messages, e)
+                    print(f"      [Warning] Initial enum generation failed for {path_type}. Running Schema Reformat Agent...")
+                    reformat_prompt = (
+                        f"Original Enum Generation Task payload was:\n{payload}\n\n"
+                        f"The malformed output from the failed attempts was:\n{malformed_text}\n\n"
+                        f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                        f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                        f"Set module_name to 'enums' and source_code to pure Python Enum definitions."
+                    )
+                    try:
+                        ref_res = schema_reformat_agent.run_sync(reformat_prompt)
+                        global_enums_code = clean_python_code(ref_res.output.source_code)
+                        print(f"      -> Reformat successful for enums ({path_type})!")
+                    except Exception as ref_err:
+                        log_error(f"[Synthesis {path_type}] Error generating enums: {ref_err}")
+                        global_enums_code = "# Error generating enums"
+
+            if run_norm and global_enums_code and not global_enums_code.startswith("# Error"):
+                with open(norm_dir / "enums.py", "w") as f:
+                    f.write(global_enums_code)
+            if run_raw and global_enums_code and not global_enums_code.startswith("# Error"):
+                with open(raw_dir / "enums.py", "w") as f:
+                    f.write(global_enums_code)
 
         # Phase 2: Schema Generation
         print(f"   -> [{path_label}] Phase 2: Schema Generation...")
@@ -428,25 +486,42 @@ class SynthesisPipeline:
         # Phase 4: Path Comprehensive Ontology
         print(f"   -> [{path_label}] Phase 4: Master Ontology Synthesis...")
         last_llm_responses.set([])
-        try:
-            norm_master = open(norm_dir / "master_ontology.py").read() if run_norm and (norm_dir / "master_ontology.py").exists() else ""
-            raw_master = open(raw_dir / "master_ontology.py").read() if run_raw and (raw_dir / "master_ontology.py").exists() else ""
-            
-            enums_code = ""
-            if run_norm and (norm_dir / "enums.py").exists():
-                enums_code = open(norm_dir / "enums.py").read()
-            elif run_raw and (raw_dir / "enums.py").exists():
-                enums_code = open(raw_dir / "enums.py").read()
+        from pydantic_ai import capture_run_messages
+        with capture_run_messages() as messages:
+            try:
+                norm_master = open(norm_dir / "master_ontology.py").read() if run_norm and (norm_dir / "master_ontology.py").exists() else ""
+                raw_master = open(raw_dir / "master_ontology.py").read() if run_raw and (raw_dir / "master_ontology.py").exists() else ""
                 
-            final_payload = f"--- ENUMS ---\n{enums_code}\n\n--- RAW MASTER ONTOLOGY ---\n{raw_master}\n\n--- NORMALIZED MASTER ONTOLOGY ---\n{norm_master}"
-            final_res = comprehensive_ontology_agent.run_sync(final_payload)
-            final_code = clean_python_code(final_res.output.source_code)
-            
-            with open(output_base_dir / "comprehensive_ontology.py", "w") as f:
-                f.write(final_code)
-                
-        except Exception as e:
-            log_error(f"[Synthesis {path_type}] Error generating comprehensive_ontology: {e}")
+                enums_code = ""
+                if run_norm and (norm_dir / "enums.py").exists():
+                    enums_code = open(norm_dir / "enums.py").read()
+                elif run_raw and (raw_dir / "enums.py").exists():
+                    enums_code = open(raw_dir / "enums.py").read()
+                    
+                final_payload = f"--- ENUMS ---\n{enums_code}\n\n--- RAW MASTER ONTOLOGY ---\n{raw_master}\n\n--- NORMALIZED MASTER ONTOLOGY ---\n{norm_master}"
+                final_res = comprehensive_ontology_agent.run_sync(final_payload)
+                final_code = clean_python_code(final_res.output.source_code)
+            except Exception as e:
+                malformed_text = extract_malformed_text(messages, e)
+                print(f"      [Warning] Initial comprehensive ontology synthesis failed for {path_type}. Running Schema Reformat Agent...")
+                reformat_prompt = (
+                    f"Original Comprehensive Ontology Task payload was:\n{final_payload[:3000]}\n\n"
+                    f"The malformed output from the failed attempts was:\n{malformed_text}\n\n"
+                    f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                    f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                    f"Set module_name to 'comprehensive_ontology' and source_code to the consolidated Python ontology code."
+                )
+                try:
+                    ref_res = schema_reformat_agent.run_sync(reformat_prompt)
+                    final_code = clean_python_code(ref_res.output.source_code)
+                    print(f"      -> Reformat successful for comprehensive_ontology ({path_type})!")
+                except Exception as ref_err:
+                    log_error(f"[Synthesis {path_type}] Error generating comprehensive_ontology: {ref_err}")
+                    final_code = "# Error generating comprehensive ontology"
+
+        pruned_final_code = prune_unused_enums(final_code)
+        with open(output_base_dir / "comprehensive_ontology.py", "w") as f:
+            f.write(pruned_final_code)
 
         # Finalization
         if run_norm:

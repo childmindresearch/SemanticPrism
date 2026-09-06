@@ -1,6 +1,6 @@
 # SemanticPrism
 
-SemanticPrism is an advanced, autonomous agentic pipeline designed to process unstructured, highly complex domain knowledge (such as clinical diagnostic texts) and mathematically synthesize it into structured, deployable Python Ontologies (Pydantic models).
+SemanticPrism is an autonomous agentic pipeline designed to process unstructured, complex domain knowledge (such as clinical diagnostic texts) and mathematically synthesize it into structured, deployable Python Ontologies (Pydantic models).
 
 Rather than relying on single-shot LLM schema generation—which often leads to hallucinations and overlapping domain definitions—SemanticPrism converts source text into mathematical graph networks, clusters those networks using graph theory and representation learning, and uses those structural boundaries to generate decoupled, high-fidelity data models.
 
@@ -130,44 +130,21 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph input_parsing ["Input Topology & Triplets"]
-        S3_JSON["Topology Partitions"]
-        Norm_Triplets["Refined Triplets"]
-    end
-
-    subgraph phase1 ["Phase 1: Enums Synthesis"]
-        S3_JSON -->|"Filter: Size < min_cluster_size OR Hub Rank > max_hub_targets"| EnumNodes["Enum Nodes"]
-        EnumNodes --> EnumLLM["Orphan Enum Agent"]
-        EnumLLM --> EnumsPy["enums.py"]
-    end
-
-    subgraph phase2 ["Phase 2: Schema Generation"]
-        S3_JSON -->|"Filter: Qualified Clusters"| SpokeNodes["Synthesis Targets"]
-        Norm_Triplets -->|"PageRank Payload Pruning"| Pruning["Triplet Payload Cap"]
-        
-        Pruning --> SchemaLLM["Schema Synthesis Agents"]
-        EnumsPy -->|"Injected Context"| SchemaLLM
-        
-        SchemaLLM -->|"Pass A: Normalized"| NormSchemas["Normalized Schemas"]
-        SchemaLLM -->|"Pass B: Raw"| RawSchemas["Raw Schemas"]
-    end
-
-    subgraph phase3 ["Phase 3: Consolidation"]
-        NormSchemas --> ConsolLLM["Consolidation Agent"]
-        RawSchemas --> ConsolLLM
-        ConsolLLM --> MasterNorm["Master Ontology Files"]
-    end
-
-    subgraph phase4 ["Phase 4: Master Integration"]
-        MasterNorm --> FinalLLM["Comprehensive Ontology Agent"]
-        FinalLLM --> CompOnt["comprehensive_ontology.py"]
-        CompOnt --> Ruff["Ruff Code Formatter"]
-    end
+    S3_Topology["Stage 3 Topology Partitions & Triplets"] --> TargetRes{"Target Resolution (resolver.py)"}
+    
+    TargetRes -->|"Small Clusters / Orphans"| Enums["Phase 1: Enums Synthesis (enums.py)"]
+    TargetRes -->|"Qualified Clusters"| Schemas["Phase 2: Pydantic Schema Generation"]
+    
+    Enums --> Schemas
+    Schemas --> Consolidation["Phase 3: Schema Consolidation"]
+    Enums --> Consolidation
+    
+    Consolidation --> Final["Phase 4: Comprehensive Ontology (comprehensive_ontology.py)"]
 ```
 
 * **Target Resolution & Payload Pruning:** Filters graph nodes into orphan enum pools vs primary schema targets based on cluster size, PageRank scoring, and hub centrality caps (`max_hub_targets`, `max_triplets_per_target`).
-* **Multi-Pass Schema Synthesis:** Passes capped triplet payloads to synthesis agents to generate Pydantic schemas. Gracefully handles optional `taxonomic_map.json` input when taxonomic lifting is bypassed.
-* **Consolidation & Code Formatting:** Combines multi-pass outputs into a single comprehensive ontology (`comprehensive_ontology.py`), formatted automatically using Ruff.
+* **Multi-Pass Schema Synthesis & Provenance:** Synthesizes Pydantic schemas under dedicated data provenance subfolders (`outputs/schemas/<path_type>/normalized/` and `/raw/`) backed by automated recovery agents for malformed LLM outputs.
+* **Consolidation, AST Enum Pruning & Formatting:** Consolidates cluster schemas into a master module, applies deterministic AST post-processing to prune unreferenced orphan Enums, and formats the final `comprehensive_ontology.py` using Ruff.
 
 ---
 

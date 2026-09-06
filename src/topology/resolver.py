@@ -132,47 +132,30 @@ class TargetResolver:
     ) -> List[Dict[str, Any]]:
         """
         Filters triplets incident to target_nodes, scores each statement using
-        Unified Semantic-Topological Triplet Scoring Engine with Asymmetric Pairwise Node Synergy,
-        sorts descending by triplet_rank_score, and caps at max_triplets_cap.
+        pre-computed PageRank centrality and intra-cluster connectedness,
+        sorts descending by rank score, and caps at max_triplets_cap.
         """
-        global_rarity_map, cluster_node_spec_map = TargetResolver._compute_node_specificity_map(topology, triplets, path_type)
+        metrics = topology.get("node_metrics", {})
         
-        # Calculate local cluster degrees for graph connectedness
-        local_degrees = defaultdict(int)
-        for t in triplets:
-            subj = str(t.get('subject', '')).lower().strip()
-            obj = str(t.get('object', '')).lower().strip()
-            if subj in target_nodes and obj in target_nodes:
-                local_degrees[subj] += 1
-                local_degrees[obj] += 1
-                
-        cluster_size = len(target_nodes) or 1
+        def get_pagerank(node_name: str) -> float:
+            m = metrics.get(node_name, {})
+            if isinstance(m, dict):
+                return m.get("pagerank", 0.01)
+            return getattr(m, "pagerank", 0.01)
+
         scored_triplets = []
-        
-        for idx, t in enumerate(triplets):
+        for t in triplets:
             subj = str(t.get('subject', '')).lower().strip()
             obj = str(t.get('object', '')).lower().strip()
             
             if subj in target_nodes or obj in target_nodes:
-                # 1. Topological Graph Connectedness
-                intra_bonus = 1.0 if (subj in target_nodes and obj in target_nodes) else 0.5
-                local_density = (local_degrees.get(subj, 0) + local_degrees.get(obj, 0)) / (2.0 * cluster_size)
-                topology_score = intra_bonus + local_density
-                
-                # 2. Node-Level Specificities
-                subj_spec = cluster_node_spec_map.get((target_id, subj), global_rarity_map.get(subj, 0.5))
-                obj_spec = cluster_node_spec_map.get((target_id, obj), global_rarity_map.get(obj, 0.5))
-                
-                # 3. Asymmetric Pairwise Synergy (Partner Concept Preservation)
-                asymmetric_synergy = max(subj_spec, obj_spec) + 0.5 * (subj_spec + obj_spec)
-                
-                # 4. Final Composite Triplet Rank Score
-                final_score = topology_score * asymmetric_synergy
+                intra_bonus = 1.5 if (subj in target_nodes and obj in target_nodes) else 1.0
+                pr_score = (get_pagerank(subj) + get_pagerank(obj)) * intra_bonus
                 
                 t_copy = dict(t)
-                t_copy["triplet_rank_score"] = round(float(final_score), 6)
-                t_copy["pagerank_score"] = round(float(final_score), 6)  # Backward compatibility
-                scored_triplets.append((final_score, t_copy))
+                t_copy["triplet_rank_score"] = round(float(pr_score), 6)
+                t_copy["pagerank_score"] = round(float(pr_score), 6)
+                scored_triplets.append((pr_score, t_copy))
                 
         scored_triplets.sort(key=lambda x: x[0], reverse=True)
         return [t for _, t in scored_triplets[:max_triplets_cap]]
