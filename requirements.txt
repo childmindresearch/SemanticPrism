@@ -13,3 +13,6 @@ node2vec
 python-dotenv
 polars
 pyarrow
+umap-learn
+hdbscan
+matplotlib

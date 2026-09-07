@@ -33,10 +33,33 @@ try:
     from sklearn.preprocessing import normalize
     from sklearn.cluster import AgglomerativeClustering
     from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
+    from sklearn.manifold import trustworthiness
 except Exception:
     normalize = None
     AgglomerativeClustering = None
     cosine_distances = None
+    trustworthiness = None
+
+try:
+    import umap
+except Exception:
+    umap = None
+
+try:
+    import hdbscan
+except Exception:
+    try:
+        from sklearn.cluster import HDBSCAN as hdbscan_module
+        hdbscan = hdbscan_module
+    except Exception:
+        hdbscan = None
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except Exception:
+    plt = None
 
 from src.agents.refinement_agents import subject_norm_agent, predicate_norm_agent, object_norm_agent, lift_agent
 from src.agents.vram_manager import purge_vram
@@ -488,48 +511,183 @@ class RefinementPipeline:
             if not terms_list:
                 return [], None, None
                 
-            term_embeddings = self.embedding_model.encode(terms_list)
-            term_embeddings_l2 = normalize(term_embeddings, norm='l2')
+            # 1. Native L2-normalized embeddings directly via SentenceTransformer
+            term_embeddings_l2 = self.embedding_model.encode(terms_list, normalize_embeddings=True)
+            term_to_idx = {t: i for i, t in enumerate(terms_list)}
+            num_terms = len(terms_list)
+
+            alg = ref_cfg.get('clustering_algorithm', 'umap_hdbscan')
             
-            clustering = AgglomerativeClustering(
-                metric='cosine', 
-                linkage='average', 
-                distance_threshold=threshold, 
-                n_clusters=None
-            )
-            
-            if len(terms_list) > 1:
-                cluster_labels = clustering.fit_predict(term_embeddings_l2)
+            if alg == 'agglomerative' or num_terms <= 2 or umap is None or hdbscan is None:
+                # Fallback to Agglomerative Clustering
+                if num_terms > 1 and AgglomerativeClustering is not None:
+                    clustering = AgglomerativeClustering(
+                        metric='cosine', 
+                        linkage='average', 
+                        distance_threshold=threshold, 
+                        n_clusters=None
+                    )
+                    cluster_labels = clustering.fit_predict(term_embeddings_l2)
+                else:
+                    cluster_labels = np.zeros(num_terms, dtype=int)
             else:
-                cluster_labels = [0]
+                # 2. UMAP + HDBSCAN Manifold Pipeline
+                umap_cfg = ref_cfg.get('umap', {})
+                hdbscan_cfg = ref_cfg.get('hdbscan', {})
                 
+                enable_umap = umap_cfg.get('enabled', umap_cfg.get('enable_umap', True))
+
+                if enable_umap:
+                    n_components_cfg = umap_cfg.get('n_components', 5)
+                    n_neighbors_cfg = umap_cfg.get('n_neighbors', 15)
+                    min_dist = umap_cfg.get('min_dist', 0.0)
+                    metric = umap_cfg.get('metric', 'cosine')
+                    random_state = umap_cfg.get('random_state', 42)
+                    plot_trust = umap_cfg.get('plot_trustworthiness', False)
+
+                    # Dynamic guardrails for small vocabularies
+                    n_neighbors = min(n_neighbors_cfg, max(2, num_terms - 1))
+                    n_components = min(n_components_cfg, max(2, num_terms - 2))
+
+                    # Plot UMAP Trustworthiness vs n_components if requested
+                    if plot_trust and trustworthiness is not None and plt is not None and num_terms >= 4:
+                        try:
+                            dim_candidates = [2, 3, 5, 8, 10, 15, 20, 30]
+                            valid_dims = sorted(list(set([d for d in dim_candidates if d < num_terms - 1] + [n_components])))
+                            trust_scores = []
+                            
+                            eval_neighbors = min(n_neighbors, max(1, (num_terms // 2) - 1))
+                            for d in valid_dims:
+                                reducer_eval = umap.UMAP(
+                                    n_components=d,
+                                    n_neighbors=n_neighbors,
+                                    min_dist=min_dist,
+                                    metric=metric,
+                                    random_state=random_state
+                                )
+                                embedded_eval = reducer_eval.fit_transform(term_embeddings_l2)
+                                score = trustworthiness(term_embeddings_l2, embedded_eval, n_neighbors=eval_neighbors, metric=metric)
+                                trust_scores.append(score)
+                                
+                            plt.figure(figsize=(8, 5))
+                            plt.plot(valid_dims, trust_scores, marker='o', linewidth=2, color='#2b5c8f', label='Trustworthiness Score')
+                            if n_components in valid_dims:
+                                target_score = trust_scores[valid_dims.index(n_components)]
+                                plt.plot(n_components, target_score, marker='*', markersize=14, color='#d9534f', label=f'Selected n_components={n_components}')
+                            plt.title(f"UMAP Trustworthiness Evaluation - {label_prefix} ({num_terms} terms)", fontsize=12, fontweight='bold')
+                            plt.xlabel("Dimensions (n_components)", fontsize=10)
+                            plt.ylabel("Trustworthiness Score [0 - 1]", fontsize=10)
+                            plt.ylim([0.0, 1.05])
+                            plt.grid(True, linestyle='--', alpha=0.6)
+                            plt.legend(loc='lower right')
+                            plt.tight_layout()
+                            plot_path = out_dir / f"umap_trustworthiness_{label_prefix}.jpg"
+                            plt.savefig(plot_path, dpi=300)
+                            plt.close()
+                            print(f"   -> [{label_prefix}] Exported UMAP Trustworthiness plot to: {plot_path}")
+                        except Exception as pe:
+                            print(f"   -> [{label_prefix}] Warning: Failed to render trustworthiness plot: {pe}")
+
+                    # Execute UMAP dimensionality reduction
+                    reducer = umap.UMAP(
+                        n_components=n_components,
+                        n_neighbors=n_neighbors,
+                        min_dist=min_dist,
+                        metric=metric,
+                        random_state=random_state
+                    )
+                    embedded_space = reducer.fit_transform(term_embeddings_l2)
+                else:
+                    print(f"   -> [{label_prefix}] UMAP Dimensionality Reduction SKIPPED (toggled off in config).")
+                    embedded_space = term_embeddings_l2
+
+                # Execute HDBSCAN density-based clustering
+                h_min_cluster_size = hdbscan_cfg.get('min_cluster_size', 2)
+                h_min_samples = hdbscan_cfg.get('min_samples', 1)
+                h_metric = hdbscan_cfg.get('metric', 'euclidean')
+                h_selection = hdbscan_cfg.get('cluster_selection_method', 'eom')
+                
+                try:
+                    clusterer = hdbscan.HDBSCAN(
+                        min_cluster_size=h_min_cluster_size,
+                        min_samples=h_min_samples,
+                        metric=h_metric,
+                        cluster_selection_method=h_selection
+                    )
+                    cluster_labels = clusterer.fit_predict(embedded_space)
+                except Exception as he:
+                    print(f"   -> [{label_prefix}] HDBSCAN failed ({he}); falling back to zero labels.")
+                    cluster_labels = np.zeros(num_terms, dtype=int)
+            
+            # 3. Group members and resolve HDBSCAN outliers (-1)
             clusters_dict = defaultdict(list)
+            outliers = []
             for term, label in zip(terms_list, cluster_labels):
-                clusters_dict[label].append(term)
-                
+                if label == -1:
+                    outliers.append(term)
+                else:
+                    clusters_dict[label].append(term)
+                    
+            # Outlier resolution: reassign to closest centroid if within distance threshold, else promote to singleton
+            if outliers:
+                reassign_thresh = ref_cfg.get('hdbscan', {}).get('outlier_reassignment_threshold', 0.35)
+                valid_centroids = {}
+                for lbl, members in clusters_dict.items():
+                    m_idx = [term_to_idx[t] for t in members]
+                    m_vecs = term_embeddings_l2[m_idx]
+                    m_weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in members])
+                    valid_centroids[lbl] = np.average(m_vecs, axis=0, weights=m_weights)
+
+                next_cluster_id = max(clusters_dict.keys()) + 1 if clusters_dict else 0
+
+                for out_term in outliers:
+                    out_vec = term_embeddings_l2[term_to_idx[out_term]]
+                    best_label = None
+                    min_dist = float('inf')
+
+                    for lbl, cent_vec in valid_centroids.items():
+                        dist = cosine_distances([cent_vec], [out_vec])[0][0]
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_label = lbl
+
+                    if best_label is not None and min_dist <= reassign_thresh:
+                        clusters_dict[best_label].append(out_term)
+                    else:
+                        clusters_dict[next_cluster_id].append(out_term)
+                        next_cluster_id += 1
+
+            # 4. Construct sorted cluster records with sub-linear weighted centroids
+            print_centroid_vec = ref_cfg.get('print_centroid_vector', True)
             cluster_records = []
             for label, cluster_members in clusters_dict.items():
                 if len(cluster_members) == 1:
-                    centroid = term_embeddings_l2[terms_list.index(cluster_members[0])]
+                    centroid = term_embeddings_l2[term_to_idx[cluster_members[0]]]
                     centroid_term = cluster_members[0]
                 else:
-                    idx = [terms_list.index(t) for t in cluster_members]
+                    idx = [term_to_idx[t] for t in cluster_members]
                     cluster_vecs = term_embeddings_l2[idx]
-                    weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_members])
+                    weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in cluster_members])
                     
                     centroid = np.average(cluster_vecs, axis=0, weights=weights)
                     distances = cosine_distances([centroid], cluster_vecs)[0]
                     closest_idx = np.argmin(distances)
                     centroid_term = cluster_members[closest_idx]
                     
-                cluster_records.append({
+                rec = {
                     "cluster_number": int(label),
                     "centroid_term": centroid_term,
-                    "centroid_vector": centroid.tolist(),
                     "members": sorted(cluster_members)
-                })
+                }
+                if print_centroid_vec:
+                    rec["centroid_vector"] = centroid.tolist()
+
+                cluster_records.append(rec)
                 
             cluster_records.sort(key=lambda c: c["cluster_number"])
+            for idx_rec, rec in enumerate(cluster_records):
+                rec["cluster_number"] = idx_rec
+
             return cluster_records, term_embeddings_l2, terms_list
 
         if enable_lift and (lift_subj or lift_pred or lift_obj):
@@ -579,7 +737,8 @@ class RefinementPipeline:
             print("[Refinement] Step 3: Taxonomic Lifting")
 
             async def lift_cluster_async(cluster, sem, term_embeddings_l2, terms_list, label_prefix, target_map):
-                cluster_terms = cluster["members"]
+                original_cluster_members = list(cluster["members"])
+                cluster_terms = list(original_cluster_members)
                 label = cluster["cluster_number"]
                 if len(cluster_terms) == 1:
                     target_map[cluster_terms[0]] = cluster_terms[0]
@@ -594,15 +753,16 @@ class RefinementPipeline:
                     if rows and rows[0][0]:
                         cached_mapped = rows[0][0]
                         print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
-                        for t in cluster_terms:
+                        for t in original_cluster_members:
                             target_map[t] = cached_mapped
                         return
 
                 async with sem:
                     print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
-                    idx = [terms_list.index(t) for t in cluster_terms]
+                    term_to_idx = {t: i for i, t in enumerate(terms_list)}
+                    idx = [term_to_idx[t] for t in cluster_terms]
                     cluster_vecs = term_embeddings_l2[idx]
-                    weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
+                    weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in cluster_terms])
                     
                     centroid = np.average(cluster_vecs, axis=0, weights=weights)
                     distances = cosine_distances([centroid], cluster_vecs)[0]
@@ -633,9 +793,8 @@ class RefinementPipeline:
                                     trimmed_terms.append(term)
                                 else:
                                     break
-                        cluster_terms = trimmed_terms
                         payload = {
-                            "cluster_terms": cluster_terms,
+                            "cluster_terms": trimmed_terms,
                             "top_3_centroid_fallbacks": fallback_candidates
                         }
                     
@@ -647,9 +806,9 @@ class RefinementPipeline:
                             user_prompt,
                             deps=self.context.master_domain
                         )
-                        mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                        mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else original_cluster_members[0])
                         print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
-                        for t in cluster_terms:
+                        for t in original_cluster_members:
                             target_map[t] = mapped_term
                         if self.resume:
                             await self._run_db_query(
@@ -665,9 +824,9 @@ class RefinementPipeline:
                             "error": str(e)
                         }
                         self._log_error(error_record)
-                        mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
+                        mapped_term = fallback_candidates[0] if fallback_candidates else original_cluster_members[0]
                         print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
-                        for t in cluster_terms:
+                        for t in original_cluster_members:
                             target_map[t] = mapped_term
                         if self.resume:
                             await self._run_db_query(
@@ -678,7 +837,8 @@ class RefinementPipeline:
 
             def lift_cluster_sync(cluster, term_embeddings_l2, terms_list, label_prefix, target_map):
                 import sqlite3
-                cluster_terms = cluster["members"]
+                original_cluster_members = list(cluster["members"])
+                cluster_terms = list(original_cluster_members)
                 label = cluster["cluster_number"]
                 if len(cluster_terms) == 1:
                     target_map[cluster_terms[0]] = cluster_terms[0]
@@ -694,14 +854,15 @@ class RefinementPipeline:
                     if row and row[0]:
                         cached_mapped = row[0]
                         print(f"      -> [{label_prefix}] Using cached taxonomic lift for cluster #{label} -> '{cached_mapped}'")
-                        for t in cluster_terms:
+                        for t in original_cluster_members:
                             target_map[t] = cached_mapped
                         return
                 
                 print(f"      -> [{label_prefix}] Lifting cluster #{label} ({len(cluster_terms)} terms: e.g. {cluster_terms[:3]})...")
-                idx = [terms_list.index(t) for t in cluster_terms]
+                term_to_idx = {t: i for i, t in enumerate(terms_list)}
+                idx = [term_to_idx[t] for t in cluster_terms]
                 cluster_vecs = term_embeddings_l2[idx]
-                weights = np.array([normalized_frequencies.get(t, 1) for t in cluster_terms])
+                weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in cluster_terms])
                 
                 centroid = np.average(cluster_vecs, axis=0, weights=weights)
                 distances = cosine_distances([centroid], cluster_vecs)[0]
@@ -732,9 +893,8 @@ class RefinementPipeline:
                                 trimmed_terms.append(term)
                             else:
                                 break
-                    cluster_terms = trimmed_terms
                     payload = {
-                        "cluster_terms": cluster_terms,
+                        "cluster_terms": trimmed_terms,
                         "top_3_centroid_fallbacks": fallback_candidates
                     }
                 
@@ -746,9 +906,9 @@ class RefinementPipeline:
                         user_prompt,
                         deps=self.context.master_domain
                     )
-                    mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else cluster_terms[0])
+                    mapped_term = result.output.formal_hypernym if result.output.formal_hypernym else (fallback_candidates[0] if fallback_candidates else original_cluster_members[0])
                     print(f"      -> [{label_prefix}] Resolved cluster #{label} -> Mapped to: '{mapped_term}'")
-                    for t in cluster_terms:
+                    for t in original_cluster_members:
                         target_map[t] = mapped_term
                     if self.resume:
                         conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -764,9 +924,9 @@ class RefinementPipeline:
                         "error": str(e)
                     }
                     self._log_error(error_record)
-                    mapped_term = fallback_candidates[0] if fallback_candidates else cluster_terms[0]
+                    mapped_term = fallback_candidates[0] if fallback_candidates else original_cluster_members[0]
                     print(f"      -> [{label_prefix}] Applying fallback mapping to cluster #{label} -> Mapped to: '{mapped_term}'")
-                    for t in cluster_terms:
+                    for t in original_cluster_members:
                         target_map[t] = mapped_term
                     if self.resume:
                         conn = sqlite3.connect(self.db_path, timeout=30.0)

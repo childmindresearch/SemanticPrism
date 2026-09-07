@@ -8,15 +8,9 @@
 refinement:
   batch_size: 25               # Terms per API payload batch during lexical normalization
   timeout: 300.0               # Timeout limit in seconds per normalization API batch
-  embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model
-  
-  # Agglomerative Clustering Distance Threshold
-  # Lower values (e.g. 0.3): Tighter, more precise clusters -> more numerous granular categories.
-  # Higher values (e.g. 0.9): Broader, looser clusters -> fewer, higher-level abstract categories.
-  clustering_threshold: 0.4
 
   # =========================================================================
-  # STAGE 2 PART 1: LEXICAL NORMALIZATION TOGGLES
+  # LEXICAL NORMALIZATION TOGGLES
   # =========================================================================
   # Toggles LLM lexical normalization pass. If disabled or component is false,
   # terms bypass normalization and no normalization JSON maps are created.
@@ -26,7 +20,7 @@ refinement:
   normalize_objects: false
 
   # =========================================================================
-  # STAGE 2 PART 2: TAXONOMIC LIFTING & VECTOR CLUSTERING TOGGLES
+  # TAXONOMIC LIFTING & VECTOR CLUSTERING TOGGLES
   # =========================================================================
   # Controls SentenceTransformers vector clustering and LLM hypernym resolution.
   # Can be toggled independently for subjects, predicates, and objects.
@@ -34,4 +28,33 @@ refinement:
   lift_subjects: true
   lift_predicates: true
   lift_objects: true
+
+  embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model
+  
+  # Vector Clustering Algorithm Selection: "umap_hdbscan" or "agglomerative"
+  clustering_algorithm: "umap_hdbscan"
+
+  # Legacy Agglomerative Clustering Distance Threshold
+  clustering_threshold: 0.4
+
+  # Toggle inclusion of centroid_vector in output cluster JSON files
+  print_centroid_vector: true
+
+  # UMAP Dimensionality Reduction Options
+  umap:
+    enabled: true              # Toggle UMAP dimensionality reduction on/off
+    n_components: 5            # Reduced feature dimensions for density evaluation
+    n_neighbors: 15            # Spectral local neighborhood size
+    min_dist: 0.0              # Packed clustering minimum distance
+    metric: "cosine"           # Manifold distance metric
+    random_state: 42           # Deterministic reduction seed
+    plot_trustworthiness: true # Generates UMAP Trustworthiness vs n_components .jpg evaluation charts
+
+  # HDBSCAN Density-Based Clustering Options
+  hdbscan:
+    min_cluster_size: 2        # Minimum cluster size
+    min_samples: 1             # Density sample threshold
+    cluster_selection_method: "eom" # Excess of Mass selection
+    outlier_reassignment_threshold: 0.35 # Cosine threshold to reassign HDBSCAN outliers to nearest centroid
+
 

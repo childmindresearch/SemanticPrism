@@ -76,17 +76,27 @@ graph TD
     LexicalNorm -->|"Bypassed"| DirectRemap["Identity Mapping"]
     NormPass --> VectorClust{"Taxonomic Lifting (Optional)"}
     DirectRemap --> VectorClust
-    VectorClust -->|"Enabled per S-V-O"| VectorEmbed["Sentence Transformers Embeddings + Agglomerative Clustering"]
-    VectorEmbed --> TaxoLifting["LLM Hypernym Resolution"]
+    VectorClust -->|"Enabled per S-V-O"| NativeEmbed["SentenceTransformer (normalize_embeddings=True)"]
+    NativeEmbed --> UMAPToggle{"UMAP Reduction (Optional)"}
+    UMAPToggle -->|"Enabled"| UMAPPass["UMAP (384D -> 5D) + Trustworthiness JPG Plotting"]
+    UMAPToggle -->|"Disabled"| HDBSCANPass["HDBSCAN Density Clustering + Outlier Resolution"]
+    UMAPPass --> HDBSCANPass
+    HDBSCANPass --> SublinearCentroid["Sub-linear Centroid Math (1 + ln(freq))"]
+    SublinearCentroid --> TaxoLifting["LLM Hypernym Resolution"]
     VectorClust -->|"Bypassed"| RefinedOut["Refined Triplets (refined_triplets.json)"]
     TaxoLifting --> RefinedOut
 ```
 
 * **Granular Component Control:** Normalization and taxonomic lifting can be toggled globally or independently for **Subjects**, **Predicates**, and **Objects** via `configs/refinement.yaml`.
 * **Lexical Normalization:** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache. When normalization is disabled, raw terms are preserved and normalization JSON map files are cleanly omitted.
-* **Sentence Embeddings & Vector Clustering:** Converts normalized or raw terms into vector representations using SentenceTransformers (`BAAI/bge-large-en-v1.5`) and groups similar concepts via `AgglomerativeClustering`. Supports predicate verb clustering (`lift_predicates`).
-* **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents.
-* **Outputs:** Always outputs `outputs/02_refinement/refined_triplets.json` for downstream compatibility. Emits specific component map JSON files (`subject_clusters.json`, `predicate_clusters.json`, `object_clusters.json`, `subject_taxonomic_map.json`, etc.) only when active.
+* **Native $L_2$ Sentence Embeddings:** Encodes terms via SentenceTransformers (`all-MiniLM-L6-v2`) with native $L_2$ normalization (`normalize_embeddings=True`) to project vectors onto the unit hypersphere $S^{d-1}$.
+* **Optional UMAP Dimensionality Reduction:** Features a configurable UMAP reduction pass (`umap.enabled: true/false`) that compresses $384\text{D} \rightarrow 5\text{D}$ manifolds while preserving local/global structure. Includes dynamic small-vocabulary guardrails ($N < 15$).
+* **UMAP Trustworthiness Metric Evaluation Plotting:** When `plot_trustworthiness: true` is set, evaluates $n\_components$ vs. local neighbor ranking preservation and exports 300 DPI `.jpg` plots (`umap_trustworthiness_Subject.jpg`, `umap_trustworthiness_Predicate.jpg`, `umap_trustworthiness_Object.jpg`).
+* **HDBSCAN Density-Based Clustering:** Groups related vector representations using `hdbscan.HDBSCAN` to discover non-spherical clusters of varying density. HDBSCAN outliers (label `-1`) are automatically reassigned to the nearest cluster centroid if within an $L_2$ cosine distance threshold or promoted to clean **singleton clusters**.
+* **Sub-linear Frequency Centroid Weighting:** Calculates cluster centroid vectors using sub-linear term weights ($w = 1 + \ln(\text{freq})$) to prevent high-frequency terms from drowning out cluster mean vectors.
+* **Configurable Centroid Vector Output (`print_centroid_vector`):** Optionally toggle inclusion of `"centroid_vector"` in cluster JSON outputs (`true`/`false`) to produce lightweight files.
+* **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents, with full token trimming protection to ensure zero data loss across mapped terms.
+* **Outputs:** Always outputs `outputs/02_refinement/refined_triplets.json` for downstream compatibility. Emits specific component map JSON files (`subject_clusters.json`, `predicate_clusters.json`, `object_clusters.json`, `subject_taxonomic_map.json`, etc.) and `.jpg` metric charts under `outputs/02_refinement/`.
 
 ---
 
@@ -154,6 +164,6 @@ Pipeline behavior is configured via modular YAML files in the `configs/` directo
 
 - **[configs/llm.yaml](configs/llm.yaml)**: Provider endpoints, LLM model names, temperature, VRAM management (`manage_vram`), context window limits, and async concurrency caps.
 - **[configs/io.yaml](configs/io.yaml)**: Input/output paths, ingestion settings (directory vs. Parquet), and execution modes (`resume_mode`, `use_async`).
-- **[configs/refinement.yaml](configs/refinement.yaml)**: Master and component-level normalization/lifting toggles (`enable_normalization`, `normalize_subjects`, `normalize_predicates`, `normalize_objects`, `enable_taxonomic_lifting`, `lift_subjects`, `lift_predicates`, `lift_objects`), batching, timeout thresholds, embedding models, and clustering distance cutoffs.
+- **[configs/refinement.yaml](configs/refinement.yaml)**: Master and component-level normalization/lifting toggles (`enable_normalization`, `enable_taxonomic_lifting`), clustering algorithms (`umap_hdbscan` vs `agglomerative`), optional UMAP reduction (`umap.enabled: true/false`), UMAP Trustworthiness evaluation plotting (`plot_trustworthiness`), HDBSCAN density clustering options (`min_cluster_size`, `outlier_reassignment_threshold`), and centroid vector output toggles (`print_centroid_vector`).
 - **[configs/topology.yaml](configs/topology.yaml)**: Execution modes (`community`, `embedding`, `both`), Leiden resolution, Node2Vec parameters, and visualization limits.
 - **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster size for schema targets, max hub schema targets, and per-target triplet payload caps.
