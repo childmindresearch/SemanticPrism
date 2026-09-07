@@ -37,4 +37,4 @@ synthesis:
   #   "triples"  - {'text': 'subject predicate object.', 'theme_association': ...}
   #   "raw_text" - {'text': source_quote, 'theme_association': ...}
   #   "both"     - {'triple': 'subject predicate object.', 'text': source_quote, 'theme_association': ...}
-  payload_values: "both"
+  payload_values: "raw_text"

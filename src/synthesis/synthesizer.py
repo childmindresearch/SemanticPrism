@@ -356,7 +356,7 @@ class SynthesisPipeline:
                         print(f"            [Warning] Initial {pass_name} extraction failed for Target {i} after 2 tries. Running Schema Reformat Agent...")
                         
                         reformat_prompt = (
-                            f"Original Schema Generation Task context was:\n{json.dumps(subset)}\n\n"
+                            f"Original Schema Generation Task context was:\n{user_payload}\n\n"
                             f"The malformed Python output from the failed attempts was:\n{malformed_text}\n\n"
                             f"The parsing validation error that occurred was:\n{str(e)}\n\n"
                             f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "

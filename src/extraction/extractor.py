@@ -66,6 +66,23 @@ class ExtractionPipeline:
         self.max_async = settings.get('extraction', {}).get('max_async_calls', 1)
         self.context_cap = settings.get('extraction', {}).get('context_window_cap', 8192)
 
+        # Automatically load master themes if available on disk and not already set
+        if self.context.master_themes is None:
+            self.load_master_themes()
+
+    def load_master_themes(self) -> Optional[schemas.MasterThemeSynthesisResult]:
+        """Loads master_themes.json from disk into the context if it exists."""
+        master_path = self.out_dir / "master_themes.json"
+        if master_path.exists():
+            try:
+                with open(master_path, "r", encoding="utf-8") as f:
+                    master_data = json.load(f)
+                    self.context.master_themes = schemas.MasterThemeSynthesisResult(**master_data)
+                    return self.context.master_themes
+            except Exception as e:
+                print(f"Warning: Failed to load master themes from {master_path}: {e}")
+        return None
+
     def sanitize_filename(self, name: str) -> str:
         """Sanitizes document identifiers to be filesystem-safe."""
         import re

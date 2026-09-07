@@ -78,6 +78,14 @@ def main():
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
     
+    if context.master_themes and context.master_themes.master_themes:
+        print(f"Loaded {len(context.master_themes.master_themes)} Master Themes into context for triple extraction:")
+        for mt in context.master_themes.master_themes:
+            print(f"  - {mt}")
+        print()
+    else:
+        print("WARNING: No Master Themes found! Triple extraction will assign theme_association to 'Other'. Please run Stage 1 Part 1 first.\n")
+    
     # Load documents based on ingestion settings
     try:
         documents = load_input_documents()

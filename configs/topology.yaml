@@ -52,7 +52,7 @@ topology:
   # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
   # =========================================================================
   visualizations:
-    min_node_degree: 3           # Minimum node degree to render on global diagnostic HTML charts
+    min_node_degree: 2           # Minimum node degree to render on global diagnostic HTML charts
     max_nodes_per_cluster: 30     # Max central nodes per cluster to render on global diagnostic HTML charts
-    max_total_visual_nodes: 0.25 # Max nodes as fraction of total graph nodes (e.g. 0.25 = top 25%)
+    max_total_visual_nodes: 0.75 # Max nodes as fraction of total graph nodes (e.g. 0.25 = top 25%)
     freeze_physics: true         # Disable live physics engine after stabilization for smooth panning

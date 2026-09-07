@@ -29,7 +29,7 @@ refinement:
 # Stage 4 (Synthesis) Token & Concurrency Parameters
 synthesis:
   max_async_calls: 2
-  context_window_cap: 28000    # Max tokens for Pydantic schema synthesis and consolidation
+  context_window_cap: 22000    # Max tokens for Pydantic schema synthesis and consolidation
   # Stage-specific model override (optional)
   llm:
     provider: "ollama"

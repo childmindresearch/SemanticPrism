@@ -10,7 +10,7 @@ Rather than relying on single-shot LLM schema generation—which often leads to 
 
 ### Prerequisites
 - **Python**: 3.10 or higher
-- **LLM Provider**: Local [Ollama](https://ollama.com/) instance (e.g., `qwen2.5:7b`) or API provider (OpenAI, Gemini, etc.)
+- **LLM Provider**: Local [Ollama](https://ollama.com/) instance (e.g., `gemma4:26b`)
 
 ### Installation
 1. Clone the repository and navigate to the root directory:
@@ -84,7 +84,7 @@ graph TD
 
 * **Granular Component Control:** Normalization and taxonomic lifting can be toggled globally or independently for **Subjects**, **Predicates**, and **Objects** via `configs/refinement.yaml`.
 * **Lexical Normalization:** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache. When normalization is disabled, raw terms are preserved and normalization JSON map files are cleanly omitted.
-* **Sentence Embeddings & Vector Clustering:** Converts normalized or raw terms into vector representations using `SentenceTransformers` (`all-MiniLM-L6-v2`) and groups similar concepts via `AgglomerativeClustering`. Supports predicate verb clustering (`lift_predicates`).
+* **Sentence Embeddings & Vector Clustering:** Converts normalized or raw terms into vector representations using SentenceTransformers (`BAAI/bge-large-en-v1.5`) and groups similar concepts via `AgglomerativeClustering`. Supports predicate verb clustering (`lift_predicates`).
 * **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents.
 * **Outputs:** Always outputs `outputs/02_refinement/refined_triplets.json` for downstream compatibility. Emits specific component map JSON files (`subject_clusters.json`, `predicate_clusters.json`, `object_clusters.json`, `subject_taxonomic_map.json`, etc.) only when active.
 

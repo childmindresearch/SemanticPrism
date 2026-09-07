@@ -1,6 +1,7 @@
 <ORGANIZATION>
 Comprehensive Psychological Evaluation Report
 Confidential – For Clinical Use Only
+
 Patient Name: <PERSON>
 Date of Birth: March 12, 2018
 Chronological Age: 8 years, 1 month
@@ -8,81 +9,23 @@ Gender: Female
 Grade: 2nd Grade
 Date of Evaluation: February 10 & 17, 2026
 Date of Report: April 3, 2026
-Evaluator: <PERSON>, PsyD
-Licensed Clinical Psychologist
-<ORGANIZATION>
+Evaluator: <PERSON>, PsyD, Licensed Clinical Psychologist, <ORGANIZATION>
 Referring Provider: <PERSON>, MD (Pediatrics)
 
-REASON FOR REFERRAL
-<PERSON> was referred for a comprehensive psychological evaluation due to concerns from parents and teachers regarding difficulties with attention, emotional regulation, social interactions, and academic engagement. Symptoms have been present for approximately two years and are impacting school performance and family functioning. Parents requested diagnostic clarification and recommendations for support. Recently, <PERSON> has demonstrated increasing reluctance to attend school, often complaining of stomach aches or crying clinging to her mother during morning drop-offs.
+CLINICAL REFERRAL & PRESENTING CONCERNS
+<PERSON> was referred for a comprehensive psychological evaluation by her pediatrician, <PERSON>, MD, following joint consultations with her parents, Mr. and Mrs. <PERSON>, and her 2nd-grade classroom teacher, Mrs. <PERSON>. The primary impetus for this assessment is a multi-year history of escalating difficulties with sustained attention, severe emotional dysregulation during daily transitions, social friction with peers, and chronic academic disengagement. Although subtle attentional and emotional challenges were noted during kindergarten, her symptoms have become significantly more pronounced during the current academic year, directly compromising her academic skill acquisition, classroom participation, and overall family stability. In recent months, <PERSON> has demonstrated intense reluctance to attend school, frequently presenting with acute somatic distress including morning stomach aches, nausea, and tension headaches. Morning drop-offs at school have devolved into prolonged crises characterized by severe crying, verbal pleading, clinging to her mother's arm, and active refusal to enter the building. Her parents requested formal diagnostic clarification regarding neurodevelopmental and anxiety disorders, as well as actionable guidance for home management, classroom accommodations, and therapeutic care.
 
-BACKGROUND INFORMATION
-Developmental History
-Pregnancy, delivery, and early developmental milestones were reported as typical and within normal limits. <PERSON> sat unsupported at 7 months, walked at 13 months, used single words by 12 months, and began combining words by 20 months. Sleep patterns are irregular; <PERSON> frequently expresses fear of sleeping alone, insisting a parent stay in the room until she falls asleep. She occasionally experiences nightmares about being lost. Appetite is generally good, though she is described as a "picky eater" with specific texture aversions. 
+DEVELOPMENTAL, SOMATIC, & MEDICAL HISTORY
+According to her mother, <PERSON>'s birth and early physical development proceeded without significant medical complications. She was born full-term via an uncomplicated vaginal delivery weighing 7 pounds 6 ounces. Gross and fine motor milestones were met on schedule, with <PERSON> sitting unsupported at 7 months, crawling at 9 months, and walking independently by 13 months. Language acquisition similarly unfolded within typical developmental parameters; she uttered single words by 12 months and constructed multi-word functional sentences by 20 months. Despite these normal physical milestones, regulatory self-soothing behaviors were difficult from infancy. As a baby, <PERSON> was described as exceptionally fussy with persistent colic and chronic difficulties establishing predictable feeding and sleep schedules. Sleep hygiene remains markedly impaired; she experiences initial insomnia driven by fear of sleeping alone, requiring a parent to remain in her room until she falls asleep. She awakens multiple times per night seeking parental proximity and reports recurrent nightmares involving themes of separation and being lost. Her appetite is adequate, though her parents describe her as a highly selective eater with severe sensory texture aversions to mixed foods. Her medical history is otherwise non-contributory for major illnesses, surgeries, head trauma, or seizures. Notably, however, <PERSON> has a long history of frequent pediatric visits for recurrent abdominal pain and headaches. Extensive medical workups conducted by Dr. <PERSON> revealed no organic pathology, noting instead a clear temporal correlation between her somatic distress and stress-inducing events such as school attendance or anticipated parental separation.
 
-Medical History
-No major illnesses, injuries, or hospitalizations. Routine vision and hearing screenings are within normal limits. No current medications. No history of seizures, significant head trauma, or toxic exposures. <PERSON> has a history of frequent pediatrician visits for somatic complaints (headaches, stomach aches) which typically coincide with school days or periods of separation from her primary caregivers.
+FAMILY CONTEXT & EDUCATIONAL FUNCTIONING
+<PERSON> resides in a stable suburban home with her biological parents and her 5-year-old brother. The family environment is warm and structured, yet both parents report feeling profound caregiver burnout and physical exhaustion from managing <PERSON>'s persistent emotional intensity, separation anxiety, and constant need for verbal reassurance. A review of her family psychiatric history reveals neurodevelopmental and affective conditions on the paternal side. Her paternal uncle was diagnosed with Attention-Deficit/Hyperactivity Disorder in childhood, and her paternal grandmother has a history of Generalized Anxiety Disorder. At school, her teacher Mrs. <PERSON> describes <PERSON> as a bright and creative child whose academic performance is undermined by severe attentional instability. In the classroom, <PERSON> is easily distracted by minor auditory and visual stimuli, frequently losing focus during group instruction and independent seatwork. When confronted with multi-step written tasks, she becomes overwhelmed, staring blankly at her desk or fidgeting with supplies. She relies heavily on physical proximity to adults and seeks continuous verbal reassurance regarding her performance. While her foundational reading and math abilities fall within the average range when intensive structure is provided, her actual output is inconsistent. During unstructured times like recess, <PERSON> avoids peer play, preferring to shadow adult monitors, and exhibits low frustration tolerance when peer interactions do occur.
 
-Family History
-<PERSON> lives with both biological parents who are married. There is a reported family history of attention and anxiety-related difficulties on the paternal side; her paternal uncle was diagnosed with ADHD in childhood, and her paternal grandmother has a history of generalized anxiety. No other significant psychiatric or developmental disorders noted in immediate family. The family environment is described as supportive with consistent routines, though parents report feeling "burnt out" and exhausted from managing <PERSON>'s intense emotional needs and separation distress.
+CLINICAL OBSERVATIONS & PSYCHOMETRIC EVALUATION
+During testing sessions, <PERSON> initially presented with marked separation distress, clinging to her mother in the waiting room until her mother was seated in view in the hallway. Once inside the testing room, <PERSON> was soft-spoken and polite but exhibited noticeable motor restlessness, including foot-tapping, hair-twirling, and seat-shifting. On complex tasks, her anxiety manifested through rapid lip-biting, sighing, and verbal expressions of self-doubt. Psychometric evaluation utilizing the Wechsler Intelligence Scale for Children, Fifth Edition (WISC-V) yielded a Full Scale IQ of 102 (55th percentile), placing her overall cognitive ability in the Average range. However, a significant discrepancy was identified between her High Average Verbal Comprehension Index of 112 (79th percentile) and her Borderline Processing Speed Index of 78 (7th percentile). Her Working Memory Index fell in the Low Average range at 85 (16th percentile). This 34-point split between verbal reasoning and processing speed represents a severe cognitive bottleneck, explaining why she understands complex ideas but struggles to output written work under time constraints. Objective testing on the Test of Variables of Attention (TOVA) revealed severe response time variability and elevated omission errors, resulting in an ADHD Index score of -4.85, which is strongly indicative of ADHD. Multi-informant rating scales on the BASC-3 and Conners 4 completed by parents and teachers demonstrated clinically significant elevations in Inattention, Executive Dysfunction, Anxiety, and Somatization, alongside severe deficits in Adaptability. Furthermore, her elevated total score of 38 on the SCARED questionnaire confirmed clinically significant anxiety across Separation Anxiety, Generalized Anxiety, and Panic/Somatic domains.
 
-Educational History
-<PERSON> attends a general education 2nd-grade classroom in a public school. Teachers report challenges with sustaining attention during group and independent work, difficulty completing assignments on time, and occasional emotional outbursts when frustrated. She often requires physical proximity to the teacher to remain on task and frequently asks for reassurance ("Is this right?"). Academic skills appear to be in the average range when structure is provided, though progress is inconsistent due to inattention and disorganization. During unstructured times like recess, <PERSON> tends to shadow the recess monitor rather than engaging in independent play with peers.
+DIAGNOSTIC FORMULATION & CLINICAL RECOMMENDATIONS
+Based on the synthesis of clinical interviews, behavioral observations, and psychometric data, <PERSON> meets diagnostic criteria for Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2), and Separation Anxiety Disorder (F93.0), alongside co-occurring Generalized Anxiety Disorder features. Her attentional deficits, executive disorganization, and processing speed bottlenecks directly interact with her separation anxiety and somatic vulnerability, resulting in severe academic and emotional impairment. To support her academic progress and psychological well-being, a multi-systemic intervention plan is strongly recommended. The school multidisciplinary team should establish an Individualized Education Program or 504 Plan providing extended time (1.5x) on assessments, preferential seating near the teacher, visual daily schedules, task chunking with visual checklists, and a non-punitive "Safe Pass" protocol for counselor breaks during somatic distress. At home, parents should engage in Parent Management Training to implement structured positive reinforcement, gradual sleep separation fading protocols, and empathetic validation of somatic feelings paired with firm school attendance expectations. Clinically, <PERSON> should participate in weekly individual Cognitive Behavioral Therapy focused on anxiety reduction, perfectionism, and gradual separation exposure, alongside a structured social skills group to foster peer reciprocity. Finally, the family should consult with Dr. <PERSON> and a child psychiatrist to evaluate pharmacological management for her core attentional deficits and co-occurring anxiety.
 
-Social/Behavioral History
-<PERSON> has a small group of friends but often has trouble sharing or managing disappointment during play. For example, if she loses a board game, she may flip the board and refuse to play again for several days. At home, she can be argumentative about daily routines and homework, often requiring intense parental scaffolding to initiate tasks. No history of aggression toward others or destruction of property. Reported strengths include a vivid imagination, creativity (particularly in drawing and storytelling), kindness toward younger children, and strong expressive language skills.
-
-ASSESSMENT PROCEDURES
-Clinical interview with parents (approximately 2 hours)
-Clinical interview with <PERSON> (40 minutes)
-Teacher telephone interview and standardized rating scales
-Wechsler Intelligence Scale for Children, Fifth Edition (WISC-V)
-Conners 4th Edition – Parent and Teacher Forms
-Behavior Assessment System for Children, Third Edition (BASC-3) – Parent, Teacher, and Self-Report
-Test of Variables of Attention (TOVA)
-Children’s Depression Inventory, Second Edition (CDI-2)
-Screen for Child Anxiety Related Emotional Disorders (SCARED) – Parent and Child versions
-Review of available school and pediatric records
-
-BEHAVIORAL OBSERVATIONS
-<PERSON> arrived on time and was initially shy but warmed up quickly. She was talkative and cooperative yet displayed frequent fidgeting, shifting in her seat, and occasional off-task behaviors. Attention to tasks varied; she required moderate redirection. For example, during block design tasks, she would begin stacking blocks to build a "castle" rather than replicating the stimulus pattern. Speech was clear and fluent. Affect was generally euthymic with some anxiety noted during challenging tasks, manifesting as lip-biting and asking to see her mother in the waiting room. Effort and motivation appeared adequate throughout the evaluation sessions.
-
-TEST RESULTS AND CLINICAL FINDINGS
-Cognitive Ability
-On the WISC-V, <PERSON>’s overall intellectual functioning fell in the Average to High Average range (Full Scale IQ = 112, 79th percentile). Strongest performance was observed in Verbal Comprehension and Fluid Reasoning, indicating excellent ability to understand verbal concepts and solve novel problems. Processing Speed and Working Memory indices were significantly lower relative to other domains, falling in the low average range. This discrepancy is highly consistent with reported attentional concerns and suggests <PERSON> is expending a high degree of cognitive effort simply to maintain focus.
-
-Attention and Executive Functioning
-Results from the Conners 4 and TOVA indicated clinically significant difficulties with inattention and impulsivity in both home and school environments (T-scores ranging from 68–76). Performance on the TOVA showed elevated omission and commission errors along with high variability in response time, supporting deficits in sustained attention and inhibitory control. Parent reports highlight significant deficits in task initiation and working memory, noting she often forgets multi-step directions.
-
-Social-Emotional and Behavioral Functioning
-BASC-3 profiles revealed clinically significant elevations in hyperactivity, attention problems, and emotional self-regulation across reporters. SCARED scores indicated elevated anxiety symptoms (parent total score = 28, above clinical cutoff), particularly related to separation and school performance. <PERSON> self-reported significant worry about "bad things happening to mom and dad." CDI-2 results did not suggest significant depressive symptoms. Teacher ratings were somewhat higher than parent ratings, indicating greater impairment in the structured and demanding school setting.
-
-Diagnostic Impression
-Based on a review of developmental history, behavioral observations, multi-informant standardized measures, and cognitive testing, <PERSON> meets DSM-5-TR criteria for the following diagnoses:
-1. Attention-Deficit/Hyperactivity Disorder, Combined Presentation (F90.2)
-Moderate severity. Symptoms are present across multiple settings and cause clinically significant impairment in academic and social functioning.
-2. Separation Anxiety Disorder (F93.0)
-Mild severity. Excessive fear of separation from attachment figures that interferes with daily activities, notably school attendance and independent sleeping.
-
-No evidence of a specific learning disorder, autism spectrum disorder, or oppositional defiant disorder was identified at this time. Notable strengths include solid verbal abilities and a supportive family system.
-
-RECOMMENDATIONS
-
-Medical Consultation – Referral to a child and adolescent psychiatrist for consideration of medication management options for ADHD symptoms, which may concurrently lower the baseline arousal driving her anxiety.
-Behavioral Interventions – Participation in evidence-based parent training program (e.g., 8–12 sessions of behavioral parent management training) to address compliance, establish structured morning routines, and manage separation distress systematically.
-School Supports – Request a Section 504 Plan or IEP meeting to implement classroom accommodations. Recommended accommodations include preferential seating near the teacher, extended time on assignments/tests, frequent scheduled movement breaks, visual schedules, and a "safe pass" to visit the school counselor when feeling overwhelmed. Daily behavior report card recommended.
-Individual Therapy – Weekly cognitive-behavioral therapy (CBT) focused on anxiety management, developing a "bravery ladder" for separation scenarios, coping skills, and building emotional regulation. Services can be coordinated through <ORGANIZATION> or community providers.
-Extracurricular Activities – Enroll <PERSON> in a structured, non-competitive group activity (e.g., art class or theater) to build self-esteem and practice social interactions in a low-stakes environment.
-Follow-up – Re-evaluation in 12 months or earlier if significant changes occur. Ongoing monitoring of academic progress and response to interventions is advised.
-
-Summary Statement
-<PERSON> is a bright and engaging 8-year-old girl presenting with ADHD, Combined Presentation and co-occurring Separation Anxiety Disorder. Her cognitive profile reveals significant strengths in verbal and fluid reasoning undermined by vulnerabilities in processing speed and working memory. With timely, evidence-based intervention including behavioral support, targeted school accommodations, and CBT therapy, significant improvement in attention, anxiety, and overall functioning is highly anticipated.
-
-Signed:
-<PERSON>, PsyD
-Licensed Psychologist
-<ORGANIZATION>
-
-Report reviewed by:
-<PERSON>, MD
-Medical Director, <ORGANIZATION>
+Evaluator Signature:
+<PERSON>, PsyD, Licensed Clinical Psychologist, <ORGANIZATION>
