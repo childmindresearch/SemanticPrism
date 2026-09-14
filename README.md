@@ -153,7 +153,7 @@ graph TD
 ```
 
 * **Target Resolution & Payload Pruning:** Filters graph nodes into orphan enum pools vs primary schema targets based on cluster size, PageRank scoring, and hub centrality caps (`max_hub_targets`, `max_triplets_per_target`).
-* **Multi-Pass Schema Synthesis & Provenance:** Synthesizes Pydantic schemas under dedicated data provenance subfolders (`outputs/schemas/<path_type>/normalized/` and `/raw/`) backed by automated recovery agents for malformed LLM outputs.
+* **Multi-Pass Schema Synthesis & Provenance:** Synthesizes Pydantic schemas under dedicated data provenance subfolders (`outputs/04_synthesis/schemas/<path_type>/normalized/` and `/raw/`) backed by automated recovery agents for malformed LLM outputs.
 * **Consolidation, AST Enum Pruning & Formatting:** Consolidates cluster schemas into a master module, applies deterministic AST post-processing to prune unreferenced orphan Enums, and formats the final `comprehensive_ontology.py` using Ruff.
 
 ---

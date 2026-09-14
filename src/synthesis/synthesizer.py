@@ -139,7 +139,7 @@ class SynthesisPipeline:
             return ""
         
         # Path-isolated Output directories
-        output_base_dir = Path("outputs/schemas") / path_type
+        output_base_dir = Path("outputs/04_synthesis/schemas") / path_type
         norm_dir = output_base_dir / "normalized"
         raw_dir = output_base_dir / "raw"
         
