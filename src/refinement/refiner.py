@@ -218,7 +218,7 @@ class RefinementPipeline:
                 )
             except Exception as e:
                 print(f"[Refinement] Local model '{model_name}' not found or failed to load offline ({e}).")
-                print(f"[Refinement] Attempting online download from HuggingFace...")
+                print("[Refinement] Attempting online download from HuggingFace...")
                 self.embedding_model = SentenceTransformer(
                     model_name, 
                     cache_folder=str(models_dir),

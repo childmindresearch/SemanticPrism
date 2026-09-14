@@ -44,7 +44,7 @@ def purge_vram(target_model: str = None, target_base_url: str = None):
                 data = json.dumps({"model": model, "keep_alive": 0}).encode('utf-8')
                 req = urllib.request.Request(endpoint, data=data, headers={'Content-Type': 'application/json'}, method='POST')
                 try:
-                    with urllib.request.urlopen(req, timeout=5) as response:
+                    with urllib.request.urlopen(req, timeout=5):
                         pass
                 except Exception:
                     pass

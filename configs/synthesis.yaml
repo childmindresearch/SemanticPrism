@@ -30,7 +30,7 @@ synthesis:
   # Controls whether to save the full text payloads sent to the LLM during Stage 4 Synthesis.
   # When true, payloads are saved to the directory specified in payload_output_dir.
   save_llm_payloads: true
-  payload_output_dir: "outputs/synthesis_payloads"
+  payload_output_dir: "outputs/04_synthesis/payloads"
 
   # Specifies the item structure of Phase 2 schema synthesis payloads sent to the LLM.
   # Options:

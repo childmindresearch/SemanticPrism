@@ -4,10 +4,9 @@ This module orchestrates the Pydantic AI agents to process raw text, extract the
 """
 
 import json
-import os
 import asyncio
 
-from typing import List, Set, Optional, Tuple
+from typing import List, Optional, Tuple
 from pathlib import Path
 
 from . import schemas
@@ -328,11 +327,11 @@ class ExtractionPipeline:
                         is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
 
                         if not is_model_error and (not has_response or not malformed_text or is_traceback):
-                            print(f"      -> Extraction failed due to a connection/system/traceback error. Raising immediately.")
+                            print("      -> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                             raise e
 
                         if is_model_error and (not has_response or not malformed_text or is_traceback):
-                            print(f"      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                            print("      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                             return []
 
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
@@ -416,11 +415,11 @@ class ExtractionPipeline:
                     is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
 
                     if not is_model_error and (not has_response or not malformed_text or is_traceback):
-                        print(f"-> Extraction failed due to a connection/system/traceback error. Raising immediately.")
+                        print("-> Extraction failed due to a connection/system/traceback error. Raising immediately.")
                         raise e
 
                     if is_model_error and (not has_response or not malformed_text or is_traceback):
-                        print(f"-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                        print("-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                         continue
 
                     print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")

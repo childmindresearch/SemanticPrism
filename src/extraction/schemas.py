@@ -4,7 +4,7 @@ This module contains strictly Pydantic data models used to enforce structured JS
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Any
+from typing import List, Optional
 
 class Theme(BaseModel):
     """Represents an isolated, high-level structural theme."""

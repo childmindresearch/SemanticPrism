@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import List, Dict, Any
 from datetime import datetime
 
-from src.config import settings
 from src.agents.synthesis_agents import (
     OrphanContext, SynthesisContext,
     orphan_agent, leiden_schema_agent, node2vec_schema_agent,
@@ -14,7 +13,6 @@ from src.agents.synthesis_agents import (
     schema_reformat_agent,
     last_llm_responses
 )
-from src.topology.resolver import TargetResolver
 
 
 
@@ -75,7 +73,7 @@ class SynthesisPipeline:
 
         # Setup logging
         outputs_dir = self.config.get('directories', {}).get('outputs', 'outputs')
-        log_dir = Path(outputs_dir) / "logs"
+        log_dir = Path(outputs_dir) / "04_synthesis" / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_file = log_dir / f"synthesis_{path_type}_errors.log"
         
@@ -86,7 +84,6 @@ class SynthesisPipeline:
                 
         def log_detailed_synthesis_error(error: Exception, responses: list, pass_name: str, target_id: Any, i: int):
             from pydantic import ValidationError
-            from pydantic_ai.exceptions import UnexpectedModelBehavior
             
             error_msg = f"[Synthesis {path_type}] Error generating {pass_name} schema {i} ({target_id}): {error}"
             log_error(error_msg)
@@ -157,7 +154,7 @@ class SynthesisPipeline:
 
         # Payload dumping directory
         save_llm_payloads = self.config.get('synthesis', {}).get('save_llm_payloads', False)
-        payload_base_dir = Path(self.config.get('synthesis', {}).get('payload_output_dir', 'outputs/synthesis_payloads')) / path_type
+        payload_base_dir = Path(self.config.get('synthesis', {}).get('payload_output_dir', 'outputs/04_synthesis/payloads')) / path_type
         if save_llm_payloads:
             if payload_base_dir.exists():
                 shutil.rmtree(payload_base_dir)

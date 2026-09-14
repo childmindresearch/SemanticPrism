@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 from src.config import settings
 from src.topology.graph_builder import TopologyPipeline
-from src.topology.resolver import TargetResolver
 
 def main():
     print("=== SemanticPrism Stage 3: Topology Pipeline (Dual-Path Isolated Architecture) ===")
@@ -23,18 +22,7 @@ def main():
     pipeline = TopologyPipeline(config=settings)
     
     try:
-        results = pipeline.execute(refined_triplets)
-        
-        # Export Resolved Target JSON files for Path 1 and Path 2
-        if "community" in results:
-            comm_target_file = TargetResolver.export_resolved_targets_json(
-                results["community"].model_dump(), "community", refined_triplets, settings, Path("outputs/03_topology/community")
-            )
-
-        if "embedding" in results:
-            emb_target_file = TargetResolver.export_resolved_targets_json(
-                results["embedding"].model_dump(), "embedding", refined_triplets, settings, Path("outputs/03_topology/embedding")
-            )
+        pipeline.execute(refined_triplets)
             
         # Verify outputs
         norm_triplets_out = Path("outputs/03_topology/normalized_triplets.json")

@@ -82,7 +82,7 @@ class TargetResolver:
             (global_rarity_map, cluster_node_spec_map)
         """
         import math
-        from collections import Counter, defaultdict
+        from collections import Counter
         
         global_node_counts = Counter()
         for t in triplets:

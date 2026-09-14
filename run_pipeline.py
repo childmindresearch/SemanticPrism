@@ -18,12 +18,12 @@ def run_stage(script_name: str, stage_desc: str):
     
     try:
         # Run the script as a subprocess, piping output directly to the main terminal
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, script_name],
             check=True,
             text=True
         )
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         print(f"\n❌ CRITICAL ERROR in {script_name}!")
         print(f"Pipeline halted at {stage_desc}.")
         sys.exit(1)
@@ -49,7 +49,7 @@ def main():
         
     global_duration = time.time() - global_start
     print("\n" + "="*60)
-    print(f"🎉 FULL SEMANTIC PRISM PIPELINE COMPLETE!")
+    print("🎉 FULL SEMANTIC PRISM PIPELINE COMPLETE!")
     print(f"Total Execution Time: {global_duration:.2f} seconds")
     print("Check the 'outputs/' directory for your final topology graphs and Pydantic schemas.")
     print("="*60 + "\n")

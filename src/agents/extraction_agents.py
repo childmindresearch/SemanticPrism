@@ -3,7 +3,7 @@ SemanticPrism Stage 1: Extraction Agents
 This module centralizes the initialization and configuration of Pydantic AI agents for the extraction phase.
 """
 
-from typing import Set, Optional
+from typing import Optional
 import os
 from pydantic_ai import Agent, RunContext, ModelSettings
 from dataclasses import dataclass

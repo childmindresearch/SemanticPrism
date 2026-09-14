@@ -683,7 +683,6 @@ class TopologyPipeline:
 
     def _generate_llm_payload_gallery(self, dg: nx.DiGraph, result: TopologyResult, refined_triplets: List[dict], vis_dir: Path, path_label: str, path_type: str):
         agent_name = "leiden_schema_agent" if path_type == "community" else "node2vec_schema_agent"
-        cluster_type_label = "Community" if path_type == "community" else "Structural Cluster"
         
         synth_cfg = self.full_config.get('synthesis', {})
         min_cluster_size = synth_cfg.get('min_cluster_size', 32)

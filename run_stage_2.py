@@ -18,12 +18,12 @@ def run_substage(script_name: str, substage_desc: str):
     start_time = time.time()
     
     try:
-        result = subprocess.run(
+        subprocess.run(
             [sys.executable, script_name],
             check=True,
             text=True
         )
-    except subprocess.CalledProcessError as e:
+    except subprocess.CalledProcessError:
         print(f"\n❌ CRITICAL ERROR in {script_name}!")
         print(f"Stage 2 halted at {substage_desc}.")
         sys.exit(1)
@@ -44,7 +44,7 @@ def main():
     
     total_duration = time.time() - stage_start
     print("\n" + "="*60)
-    print(f"🎉 STAGE 2 FULL REFINEMENT PIPELINE COMPLETE!")
+    print("🎉 STAGE 2 FULL REFINEMENT PIPELINE COMPLETE!")
     print(f"Total Stage 2 Time: {total_duration:.2f} seconds")
     print("Outputs saved in 'outputs/02_refinement':")
     print(" - subject_normalization_map.json")
