@@ -156,7 +156,7 @@ class ExtractionPipeline:
             
         return chunks
 
-    async def _discover_themes_async(self, text: str, source_doc: str):
+    async def discover_themes_async(self, text: str, source_doc: str):
         """Async implementation of theme discovery using asyncio.gather and Semaphore."""
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
         sem = asyncio.Semaphore(self.max_async)
@@ -199,7 +199,15 @@ class ExtractionPipeline:
         Persists them per-document to themes directory.
         """
         if self.use_async:
-            asyncio.run(self._discover_themes_async(text, source_doc))
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+                
+            if loop and loop.is_running():
+                raise RuntimeError("discover_themes() was called inside a running asyncio event loop with use_async=True. Please use 'await pipeline.discover_themes_async(...)' instead.")
+            
+            asyncio.run(self.discover_themes_async(text, source_doc))
             return
 
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
@@ -291,7 +299,7 @@ class ExtractionPipeline:
                 else:
                     print(f"Master theme synthesis attempt {attempt + 1} failed, retrying...")
 
-    async def _extract_triples_async(self, text: str, source_doc: str):
+    async def extract_triples_async(self, text: str, source_doc: str):
         """Async implementation of triple extraction using asyncio.gather and Semaphore."""
         self.context.processed_documents.add(source_doc)
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)
@@ -375,7 +383,15 @@ class ExtractionPipeline:
         """
         self.context.processed_documents.add(source_doc)
         if self.use_async:
-            asyncio.run(self._extract_triples_async(text, source_doc))
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+                
+            if loop and loop.is_running():
+                raise RuntimeError("extract_triples() was called inside a running asyncio event loop with use_async=True. Please use 'await pipeline.extract_triples_async(...)' instead.")
+
+            asyncio.run(self.extract_triples_async(text, source_doc))
             return
 
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)

@@ -28,7 +28,38 @@ Rather than relying on single-shot LLM schema generation—which often leads to 
 
 ---
 
-## Overall Pipeline Execution Flow
+## Data Ingestion & Input Configuration
+
+SemanticPrism supports two input loading modes configured in **[configs/io.yaml](configs/io.yaml)**:
+
+### 1. Directory Mode (`source_type: "directory"`)
+Loads individual plain text (`.txt`) files from a specified folder. The filename is used as the document identifier.
+
+```yaml
+directories:
+  inputs: "inputs/testdocs"    # Folder containing .txt files
+
+ingestion:
+  source_type: "directory"
+```
+
+### 2. Parquet Mode (`source_type: "parquet"`)
+Reads a `.parquet` tabular dataset file (using Polars) for fast batch ingestion across large document corpora.
+
+```yaml
+ingestion:
+  source_type: "parquet"
+  parquet:
+    filename: "inputs/testdocs.parquet"  # Path to parquet file
+    id_field: "unique_val"              # Column name for document IDs
+    text_field: "report"                  # Column name for text content
+```
+
+### Pipeline Execution Toggles (`configs/io.yaml`)
+* **`use_async`**: `true` (enables parallel chunk processing via `asyncio`) or `false` (sequential execution).
+* **`resume_mode`**: `"skip"` (resumes run by skipping existing document outputs on disk) or `"overwrite"` (re-processes all documents).
+
+---
 
 The full end-to-end pipeline is executed via the master orchestrator script [run_pipeline.py](run_pipeline.py):
 

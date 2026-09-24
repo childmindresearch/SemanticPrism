@@ -4,6 +4,7 @@ This standalone script initializes the Stage 1 pipeline for triples, loads the c
 reads input documents, extracts semantic triplets across documents, and aggregates them.
 """
 
+import asyncio
 import sys
 import os
 from pathlib import Path
@@ -71,7 +72,7 @@ def load_input_documents() -> list[dict]:
             
     return docs
 
-def main():
+async def main_async():
     print("Initializing Stage 1: Triple Extraction & Aggregation...")
     
     # Initialize the core pipeline state tracker
@@ -113,7 +114,10 @@ def main():
             print(f"-> Skipping triple extraction for: {doc['id']} (already exists on disk)")
         else:
             print(f"-> Extracting triplets from: {doc['id']}")
-            pipeline.extract_triples(doc['text'], source_doc=doc['id'])
+            if pipeline.use_async:
+                await pipeline.extract_triples_async(doc['text'], source_doc=doc['id'])
+            else:
+                pipeline.extract_triples(doc['text'], source_doc=doc['id'])
             
     # Phase 3.5: Triple Aggregation
     print("\n=== Phase 3.5: Triple Aggregation ===")
@@ -131,6 +135,9 @@ def main():
     
     print("\nPurging VRAM...")
     purge_vram()
+
+def main():
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()

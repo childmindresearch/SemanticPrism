@@ -4,6 +4,7 @@ This standalone script initializes the Stage 1 pipeline for themes, loads the ce
 reads input documents, discovers raw themes across documents, aggregates them, and synthesizes master themes.
 """
 
+import asyncio
 import sys
 import os
 from pathlib import Path
@@ -71,7 +72,7 @@ def load_input_documents() -> list[dict]:
             
     return docs
 
-def main():
+async def main_async():
     print("Initializing Stage 1: Theme Discovery & Synthesis...")
     
     # Initialize the core pipeline state tracker
@@ -105,7 +106,10 @@ def main():
             print(f"-> Skipping theme discovery for: {doc['id']} (already exists on disk)")
         else:
             print(f"-> Discovering themes in: {doc['id']}")
-            pipeline.discover_themes(doc['text'], source_doc=doc['id'])
+            if pipeline.use_async:
+                await pipeline.discover_themes_async(doc['text'], source_doc=doc['id'])
+            else:
+                pipeline.discover_themes(doc['text'], source_doc=doc['id'])
             
     # Phase 1.5: Theme Aggregation
     print("\n=== Phase 1.5: Theme Aggregation ===")
@@ -132,6 +136,9 @@ def main():
     print(f"Outputs saved to '{out_dir}':")
     print(" - all_themes.json")
     print(" - master_themes.json")
+
+def main():
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()

@@ -6,7 +6,6 @@
 # =========================================================================
 
 refinement:
-  batch_size: 25               # Terms per API payload batch during lexical normalization
   timeout: 300.0               # Timeout limit in seconds per normalization API batch
 
   # =========================================================================
@@ -18,6 +17,7 @@ refinement:
   normalize_subjects: false
   normalize_predicates: false
   normalize_objects: false
+  batch_size: 25               # Terms per API payload batch during lexical normalization
 
   # =========================================================================
   # TAXONOMIC LIFTING & VECTOR CLUSTERING TOGGLES
