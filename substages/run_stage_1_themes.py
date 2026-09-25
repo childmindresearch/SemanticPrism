@@ -136,6 +136,7 @@ async def main_async():
     print(f"Outputs saved to '{out_dir}':")
     print(" - all_themes.json")
     print(" - master_themes.json")
+    print(" - theme_mapping_clusters.json")
 
 def main():
     asyncio.run(main_async())

@@ -44,6 +44,7 @@ def main():
     print("Outputs saved in 'outputs/01_extraction':")
     print(" - all_themes.json")
     print(" - master_themes.json")
+    print(" - theme_mapping_clusters.json")
     print(" - original_triplets.json")
     print("="*60 + "\n")
 

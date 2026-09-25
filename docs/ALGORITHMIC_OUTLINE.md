@@ -70,22 +70,19 @@ Each stage writes its outputs to disk as JSON, enabling **iterative diagnostic l
 
 ---
 
-## Stage 2: Embedding & Clustering (Offline)
+### 1.4 Theme Embedding Mapping & Confidence Tagging
 
-### 2.1 Theme Embedding Mapping
+**What:** Each unique original theme (from Stage 1.1) is encoded via **SentenceTransformers** (`theme_embedding_model`). The master themes (from Stage 1.2) are similarly encoded. For each original theme, cosine similarity is computed against all master themes, tagging each mapping with a confidence level (`high`, `medium`, `low`, or `unassigned`).
 
-**What:** Each unique original theme (from Stage 1.1) is concatenated with its descriptions and reasonings, then encoded via **SentenceTransformers** (`BAAI/bge-m3`). The master themes (from Stage 1.2) are similarly encoded. For each original theme, cosine similarity is computed against all master themes, and it is assigned to the most similar master theme.
+**Why:** Maps noisy, locally-discovered themes into the master ontology while preserving confidence metrics.
 
-**Why:** This maps the noisy, locally-discovered themes into the clean, master ontology. It also surfaces which master themes are empirically grounded (have many original themes mapped to them) versus which might be spurious.
+**Output:** `Dict[master_theme → List[ThemeRecord]]` (saved as `theme_mapping_clusters.json` in `outputs/01_extraction/`)
 
-**Key formula:**
-```
-cosine_similarity(v1, v2) = (v1 · v2) / (||v1||₂ · ||v2||₂)
-```
+---
 
-**Output:** `Dict[master_theme → List[original_themes]]` (saved as `theme_mapping_clusters.json`)
+## Stage 2: Refinement & Taxonomic Lifting
 
-### 2.2 Triple Component Clustering
+### 2.1 Triple Component Clustering
 
 **What:** Subjects, predicates, and objects from normalized triples are extracted into separate lists. For each component type:
 

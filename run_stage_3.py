@@ -3,21 +3,23 @@ from pathlib import Path
 from src.config import settings
 from src.topology.graph_builder import TopologyPipeline
 
+import sys
+
 def main():
     print("=== SemanticPrism Stage 3: Topology Pipeline (Dual-Path Isolated Architecture) ===")
     
     input_path = Path("outputs/02_refinement/refined_triplets.json")
     if not input_path.exists():
-        print(f"Error: Required input file '{input_path}' not found.")
-        print("Please run Stage 2 first.")
-        return
+        print(f"CRITICAL ERROR: Required input file '{input_path}' not found.")
+        print("Please run Stage 2 first ('python3 run_stage_2.py' or 'python3 run_pipeline.py').")
+        sys.exit(1)
         
     try:
         with open(input_path, "r") as f:
             refined_triplets = json.load(f)
     except Exception as e:
-        print(f"Failed to load refined triplets: {e}")
-        return
+        print(f"CRITICAL ERROR: Failed to load refined triplets: {e}")
+        sys.exit(1)
         
     pipeline = TopologyPipeline(config=settings)
     

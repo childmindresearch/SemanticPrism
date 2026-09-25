@@ -1,3 +1,4 @@
+import sys
 import json
 from pathlib import Path
 from src.config import settings
@@ -11,7 +12,7 @@ def load_json(filepath, required=True):
             return json.load(f)
     except FileNotFoundError:
         if required:
-            print(f"Error: Required file {filepath} not found.")
+            print(f"CRITICAL ERROR: Required file {filepath} not found.")
         return None
 
 def main():
@@ -22,12 +23,13 @@ def main():
     refined_triplets = load_json("outputs/02_refinement/refined_triplets.json")
     original_triplets = load_json("outputs/01_extraction/original_triplets.json")
     taxonomic_map = load_json("outputs/02_refinement/taxonomic_map.json", required=False) or {}
-    master_themes_raw = load_json("outputs/01_extraction/master_themes.json")
+    master_themes_raw = load_json("outputs/01_extraction/master_themes.json", required=False) or {}
 
     # Check if required preceding stage outputs exist
-    if not all([refined_triplets, original_triplets, master_themes_raw]):
-        print("Error: Cannot run Stage 4. Missing required preceding stage outputs (Stages 1 & 2).")
-        return
+    if not refined_triplets or not original_triplets:
+        print("CRITICAL ERROR: Cannot run Stage 4. Missing required preceding stage outputs (Stages 1 & 2).")
+        print("Please run preceding stages first ('python3 run_pipeline.py').")
+        sys.exit(1)
 
     # Check synthesis execution mode
     synth_mode = config.get('synthesis', {}).get('execution_mode', 'community')

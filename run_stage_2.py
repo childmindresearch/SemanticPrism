@@ -40,7 +40,7 @@ def main():
     stage_start = time.time()
     
     run_substage("substages/run_stage_2_normalization.py", "Stage 2 Part 1: Lexical Normalization")
-    run_substage("substages/run_stage_2_taxonomic_lifting.py", "Stage 2 Part 2: Taxonomic Lifting & Theme Mapping")
+    run_substage("substages/run_stage_2_taxonomic_lifting.py", "Stage 2 Part 2: Vector Clustering & Taxonomic Lifting")
     
     total_duration = time.time() - stage_start
     print("\n" + "="*60)
@@ -56,7 +56,6 @@ def main():
     print(" - subject_taxonomic_map.json")
     print(" - predicate_taxonomic_map.json")
     print(" - object_taxonomic_map.json")
-    print(" - theme_mapping_clusters.json")
     print(" - refined_triplets.json")
     print("="*60 + "\n")
 

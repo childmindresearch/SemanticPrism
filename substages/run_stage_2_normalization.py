@@ -24,41 +24,34 @@ def main():
     # Define paths
     input_dir = Path("outputs/01_extraction")
     if not input_dir.exists():
-        print(f"Error: Required input directory '{input_dir}' not found.")
-        print("Please run Stage 1 first.")
-        return
-
-    # Load master themes
-    try:
-        with open(input_dir / "master_themes.json", "r") as f:
-            master_data = json.load(f)
-            master_domain = master_data.get("master_domain", settings.get('extraction', {}).get('domain', 'Unknown'))
-            master_themes = master_data.get("master_themes", [])
-    except Exception as e:
-        print(f"Failed to load master themes: {e}")
-        return
+        print(f"CRITICAL ERROR: Required input directory '{input_dir}' not found.")
+        print("Please run Stage 1 first ('python3 run_stage_1.py' or 'python3 run_pipeline.py').")
+        sys.exit(1)
 
     # Load original triplets
+    triplets_path = input_dir / "original_triplets.json"
+    if not triplets_path.exists():
+        print(f"CRITICAL ERROR: Required file '{triplets_path}' not found.")
+        print("Stage 2 requires Stage 1 triple extraction outputs. Please run Stage 1 first ('python3 run_stage_1.py' or 'python3 run_pipeline.py').")
+        sys.exit(1)
+        
     try:
-        with open(input_dir / "original_triplets.json", "r") as f:
+        with open(triplets_path, "r") as f:
             triplets_data = json.load(f)
-            # Parse into Pydantic models
             raw_triples = [RawTriple(**t) for t in triplets_data]
     except Exception as e:
-        print(f"Failed to load original triplets: {e}")
-        return
+        print(f"CRITICAL ERROR: Failed to load original triplets: {e}")
+        sys.exit(1)
 
     # Initialize Pipeline Context
+    master_domain = settings.get('extraction', {}).get('domain', 'General')
     context = PipelineRunContext(master_domain=master_domain)
 
     # Execute Refinement Pipeline (Lexical Normalization)
     pipeline = RefinementPipeline(config=settings, context=context)
     
     try:
-        pipeline.execute_part_1(
-            raw_triples=raw_triples,
-            master_themes=master_themes
-        )
+        pipeline.execute_part_1(raw_triples=raw_triples)
         print("=== Stage 2 Lexical Normalization Completed Successfully ===")
     except Exception as e:
         print(f"Error during Lexical Normalization execution: {e}")

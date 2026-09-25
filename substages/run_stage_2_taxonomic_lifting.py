@@ -26,43 +26,32 @@ def main():
     refinement_dir = Path("outputs/02_refinement")
     
     if not input_dir.exists():
-        print(f"Error: Required input directory '{input_dir}' not found.")
-        print("Please run Stage 1 first.")
-        return
+        print(f"CRITICAL ERROR: Required input directory '{input_dir}' not found.")
+        print("Please run Stage 1 first ('python3 run_stage_1.py' or 'python3 run_pipeline.py').")
+        sys.exit(1)
 
     # Check if Normalization outputs exist
     sub_map_path = refinement_dir / "subject_normalization_map.json"
     pred_map_path = refinement_dir / "predicate_normalization_map.json"
     obj_map_path = refinement_dir / "object_normalization_map.json"
     
-    # Load master themes
-    try:
-        with open(input_dir / "master_themes.json", "r") as f:
-            master_data = json.load(f)
-            master_domain = master_data.get("master_domain", settings.get('extraction', {}).get('domain', 'Unknown'))
-            master_themes = master_data.get("master_themes", [])
-    except Exception as e:
-        print(f"Failed to load master themes: {e}")
-        return
-
-    # Load original themes
-    try:
-        with open(input_dir / "all_themes.json", "r") as f:
-            original_themes = json.load(f)
-    except Exception as e:
-        print(f"Failed to load original themes: {e}")
-        return
-
     # Load original triplets
+    triplets_path = input_dir / "original_triplets.json"
+    if not triplets_path.exists():
+        print(f"CRITICAL ERROR: Required file '{triplets_path}' not found.")
+        print("Stage 2 requires Stage 1 triple extraction outputs. Please run Stage 1 first ('python3 run_stage_1.py' or 'python3 run_pipeline.py').")
+        sys.exit(1)
+
     try:
-        with open(input_dir / "original_triplets.json", "r") as f:
+        with open(triplets_path, "r") as f:
             triplets_data = json.load(f)
             raw_triples = [RawTriple(**t) for t in triplets_data]
     except Exception as e:
-        print(f"Failed to load original triplets: {e}")
-        return
+        print(f"CRITICAL ERROR: Failed to load original triplets: {e}")
+        sys.exit(1)
 
     # Initialize Pipeline Context and Pipeline
+    master_domain = settings.get('extraction', {}).get('domain', 'General')
     context = PipelineRunContext(master_domain=master_domain)
     pipeline = RefinementPipeline(config=settings, context=context)
 
@@ -88,17 +77,14 @@ def main():
         print("   -> object_normalization_map.json not found; using preprocessed identity map.")
         object_map = {t.object: pipeline._nlp_preprocess(t.object) for t in raw_triples}
 
-    
     try:
         pipeline.execute_part_2(
             raw_triples=raw_triples,
-            original_themes=original_themes,
-            master_themes=master_themes,
             subject_map=subject_map,
             predicate_map=predicate_map,
             object_map=object_map
         )
-        print("=== Stage 2 Taxonomic Lifting & Theme Mapping Completed Successfully ===")
+        print("=== Stage 2 Taxonomic Lifting Completed Successfully ===")
     except Exception as e:
         print(f"Error during Taxonomic Lifting execution: {e}")
 

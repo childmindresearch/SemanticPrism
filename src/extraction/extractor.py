@@ -14,6 +14,19 @@ from . import prompts
 from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
 from src.config import settings
 
+try:
+    import pyarrow as pa
+    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
+    if _orig_unregister:
+        def _safe_unregister(type_name):
+            try:
+                _orig_unregister(type_name)
+            except Exception:
+                pass
+        pa.unregister_extension_type = _safe_unregister
+except Exception:
+    pass
+
 class PipelineRunContext:
     """
     State tracking object passed throughout the pipeline execution to persist data
@@ -268,9 +281,27 @@ class ExtractionPipeline:
         if not self.context.all_discovered_themes:
             return
             
+        resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
+        master_path = self.out_dir / "master_themes.json"
+
+        if resume_mode == 'skip' and master_path.exists():
+            print("-> Skipping master theme synthesis (already exists on disk). Loading existing master themes...")
+            self.load_master_themes()
+            self.map_theme_clusters()
+            return
+
         # Consolidate ALL chunk-level themes across the corpus into a master list
+        target_count = settings.get('refinement', {}).get('target_master_theme_count')
+        if target_count and target_count > 0:
+            target_directive = f"Target approximately {target_count} master themes to cover the corpus cleanly."
+        else:
+            target_directive = ""
+
         themes_str = "\n".join([f"- {t.title}: {t.description}" for t in self.context.all_discovered_themes])
-        master_user_prompt = prompts.MASTER_THEME_USER_PROMPT.format(all_extracted_themes=themes_str)
+        master_user_prompt = prompts.MASTER_THEME_USER_PROMPT.format(
+            target_count_directive=target_directive,
+            all_extracted_themes=themes_str
+        )
         
         max_retries = 2
         for attempt in range(max_retries):
@@ -284,6 +315,8 @@ class ExtractionPipeline:
                 with open(self.out_dir / "master_themes.json", "w") as f:
                     f.write(master_result.output.model_dump_json(indent=2))
                 
+                # Perform theme consolidation embedding mapping in Stage 1
+                self.map_theme_clusters()
                 break # Success, exit the retry loop
                 
             except Exception as e:
@@ -295,9 +328,98 @@ class ExtractionPipeline:
                     with open(self.log_dir / "stage_01_master_theme_errors.json", "a") as f:
                         f.write(json.dumps(error_record) + "\n")
                     print(f"Warning: Master theme synthesis failed after {max_retries} attempts.")
-                    # Gracefully allow to exit without crashing
+                    if master_path.exists():
+                        self.load_master_themes()
+                        self.map_theme_clusters()
                 else:
                     print(f"Master theme synthesis attempt {attempt + 1} failed, retrying...")
+
+    def map_theme_clusters(self):
+        """
+        Consolidates and maps all individual extracted themes to master synthesized themes via vector embeddings
+        with multi-tier confidence tagging (high, medium, low, unassigned).
+        Outputs 'outputs/01_extraction/theme_mapping_clusters.json'.
+        """
+        if not self.context.all_discovered_themes or not self.context.master_themes:
+            return
+
+        print("-> Mapping extracted themes to master synthesized themes...")
+        try:
+            from collections import defaultdict
+            import numpy as np
+            from sklearn.metrics.pairwise import cosine_similarity
+            from sentence_transformers import SentenceTransformer
+
+            model_name = settings.get('refinement', {}).get('theme_embedding_model', settings.get('refinement', {}).get('embedding_model', 'all-MiniLM-L6-v2'))
+            models_dir = Path("models/embeddings")
+            models_dir.mkdir(parents=True, exist_ok=True)
+
+            try:
+                embedding_model = SentenceTransformer(model_name, cache_folder=str(models_dir), local_files_only=True)
+            except Exception:
+                embedding_model = SentenceTransformer(model_name, cache_folder=str(models_dir), local_files_only=False)
+
+            payload_mode = settings.get('refinement', {}).get('theme_embedding_payload', 'title_desc_reasoning')
+            high_thresh = settings.get('refinement', {}).get('theme_confidence_high_threshold', 0.40)
+            med_thresh = settings.get('refinement', {}).get('theme_confidence_medium_threshold', 0.25)
+            low_thresh = settings.get('refinement', {}).get('theme_confidence_low_threshold', 0.15)
+
+            orig_theme_texts = []
+            original_themes = self.context.all_discovered_themes
+            for theme in original_themes:
+                title = theme.title if hasattr(theme, 'title') else theme.get('title', '')
+                desc = theme.description if hasattr(theme, 'description') else theme.get('description', '')
+                reasoning = theme.reasoning if hasattr(theme, 'reasoning') else theme.get('reasoning', '')
+                
+                if payload_mode == 'title':
+                    text_payload = title
+                elif payload_mode == 'title_desc':
+                    text_payload = f"{title} {desc}".strip()
+                else:
+                    text_payload = f"{title} {desc} {reasoning}".strip()
+                    
+                orig_theme_texts.append(text_payload if text_payload else title)
+
+            master_themes = self.context.master_themes.master_themes
+            master_domain = self.context.master_themes.master_domain
+            master_theme_texts = [f"{master_domain} {mt}" for mt in master_themes]
+
+            orig_embeddings = embedding_model.encode(orig_theme_texts, normalize_embeddings=True)
+            master_embeddings = embedding_model.encode(master_theme_texts, normalize_embeddings=True)
+
+            theme_mapping = defaultdict(list)
+            similarity_matrix = cosine_similarity(orig_embeddings, master_embeddings)
+
+            for i in range(len(orig_theme_texts)):
+                best_idx = np.argmax(similarity_matrix[i])
+                best_score = float(similarity_matrix[i][best_idx])
+                orig_title = original_themes[i].title if hasattr(original_themes[i], 'title') else original_themes[i].get('title', f"theme_{i}")
+                
+                if best_score >= high_thresh:
+                    confidence = "high"
+                elif best_score >= med_thresh:
+                    confidence = "medium"
+                elif best_score >= low_thresh:
+                    confidence = "low"
+                else:
+                    confidence = "unassigned"
+
+                record = {
+                    "raw_theme": orig_title,
+                    "confidence": confidence,
+                    "similarity_score": round(best_score, 4)
+                }
+
+                if confidence == "unassigned":
+                    theme_mapping["Unassigned Themes"].append(record)
+                else:
+                    theme_mapping[master_themes[best_idx]].append(record)
+
+            with open(self.out_dir / "theme_mapping_clusters.json", "w", encoding="utf-8") as f:
+                json.dump(theme_mapping, f, indent=2)
+            print(f"-> Exported theme consolidation mapping to: {self.out_dir / 'theme_mapping_clusters.json'}")
+        except Exception as e:
+            print(f"Warning: Theme consolidation mapping failed: {e}")
 
     async def extract_triples_async(self, text: str, source_doc: str):
         """Async implementation of triple extraction using asyncio.gather and Semaphore."""

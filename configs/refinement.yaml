@@ -29,7 +29,15 @@ refinement:
   lift_predicates: true
   lift_objects: true
 
-  embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model
+  embedding_model: "all-MiniLM-L6-v2"       # SentenceTransformers vector embedding model for triplet hypernym lifting
+  theme_embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model for theme consolidation mapping
+  target_master_theme_count: 10              # Target number of synthesized master themes for LLM guidance
+  
+  # Theme Consolidation Multi-Tier Confidence Thresholds
+  theme_confidence_high_threshold: 0.40     # Cosine score >= 0.40 -> High Confidence
+  theme_confidence_medium_threshold: 0.25   # 0.25 <= Cosine score < 0.40 -> Medium Confidence
+  theme_confidence_low_threshold: 0.15      # 0.15 <= Cosine score < 0.25 -> Low Confidence
+  theme_embedding_payload: "title_desc_reasoning" # Payload format: "title_desc_reasoning", "title_desc", or "title"
   
   # Vector Clustering Algorithm Selection: "umap_hdbscan" or "agglomerative"
   clustering_algorithm: "umap_hdbscan"

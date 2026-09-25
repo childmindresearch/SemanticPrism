@@ -7,7 +7,7 @@ import json
 import re
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from collections import defaultdict
 import numpy as np
 
@@ -225,12 +225,13 @@ class RefinementPipeline:
                     local_files_only=False
                 )
 
-    def execute(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str]):
+    def execute(self, raw_triples: List[RawTriple]):
         print("[Refinement] Starting Stage 2 Pipeline...")
-        subject_map, predicate_map, object_map = self.execute_part_1(raw_triples, master_themes)
-        return self.execute_part_2(raw_triples, original_themes, master_themes, subject_map, predicate_map, object_map)
+        subject_map, predicate_map, object_map = self.execute_part_1(raw_triples)
+        return self.execute_part_2(raw_triples, subject_map, predicate_map, object_map)
 
-    def execute_part_1(self, raw_triples: List[RawTriple], master_themes: List[str]) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+    def execute_part_1(self, raw_triples: List[RawTriple], master_themes: Optional[List[str]] = None) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
+        master_themes = master_themes or []
         print("[Refinement] Starting Stage 2 Pipeline Part 1 (Lexical Normalization)...")
         ref_cfg = self.config.get('refinement', {})
         enable_norm = ref_cfg.get('enable_normalization', True)
@@ -491,8 +492,8 @@ class RefinementPipeline:
         print("[Refinement] Stage 2 Pipeline Part 1 Completed.")
         return subject_map, predicate_map, object_map
 
-    def execute_part_2(self, raw_triples: List[RawTriple], original_themes: List[Any], master_themes: List[str], subject_map: Dict[str, str], predicate_map: Dict[str, str], object_map: Dict[str, str]) -> List[RawTriple]:
-        print("[Refinement] Starting Stage 2 Pipeline Part 2 (Clustering, Lifting, Theme Mapping)...")
+    def execute_part_2(self, raw_triples: List[RawTriple], subject_map: Dict[str, str], predicate_map: Dict[str, str], object_map: Dict[str, str]) -> List[RawTriple]:
+        print("[Refinement] Starting Stage 2 Pipeline Part 2 (Vector Clustering & Taxonomic Lifting)...")
         ref_cfg = self.config.get('refinement', {})
         refinement_cap = ref_cfg.get('context_window_cap', 2048)
         max_async = ref_cfg.get('max_async_calls', 1)
@@ -1058,37 +1059,6 @@ class RefinementPipeline:
             t.predicate = final_pred
             t.object = final_obj
             
-        with open(out_dir / "refined_triplets.json", "w") as f:
-            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
-
-        # 4. Theme-Based Embedding Mapping
-        print("[Refinement] Step 4: Theme-Based Embedding Mapping")
-        if not self.embedding_model:
-            self._load_embedding_model()
-        
-        orig_theme_texts = []
-        for theme in original_themes:
-            title = theme.title if hasattr(theme, 'title') else theme.get('title', '')
-            desc = theme.description if hasattr(theme, 'description') else theme.get('description', '')
-            reasoning = theme.reasoning if hasattr(theme, 'reasoning') else theme.get('reasoning', '')
-            orig_theme_texts.append(f"{title} {desc} {reasoning}")
-            
-        master_theme_texts = [f"{self.context.master_domain} {mt}" for mt in master_themes]
-        
-        orig_embeddings = self.embedding_model.encode(orig_theme_texts, normalize_embeddings=True)
-        master_embeddings = self.embedding_model.encode(master_theme_texts, normalize_embeddings=True)
-        
-        theme_mapping = defaultdict(list)
-        similarity_matrix = cosine_similarity(orig_embeddings, master_embeddings)
-        
-        for i in range(len(orig_theme_texts)):
-            best_idx = np.argmax(similarity_matrix[i])
-            orig_title = original_themes[i].title if hasattr(original_themes[i], 'title') else original_themes[i].get('title', f"theme_{i}")
-            theme_mapping[master_themes[best_idx]].append(orig_title)
-
-        with open(out_dir / "theme_mapping_clusters.json", "w") as f:
-            json.dump(theme_mapping, f, indent=2)
-
         print("[Refinement] Pipeline complete. Purging VRAM.")
         purge_vram()
         return normalized_triples

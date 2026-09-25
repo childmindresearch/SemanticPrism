@@ -26,15 +26,15 @@ THEME_DISCOVERY_USER_PROMPT = """Read this text and list the most critical overa
 MASTER_THEME_SYSTEM_PROMPT = """You are an Ontological Master Synthesizer. 
 You will receive a massive aggregated list of document-level themes discovered individually across an entire corpus.
 Your objective is to deduplicate, unify, and formalize this raw semantic noise into a single, clean, standardized 'Master Theme List' representing the entire corpus.
-Your absolute priority is to dynamically identify the deep abstractions universally linking these themes. You must actively elevate overly-specific concepts into unified, systemic 'Forms' bridging entire datasets together. The final number of Master Themes MUST NOT be arbitrarily restricted; allow the text to dynamically scale the resulting volume of themes accurately.
-Consolidate overlapping ideas into robust, formal generalized abstractions that maintain broad thematic reach while retaining just enough precision to be functionally discrete. Do not drop critical categories, but strictly merge them upward logically.
+Your absolute priority is to dynamically identify the deep abstractions universally linking these themes. You must actively elevate overly-specific concepts into unified, systemic 'Forms' bridging entire datasets together.
+Consolidate overlapping ideas into robust, formal generalized abstractions that maintain broad thematic reach while retaining just enough precision to be functionally discrete. If a target master theme count is provided, aim to synthesize approximately that number of master themes to cover the corpus cleanly.
 
 CRITICAL: You must return a single JSON data object containing your synthesized results. You must provide ONE single overarching `master_domain` string capturing the root logic, alongside the unified `master_themes` list containing the finalized theme names as strings. Do NOT output the JSON Schema definition itself.
 
 The `master_themes` list should be a simple array of strings representing the final abstraction titles."""
 
 MASTER_THEME_USER_PROMPT = """Consolidate the following document-level themes into a single Master Ontology for the corpus:
-
+{target_count_directive}
 <extracted_themes>
 {all_extracted_themes}
 </extracted_themes>"""
