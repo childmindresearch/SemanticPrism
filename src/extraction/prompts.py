@@ -43,8 +43,7 @@ MASTER_THEME_USER_PROMPT = """Consolidate the following document-level themes in
 TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a Triple Extractor Agent running schema-mapped discovery.
 Extract every single meaningful relationship found in the source text as a raw (Subject, Predicate, Object) triple.
 
-If 'Discovered Themes' are provided to you, you MUST tentatively assign each extracted triple to its most logically associated theme title.
-CRITICAL: Do not restrict extraction too early! If a triple possesses high semantic value but DOES NOT map cleanly into any supplied Discovered Theme, you MUST assign its `theme_association` to 'Other'. Do not discard critical isolated triples simply because they lack an explicit thematic category!
+For each extracted triple, set `theme_association` to the exact matching string from the 'Allowed theme_association values' list. If no theme matches, set `theme_association` to 'Other'.
 
 For EVERY relationship you extract, you MUST find the exact 'Source Quote' in the text that justifies its existence.
 ONLY where it exists, you MUST return the node-edge graph relationships:
@@ -56,7 +55,7 @@ Focus strictly on minimizing false positives. Do not hallucinate entities not st
 
 CRITICAL JSON INSTRUCTION: You must output the ENTIRE array of triples. Do NOT abbreviate, summarize, or use ellipses ("...") to skip items. You must write out every single JSON object in full."""
 
-TRIPLE_EXTRACTION_USER_PROMPT = """Extract the triplets from the following text and tentatively assign them to the themes:
+TRIPLE_EXTRACTION_USER_PROMPT = """Extract the triplets from the following text:
 
 <source_text>
 {text_content}

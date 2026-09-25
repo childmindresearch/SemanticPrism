@@ -79,9 +79,12 @@ async def main_async():
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
     
-    if context.master_themes and context.master_themes.master_themes:
-        print(f"Loaded {len(context.master_themes.master_themes)} Master Themes into context for triple extraction:")
-        for mt in context.master_themes.master_themes:
+    if not pipeline.context.master_themes:
+        pipeline.load_master_themes()
+    
+    if pipeline.context.master_themes and pipeline.context.master_themes.master_themes:
+        print(f"Loaded {len(pipeline.context.master_themes.master_themes)} Master Themes into context for triple extraction:")
+        for mt in pipeline.context.master_themes.master_themes:
             print(f"  - {mt}")
         print()
     else:
@@ -91,14 +94,22 @@ async def main_async():
     try:
         documents = load_input_documents()
     except Exception as e:
-        print(f"Error loading input documents: {e}")
-        sys.exit(1)
+        print(f"Warning: Loading input documents encountered issue: {e}")
+        documents = []
         
     if not documents:
-        print("No documents found to process. Please check inputs and run again.")
-        sys.exit(0)
+        existing_triple_files = list(pipeline.triples_dir.glob("*_triplets.json"))
+        original_triplets_file = pipeline.out_dir / "original_triplets.json"
         
-    print(f"Found {len(documents)} document(s) to process. Beginning triple extraction...\n")
+        if not existing_triple_files and not original_triplets_file.exists():
+            print("❌ ERROR: No input documents found AND no existing triplet files found on disk.")
+            print("Please check your ingestion settings or input file paths.")
+            sys.exit(1)
+        else:
+            print("-> No input documents loaded, but existing triplet files were found on disk.")
+            print("-> Proceeding to Triple Aggregation from disk state...\n")
+    else:
+        print(f"Found {len(documents)} document(s) to process. Beginning triple extraction...\n")
     
     # Determine resume mode settings
     resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')

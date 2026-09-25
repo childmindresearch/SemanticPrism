@@ -188,6 +188,19 @@ class RefinementPipeline:
         except Exception as e:
             print(f"[Refinement] Failed to write error log: {e}")
 
+    def _save_payload_text(self, filename: str, content: str):
+        """Helper to export initial LLM prompt payloads to outputs/payload_text directory."""
+        payload_dir = Path(self.config.get('directories', {}).get('outputs', 'outputs')) / "payload_text"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        target_path = payload_dir / filename
+        if target_path.exists():
+            return
+        try:
+            with open(target_path, "w", encoding="utf-8") as pf:
+                pf.write(content)
+        except Exception as e:
+            print(f"Warning: Failed to save payload text file {filename}: {e}")
+
     def _nlp_preprocess(self, text: str) -> str:
         """Native cleaning."""
         if not text:
@@ -301,6 +314,16 @@ class RefinementPipeline:
                     master_themes=', '.join(master_themes),
                     batch_json=json.dumps(batch)
                 )
+                
+                if term_type == 'subject':
+                    sys_prompt = prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT
+                elif term_type == 'predicate':
+                    sys_prompt = prompts.PREDICATE_NORMALIZATION_SYSTEM_PROMPT
+                else:
+                    sys_prompt = prompts.OBJECT_NORMALIZATION_SYSTEM_PROMPT
+                    
+                full_prompt = f"=== SYSTEM PROMPT ===\n{sys_prompt}\nDomain Context: {self.context.master_domain}\n\n=== USER PROMPT ===\n{user_prompt}"
+                self._save_payload_text("stage_02_lexical_normalization.txt", full_prompt)
                 try:
                     timeout_val = self.config.get('refinement', {}).get('timeout', 300.0)
                     if timeout_val and timeout_val > 0:
@@ -818,6 +841,8 @@ class RefinementPipeline:
                     user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
                         payload_json=json.dumps(payload)
                     )
+                    full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT}\nDomain Context: {self.context.master_domain}\n\n=== USER PROMPT ===\n{user_prompt}"
+                    self._save_payload_text("stage_02_taxonomic_lifting.txt", full_prompt)
                     try:
                         result = await lift_agent.run(
                             user_prompt,
@@ -918,6 +943,8 @@ class RefinementPipeline:
                 user_prompt = prompts.TAXONOMIC_LIFTING_USER_PROMPT.format(
                     payload_json=json.dumps(payload)
                 )
+                full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.TAXONOMIC_LIFTING_SYSTEM_PROMPT}\nDomain Context: {self.context.master_domain}\n\n=== USER PROMPT ===\n{user_prompt}"
+                self._save_payload_text("stage_02_taxonomic_lifting.txt", full_prompt)
                 try:
                     result = lift_agent.run_sync(
                         user_prompt,
@@ -1059,6 +1086,12 @@ class RefinementPipeline:
             t.predicate = final_pred
             t.object = final_obj
             
+        # Save refined triplets to outputs/02_refinement/refined_triplets.json
+        refined_path = out_dir / "refined_triplets.json"
+        with open(refined_path, "w", encoding="utf-8") as f:
+            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
+
+        print(f"[Refinement] Exported refined triplets to: {refined_path}")
         print("[Refinement] Pipeline complete. Purging VRAM.")
         purge_vram()
         return normalized_triples

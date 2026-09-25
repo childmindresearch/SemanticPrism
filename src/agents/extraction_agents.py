@@ -81,7 +81,7 @@ triple_agent = Agent(
     output_type=schemas.TripleExtractionResult,
     system_prompt=prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT,
     model_settings=triple_settings,
-    retries=1
+    retries=2
 )
 
 # Agent 3b: Reformats failed/malformed JSON outputs to fit the desired schema.
@@ -90,14 +90,16 @@ triple_reformat_agent = Agent(
     output_type=schemas.TripleExtractionResult,
     system_prompt=prompts.TRIPLE_REFORMAT_SYSTEM_PROMPT,
     model_settings=triple_settings,
-    retries=1
+    retries=2
 )
 
 @triple_agent.system_prompt
 def add_triple_context(ctx: RunContext[TripleContext]) -> str:
     """
     Dynamically injects context into the Triple Agent's system prompt before each run.
-    Provides the master themes.
+    Provides the allowed theme_association values.
     """
-    themes = ctx.deps.master_themes.model_dump_json() if ctx.deps.master_themes else "None"
-    return f"\nDiscovered Themes Context: {themes}"
+    if ctx.deps.master_themes and ctx.deps.master_themes.master_themes:
+        theme_list = ", ".join([f'"{t}"' for t in ctx.deps.master_themes.master_themes])
+        return f"\nAllowed theme_association values: [{theme_list}, \"Other\"]"
+    return "\nAllowed theme_association values: [\"Other\"]"

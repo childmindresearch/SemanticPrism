@@ -62,7 +62,7 @@ def main():
 
     if not (comm_targets or emb_targets):
         print("Error: Cannot run Stage 4. Missing required Stage 3 topology partition outputs.")
-        return
+        sys.exit(1)
 
     master_themes = []
     if isinstance(master_themes_raw, dict):

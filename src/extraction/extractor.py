@@ -139,8 +139,22 @@ class ExtractionPipeline:
             "error_message": str(error),
             "malformed_output": malformed
         }
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         with open(self.log_dir / "stage_01_triple_extraction_errors.json", "a") as f:
             f.write(json.dumps(error_record) + "\n")
+
+    def _save_payload_text(self, filename: str, content: str):
+        """Helper to export initial LLM prompt payloads to outputs/payload_text directory."""
+        payload_dir = Path(settings.get('directories', {}).get('outputs', 'outputs')) / "payload_text"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        target_path = payload_dir / filename
+        if target_path.exists():
+            return
+        try:
+            with open(target_path, "w", encoding="utf-8") as pf:
+                pf.write(content)
+        except Exception as e:
+            print(f"Warning: Failed to save payload text file {filename}: {e}")
 
     def chunk_text(self, text: str, max_words: int) -> List[Tuple[str, int, int]]:
         """
@@ -173,11 +187,14 @@ class ExtractionPipeline:
         """Async implementation of theme discovery using asyncio.gather and Semaphore."""
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
         sem = asyncio.Semaphore(self.max_async)
+        safe_name = self.sanitize_filename(source_doc)
         
-        async def process_chunk(chunk, start_idx, end_idx):
+        async def process_chunk(chunk_idx, chunk, start_idx, end_idx):
             async with sem:
                 chunk = self._ensure_fit(chunk, prompts.THEME_DISCOVERY_USER_PROMPT, prompts.THEME_DISCOVERY_SYSTEM_PROMPT)
                 user_prompt = prompts.THEME_DISCOVERY_USER_PROMPT.format(text_content=chunk)
+                full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.THEME_DISCOVERY_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
+                self._save_payload_text("stage_01_theme_discovery.txt", full_prompt)
                 try:
                     result = await theme_agent.run(user_prompt)
                     return result.output.themes
@@ -192,7 +209,7 @@ class ExtractionPipeline:
                         f.write(json.dumps(error_record) + "\n")
                     return []
 
-        tasks = [process_chunk(chunk, start, end) for chunk, start, end in theme_chunks]
+        tasks = [process_chunk(idx, chunk, start, end) for idx, (chunk, start, end) in enumerate(theme_chunks, start=1)]
         results = await asyncio.gather(*tasks)
         
         doc_themes = []
@@ -202,7 +219,6 @@ class ExtractionPipeline:
                 self.context.all_discovered_themes.append(theme)
                 
         # Save individual themes file for this document
-        safe_name = self.sanitize_filename(source_doc)
         with open(self.themes_dir / f"{safe_name}_themes.json", "w") as f:
             json.dump([t.model_dump() for t in doc_themes], f, indent=2)
 
@@ -225,10 +241,13 @@ class ExtractionPipeline:
 
         theme_chunks = self.chunk_text(text, self.theme_chunk_size)
         doc_themes = []
+        safe_name = self.sanitize_filename(source_doc)
         
-        for chunk, start_idx, end_idx in theme_chunks:
+        for chunk_idx, (chunk, start_idx, end_idx) in enumerate(theme_chunks, start=1):
             chunk = self._ensure_fit(chunk, prompts.THEME_DISCOVERY_USER_PROMPT, prompts.THEME_DISCOVERY_SYSTEM_PROMPT)
             user_prompt = prompts.THEME_DISCOVERY_USER_PROMPT.format(text_content=chunk)
+            full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.THEME_DISCOVERY_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
+            self._save_payload_text("stage_01_theme_discovery.txt", full_prompt)
             
             try:
                 result = theme_agent.run_sync(user_prompt)
@@ -282,12 +301,11 @@ class ExtractionPipeline:
             
         return self.context.all_discovered_themes
 
-    def synthesize_master_themes(self):
+    async def synthesize_master_themes_async(self):
         """
-        Phase 2: Synthesizes the global aggregated themes into a consolidated Master Ontology.
+        Phase 2: Synthesizes the global aggregated themes into a consolidated Master Ontology asynchronously.
         Checkpoints to disk as 'master_themes.json'.
         """
-        # Always aggregate/reload themes directly from disk (themes/ directory)
         self.aggregate_themes()
         if not self.context.all_discovered_themes:
             print("Warning: No themes found in themes directory or all_themes.json. Skipping master theme synthesis.")
@@ -302,7 +320,6 @@ class ExtractionPipeline:
             self.map_theme_clusters()
             return
 
-        # Consolidate ALL chunk-level themes across the corpus into a master list
         target_count = settings.get('refinement', {}).get('target_master_theme_count')
         if target_count and target_count > 0:
             target_directive = f"Target approximately {target_count} master themes to cover the corpus cleanly."
@@ -315,21 +332,20 @@ class ExtractionPipeline:
             all_extracted_themes=themes_str
         )
         
+        full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{master_user_prompt}"
+        self._save_payload_text("stage_01_master_theme_synthesis.txt", full_prompt)
+        
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                master_result = master_theme_agent.run_sync(master_user_prompt)
-                
-                # Persist master themes in state
+                master_result = await master_theme_agent.run(master_user_prompt)
                 self.context.master_themes = master_result.output
                 
-                # Checkpoint: Save master themes to disk immediately
                 with open(self.out_dir / "master_themes.json", "w") as f:
                     f.write(master_result.output.model_dump_json(indent=2))
                 
-                # Perform theme consolidation embedding mapping in Stage 1
                 self.map_theme_clusters()
-                break # Success, exit the retry loop
+                break
                 
             except Exception as e:
                 if attempt == max_retries - 1:
@@ -339,12 +355,26 @@ class ExtractionPipeline:
                     }
                     with open(self.log_dir / "stage_01_master_theme_errors.json", "a") as f:
                         f.write(json.dumps(error_record) + "\n")
-                    print(f"Warning: Master theme synthesis failed after {max_retries} attempts.")
+                    print(f"Warning: Master theme synthesis failed after {max_retries} attempts: {e}")
                     if master_path.exists():
                         self.load_master_themes()
                         self.map_theme_clusters()
                 else:
                     print(f"Master theme synthesis attempt {attempt + 1} failed, retrying...")
+
+    def synthesize_master_themes(self):
+        """Synchronous wrapper for synthesize_master_themes_async."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            import nest_asyncio
+            nest_asyncio.apply()
+            return loop.run_until_complete(self.synthesize_master_themes_async())
+        else:
+            return asyncio.run(self.synthesize_master_themes_async())
 
     def map_theme_clusters(self):
         """
@@ -443,13 +473,16 @@ class ExtractionPipeline:
 
     async def extract_triples_async(self, text: str, source_doc: str):
         """Async implementation of triple extraction using asyncio.gather and Semaphore."""
+        if not self.context.master_themes:
+            self.load_master_themes()
+            
         self.context.processed_documents.add(source_doc)
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)
         sem = asyncio.Semaphore(self.max_async)
+        safe_name = self.sanitize_filename(source_doc)
         
-        async def process_chunk(chunk, start_idx, end_idx):
+        async def process_chunk(chunk_idx, chunk, start_idx, end_idx):
             async with sem:
-                # Package state context for the agent
                 deps = TripleContext(
                     master_themes=self.context.master_themes
                 )
@@ -457,6 +490,16 @@ class ExtractionPipeline:
                 user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
                     text_content=chunk
                 )
+                
+                if self.context.master_themes and self.context.master_themes.master_themes:
+                    theme_list = ", ".join([f'"{t}"' for t in self.context.master_themes.master_themes])
+                    sys_context = f"\nAllowed theme_association values: [{theme_list}, \"Other\"]"
+                else:
+                    sys_context = "\nAllowed theme_association values: [\"Other\"]"
+                    
+                full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT}\n{sys_context}\n\n=== USER PROMPT ===\n{user_prompt}"
+                self._save_payload_text("stage_01_triple_extraction.txt", full_prompt)
+                
                 from pydantic_ai import capture_run_messages
                 
                 with capture_run_messages() as messages:
@@ -502,7 +545,7 @@ class ExtractionPipeline:
                             print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
                             return []
 
-        tasks = [process_chunk(chunk, start, end) for chunk, start, end in triple_chunks]
+        tasks = [process_chunk(idx, chunk, start, end) for idx, (chunk, start, end) in enumerate(triple_chunks, start=1)]
         results = await asyncio.gather(*tasks)
         
         doc_triples = []
@@ -514,7 +557,6 @@ class ExtractionPipeline:
                 self.context.raw_triples.append(t_dict)
                 
         # Save individual triples file for this document
-        safe_name = self.sanitize_filename(source_doc)
         with open(self.triples_dir / f"{safe_name}_triplets.json", "w") as f:
             json.dump(doc_triples, f, indent=2)
 
@@ -538,9 +580,9 @@ class ExtractionPipeline:
 
         triple_chunks = self.chunk_text(text, self.triple_chunk_size)
         doc_triples = []
+        safe_name = self.sanitize_filename(source_doc)
         
-        for chunk, start_idx, end_idx in triple_chunks:
-            # Package state context for the agent
+        for chunk_idx, (chunk, start_idx, end_idx) in enumerate(triple_chunks, start=1):
             deps = TripleContext(
                 master_themes=self.context.master_themes
             )
@@ -550,6 +592,15 @@ class ExtractionPipeline:
             user_prompt = prompts.TRIPLE_EXTRACTION_USER_PROMPT.format(
                 text_content=chunk
             )
+            
+            if self.context.master_themes and self.context.master_themes.master_themes:
+                theme_list = ", ".join([f'"{t}"' for t in self.context.master_themes.master_themes])
+                sys_context = f"\nAllowed theme_association values: [{theme_list}, \"Other\"]"
+            else:
+                sys_context = "\nAllowed theme_association values: [\"Other\"]"
+                
+            full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT}\n{sys_context}\n\n=== USER PROMPT ===\n{user_prompt}"
+            self._save_payload_text("stage_01_triple_extraction.txt", full_prompt)
             
             from pydantic_ai import capture_run_messages
             

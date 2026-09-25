@@ -41,6 +41,7 @@ def main():
         print("=== Stage 3 Topology Completed Successfully ===")
     except Exception as e:
         print(f"Error during Topology execution: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

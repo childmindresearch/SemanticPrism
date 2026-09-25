@@ -83,14 +83,23 @@ async def main_async():
     try:
         documents = load_input_documents()
     except Exception as e:
-        print(f"Error loading input documents: {e}")
-        sys.exit(1)
+        print(f"Warning: Loading input documents encountered issue: {e}")
+        documents = []
         
     if not documents:
-        print("No documents found to process. Please check inputs and run again.")
-        sys.exit(0)
+        existing_theme_files = list(pipeline.themes_dir.glob("*_themes.json"))
+        all_themes_file = pipeline.out_dir / "all_themes.json"
+        master_themes_file = pipeline.out_dir / "master_themes.json"
         
-    print(f"Found {len(documents)} document(s) to process. Beginning theme extraction...\n")
+        if not existing_theme_files and not all_themes_file.exists() and not master_themes_file.exists():
+            print("❌ ERROR: No input documents found AND no existing theme files found on disk.")
+            print("Please check your ingestion settings or input file paths.")
+            sys.exit(1)
+        else:
+            print("-> No input documents loaded, but existing theme files were found on disk.")
+            print("-> Proceeding to Theme Aggregation & Master Synthesis/Mapping from disk state...\n")
+    else:
+        print(f"Found {len(documents)} document(s) to process. Beginning theme extraction...\n")
     
     # Determine resume mode settings
     resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
@@ -119,7 +128,7 @@ async def main_async():
     # Phase 2: Master Theme Synthesis
     print(f"\n=== Phase 2: Master Theme Synthesis (Model: {theme_model}) ===")
     print("-> Synthesizing master themes from all documents...")
-    pipeline.synthesize_master_themes()
+    await pipeline.synthesize_master_themes_async()
     
     print("\nPurging VRAM...")
     purge_vram()
