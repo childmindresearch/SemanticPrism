@@ -254,7 +254,7 @@ class ExtractionPipeline:
             json.dump([t.model_dump() for t in doc_themes], f, indent=2)
 
     def aggregate_themes(self) -> List[schemas.Theme]:
-        """Loads and consolidates all individual themes from the themes directory."""
+        """Loads and consolidates all individual themes from the themes directory (or all_themes.json as fallback)."""
         all_themes = []
         for fpath in sorted(self.themes_dir.glob("*_themes.json")):
             try:
@@ -264,12 +264,21 @@ class ExtractionPipeline:
             except Exception as e:
                 print(f"Warning: Failed to load theme file {fpath.name}: {e}")
                 
+        # Fallback to all_themes.json on disk if themes directory has no files
+        if not all_themes and (self.out_dir / "all_themes.json").exists():
+            try:
+                with open(self.out_dir / "all_themes.json", "r", encoding="utf-8") as f:
+                    all_themes = json.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load all_themes.json fallback: {e}")
+
         # Update pipeline context
         self.context.all_discovered_themes = [schemas.Theme(**t) for t in all_themes]
         
         # Write unified master themes list
-        with open(self.out_dir / "all_themes.json", "w") as f:
-            json.dump(all_themes, f, indent=2)
+        if all_themes:
+            with open(self.out_dir / "all_themes.json", "w") as f:
+                json.dump(all_themes, f, indent=2)
             
         return self.context.all_discovered_themes
 
@@ -278,7 +287,10 @@ class ExtractionPipeline:
         Phase 2: Synthesizes the global aggregated themes into a consolidated Master Ontology.
         Checkpoints to disk as 'master_themes.json'.
         """
+        # Always aggregate/reload themes directly from disk (themes/ directory)
+        self.aggregate_themes()
         if not self.context.all_discovered_themes:
+            print("Warning: No themes found in themes directory or all_themes.json. Skipping master theme synthesis.")
             return
             
         resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
@@ -338,9 +350,17 @@ class ExtractionPipeline:
         """
         Consolidates and maps all individual extracted themes to master synthesized themes via vector embeddings
         with multi-tier confidence tagging (high, medium, low, unassigned).
+        Always loads themes directly from the disk 'themes' directory and 'master_themes.json'.
         Outputs 'outputs/01_extraction/theme_mapping_clusters.json'.
         """
+        # Always scan and aggregate themes from disk (themes directory / all_themes.json)
+        self.aggregate_themes()
+
+        # Always load master themes from disk (master_themes.json)
+        self.load_master_themes()
+
         if not self.context.all_discovered_themes or not self.context.master_themes:
+            print("Warning: Missing discovered themes or master themes on disk. Skipping theme mapping.")
             return
 
         print("-> Mapping extracted themes to master synthesized themes...")
