@@ -119,7 +119,9 @@ graph TD
 ```
 
 * **Granular Component Control:** Normalization and taxonomic lifting can be toggled globally or independently for **Subjects**, **Predicates**, and **Objects** via `configs/refinement.yaml`.
-* **Lexical Normalization:** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache. When normalization is disabled, raw terms are preserved and normalization JSON map files are cleanly omitted.
+* **Lexical Normalization (Optional):** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache.
+  * **To Enable (`enable_normalization: true`)**: Executes LLM normalization passes across S-V-O components.
+  * **To Bypass (`enable_normalization: false`)**: Skips LLM normalization calls entirely to save time and API tokens. The pipeline automatically exports 1-to-1 identity maps so downstream Taxonomic Lifting proceeds without interruption.
 * **Native $L_2$ Sentence Embeddings:** Encodes terms via SentenceTransformers (`all-MiniLM-L6-v2`) with native $L_2$ normalization (`normalize_embeddings=True`) to project vectors onto the unit hypersphere $S^{d-1}$.
 * **Optional UMAP Dimensionality Reduction:** Features a configurable UMAP reduction pass (`umap.enabled: true/false`) that compresses $384\text{D} \rightarrow 5\text{D}$ manifolds while preserving local/global structure. Includes dynamic small-vocabulary guardrails ($N < 15$).
 * **UMAP Trustworthiness Metric Evaluation Plotting:** When `plot_trustworthiness: true` is set, evaluates $n\_components$ vs. local neighbor ranking preservation and exports 300 DPI `.jpg` plots (`umap_trustworthiness_Subject.jpg`, `umap_trustworthiness_Predicate.jpg`, `umap_trustworthiness_Object.jpg`).
