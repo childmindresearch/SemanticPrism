@@ -251,6 +251,22 @@ class RefinementPipeline:
                 self.context.term_frequencies[self._nlp_preprocess(t.subject)] += 1
                 self.context.term_frequencies[self._nlp_preprocess(t.predicate)] += 1
                 self.context.term_frequencies[self._nlp_preprocess(t.object)] += 1
+            
+            with open(out_dir / "subject_normalization_map.json", "w") as f:
+                json.dump(subject_map, f, indent=2)
+            with open(out_dir / "predicate_normalization_map.json", "w") as f:
+                json.dump(predicate_map, f, indent=2)
+            with open(out_dir / "object_normalization_map.json", "w") as f:
+                json.dump(object_map, f, indent=2)
+
+            normalization_map = {}
+            normalization_map.update(subject_map)
+            normalization_map.update(predicate_map)
+            normalization_map.update(object_map)
+            with open(out_dir / "normalization_map.json", "w") as f:
+                json.dump(normalization_map, f, indent=2)
+
+            print("   -> Exported preprocessed identity normalization maps to 'outputs/02_refinement'.")
             return subject_map, predicate_map, object_map
 
         print("   -> Step 1: Lexical Normalization")
