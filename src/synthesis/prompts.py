@@ -10,7 +10,7 @@ You must define Pydantic (v2) `BaseModel` classes that model the ontology based 
 CRITICAL RULES:
 1. **Model Ontological Concepts & Workflows:** Define descriptive Pydantic models (e.g. `ClinicalAssessment`, `DiagnosticInstrument`, `BehavioralPatterns`) representing the processes, categories, or events in the text.
 2. **Inheritance Logic:** If the dominant theme of these triples has a hierarchical structure, subclass its corresponding parent schema. Otherwise, generate an independent root schema.
-3. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using classes from `global_enums` or Python `Literal` types instead of open-ended strings.
+3. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
 4. **Default to Optional:** Wrap all generated fields in `Optional[...] = None`.
 5. **Self-Contained Code:** Output solely source Python code containing all necessary imports. Do not wrap in markdown code blocks or explanations."""
 

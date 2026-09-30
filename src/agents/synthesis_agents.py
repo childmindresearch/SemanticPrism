@@ -92,10 +92,6 @@ model_settings = ModelSettings(
 class OrphanContext:
     master_themes: List[str]
 
-@dataclass
-class SynthesisContext:
-    global_enums: str
-
 # Agent 1: Orphan Enum Agent
 orphan_agent = Agent(
     model=pydantic_model,
@@ -113,16 +109,11 @@ def add_orphan_context(ctx: RunContext[OrphanContext]) -> str:
 # Agent 2: Schema Synthesis Agent
 schema_synthesis_agent = Agent(
     model=pydantic_model,
-    deps_type=SynthesisContext,
     output_type=schemas.GeneratedModule,
     system_prompt=prompts.SCHEMA_SYNTHESIS_PROMPT,
     model_settings=model_settings,
     retries=1
 )
-
-@schema_synthesis_agent.system_prompt
-def add_schema_context(ctx: RunContext[SynthesisContext]) -> str:
-    return f"\nGlobal Enums Available:\n{ctx.deps.global_enums}"
 
 leiden_schema_agent = schema_synthesis_agent
 node2vec_schema_agent = schema_synthesis_agent

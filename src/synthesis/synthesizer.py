@@ -7,7 +7,7 @@ from typing import List, Dict, Any
 from datetime import datetime
 
 from src.agents.synthesis_agents import (
-    OrphanContext, SynthesisContext,
+    OrphanContext,
     orphan_agent, leiden_schema_agent, node2vec_schema_agent,
     consolidation_agent, comprehensive_ontology_agent,
     schema_reformat_agent,
@@ -219,16 +219,14 @@ class SynthesisPipeline:
         hub_count = sum(1 for t in targets if t.get("target_type") == "hub" or t.get("type") == "hub")
         print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {hub_count} global hubs)")
             
-        synth_ctx = SynthesisContext(
-            global_enums=global_enums_code
-        )
+
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
         max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
         payload_mode = self.config.get('synthesis', {}).get('payload_values', 'triples')
 
         def format_phase2_payload(subset: List[dict], mode: str) -> str:
-            formatted_items = []
+            theme_to_texts = {}
             for t in subset:
                 subj = str(t.get('subject', '')).strip()
                 pred = str(t.get('predicate', '')).strip()
@@ -242,30 +240,33 @@ class SynthesisPipeline:
                     concatenated_svo = ""
                     
                 quote = str(t.get('source_quote', '')).strip()
-                theme = t.get('theme_association', None)
+                theme = t.get('theme_association', 'Other') or 'Other'
 
                 if mode == "triples":
-                    item = {
-                        "text": concatenated_svo,
-                        "theme_association": theme
-                    }
+                    text_item = concatenated_svo
                 elif mode == "raw_text":
-                    item = {
-                        "text": quote,
-                        "theme_association": theme
-                    }
+                    text_item = quote
                 elif mode == "both":
-                    item = {
-                        "triple": concatenated_svo,
-                        "text": quote,
-                        "theme_association": theme
-                    }
+                    text_item = f"Statement: {concatenated_svo} | Quote: {quote}" if concatenated_svo else quote
                 else:
-                    item = {
-                        "text": concatenated_svo,
-                        "theme_association": theme
-                    }
-                formatted_items.append(item)
+                    text_item = concatenated_svo
+
+                if not text_item:
+                    continue
+
+                if theme not in theme_to_texts:
+                    theme_to_texts[theme] = []
+
+                if text_item not in theme_to_texts[theme]:
+                    theme_to_texts[theme].append(text_item)
+
+            formatted_items = [
+                {
+                    "theme_association": theme,
+                    "text": texts
+                }
+                for theme, texts in theme_to_texts.items()
+            ]
                 
             return json.dumps(formatted_items, indent=2)
 
@@ -278,12 +279,12 @@ class SynthesisPipeline:
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                     user_payload = format_phase2_payload(subset, payload_mode)
-                    save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM CONTEXT ===\nGlobal Enums:\n{global_enums_code}\n\n=== USER PAYLOAD ===\n{user_payload}")
+                    save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", user_payload)
                     last_llm_responses.set([])
                     from pydantic_ai import capture_run_messages
                     with capture_run_messages() as messages:
                         try:
-                            res = await active_agent.run(user_payload, deps=synth_ctx)
+                            res = await active_agent.run(user_payload)
                             filename = f"{i:02d}_{res.output.module_name}.py"
                             with open(target_dir / filename, "w") as f:
                                 f.write(clean_python_code(res.output.source_code))
@@ -338,12 +339,12 @@ class SynthesisPipeline:
                 target_dir = norm_dir if is_normalized else raw_dir
                 print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                 user_payload = format_phase2_payload(subset, payload_mode)
-                save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM CONTEXT ===\nGlobal Enums:\n{global_enums_code}\n\n=== USER PAYLOAD ===\n{user_payload}")
+                save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", user_payload)
                 last_llm_responses.set([])
                 from pydantic_ai import capture_run_messages
                 with capture_run_messages() as messages:
                     try:
-                        res = active_agent.run_sync(user_payload, deps=synth_ctx)
+                        res = active_agent.run_sync(user_payload)
                         filename = f"{i:02d}_{res.output.module_name}.py"
                         with open(target_dir / filename, "w") as f:
                             f.write(clean_python_code(res.output.source_code))
