@@ -13,11 +13,12 @@ from src.agents.synthesis_agents import (
     schema_reformat_agent,
     last_llm_responses
 )
+from src.synthesis import prompts as synth_prompts
 
 
 
 def clean_python_code(code: str) -> str:
-    """Removes markdown formatting and escapes that LLMs often inject."""
+    """Removes markdown formatting, invalid characters, and escapes that LLMs often inject."""
     code = code.strip()
     if code.startswith("```python"):
         code = code[9:]
@@ -29,9 +30,24 @@ def clean_python_code(code: str) -> str:
     # Fix over-escaped quotes caused by LLM JSON serialization 
     code = code.replace('\\"', '"')
     
+    # Replace literal \n escape sequences that some LLMs emit outside raw strings
+    code = code.replace('\\n', '\n')
+    
     # Specific fix to prevent un-escaping the one known problematic Enum string
     code = code.replace('"the "firstthen" principle"', '\'the "firstthen" principle\'')
     
+    # Sanitize invalid variable/enum identifiers with commas or spaces before assignment '='
+    def fix_line(line: str) -> str:
+        m = re.match(r'^(\s+)([a-zA-Z0-9_, ]+?)(\s*=\s*.*)$', line)
+        if m:
+            indent, var, rest = m.groups()
+            stripped_var = var.strip()
+            if (',' in stripped_var or ' ' in stripped_var) and not stripped_var.startswith(('def ', 'class ', 'return ', 'if ', 'elif ')):
+                clean_var = re.sub(r'[, ]+', '_', stripped_var)
+                return f"{indent}{clean_var}{rest}"
+        return line
+
+    code = '\n'.join(fix_line(l) for l in code.splitlines())
     return code.strip()
 
 class SynthesisPipeline:
@@ -154,7 +170,8 @@ class SynthesisPipeline:
 
         # Payload dumping directory
         save_llm_payloads = self.config.get('synthesis', {}).get('save_llm_payloads', False)
-        payload_base_dir = Path(self.config.get('synthesis', {}).get('payload_output_dir', 'outputs/04_synthesis/payloads')) / path_type
+        default_payload_dir = Path(self.config.get('directories', {}).get('outputs', 'outputs')) / 'payload_text' / 'stage_04_synthesis'
+        payload_base_dir = Path(self.config.get('synthesis', {}).get('payload_output_dir', default_payload_dir)) / path_type
         if save_llm_payloads:
             if payload_base_dir.exists():
                 shutil.rmtree(payload_base_dir)
@@ -181,7 +198,7 @@ class SynthesisPipeline:
         if all_enum_nodes:
             orphan_ctx = OrphanContext(master_themes=master_themes)
             payload = json.dumps(all_enum_nodes)
-            save_payload_file("phase1_enums_payload.txt", f"=== SYSTEM CONTEXT ===\nMaster Themes: {json.dumps(master_themes)}\n\n=== USER PAYLOAD ===\n{payload}")
+            save_payload_file("phase1_enums_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.ORPHAN_SYNTHESIS_SYSTEM_PROMPT}\n\n=== SYSTEM CONTEXT ===\nMaster Themes Context: {json.dumps(master_themes)}\n\n=== USER PAYLOAD ===\n{payload}")
             last_llm_responses.set([])
             from pydantic_ai import capture_run_messages
             with capture_run_messages() as messages:
@@ -279,7 +296,8 @@ class SynthesisPipeline:
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                     user_payload = format_phase2_payload(subset, payload_mode)
-                    save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", user_payload)
+                    active_sys_prompt = synth_prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT if path_type == "embedding" else synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
+                    save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                     last_llm_responses.set([])
                     from pydantic_ai import capture_run_messages
                     with capture_run_messages() as messages:
@@ -339,7 +357,8 @@ class SynthesisPipeline:
                 target_dir = norm_dir if is_normalized else raw_dir
                 print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
                 user_payload = format_phase2_payload(subset, payload_mode)
-                save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", user_payload)
+                active_sys_prompt = synth_prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT if path_type == "embedding" else synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
+                save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                 last_llm_responses.set([])
                 from pydantic_ai import capture_run_messages
                 with capture_run_messages() as messages:
@@ -390,7 +409,6 @@ class SynthesisPipeline:
         print(f"   -> [{path_label}] Phase 3: Consolidation...")
         
         from src.utils.token_helper import estimate_tokens
-        from src.synthesis import prompts as synth_prompts
         import re
 
         def strip_comments_and_docstrings(code: str) -> str:
@@ -414,7 +432,7 @@ class SynthesisPipeline:
 
         async def process_consolidation_async(files_list: List[dict], schema_dir: Path) -> str:
             payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
-            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", payload)
+            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.CONSOLIDATION_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{payload}")
             if estimate_tokens(payload) <= max_payload_tokens:
                 return await run_consolidation_agent_async(payload)
                 
@@ -445,7 +463,7 @@ class SynthesisPipeline:
 
         def process_consolidation_sync(files_list: List[dict], schema_dir: Path) -> str:
             payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
-            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", payload)
+            save_payload_file(f"phase3_consolidation_{schema_dir.name}_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.CONSOLIDATION_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{payload}")
             if estimate_tokens(payload) <= max_payload_tokens:
                 return run_consolidation_agent_sync(payload)
                 
@@ -520,7 +538,7 @@ class SynthesisPipeline:
                     enums_code = open(raw_dir / "enums.py").read()
                     
                 final_payload = f"--- ENUMS ---\n{enums_code}\n\n--- RAW MASTER ONTOLOGY ---\n{raw_master}\n\n--- NORMALIZED MASTER ONTOLOGY ---\n{norm_master}"
-                save_payload_file("phase4_comprehensive_ontology_payload.txt", final_payload)
+                save_payload_file("phase4_comprehensive_ontology_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.FINAL_ONTOLOGY_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{final_payload}")
                 final_res = comprehensive_ontology_agent.run_sync(final_payload)
                 final_code = clean_python_code(final_res.output.source_code)
             except Exception as e:

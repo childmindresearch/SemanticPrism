@@ -28,6 +28,12 @@ share/python-wheels/
 .installed.cfg
 *.egg
 
+# Testing & Linting
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
 # IDEs
 .idea/
 .vscode/
@@ -42,6 +48,8 @@ outputs/
 
 # Ignore MacOS
 .DS_Store
+**/.DS_Store
+._*
 
 # Machine Learning Models & Embeddings
 models/
@@ -53,6 +61,10 @@ models/
 *.ckpt
 *.h5
 
-# Logs
+# Logs & Temp files
 logs/
 *.log
+nohup.out
+*.db
+*.sqlite
+*.sqlite3

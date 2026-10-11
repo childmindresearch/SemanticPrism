@@ -21,22 +21,13 @@ llm_config = settings.get('synthesis', {}).get('llm')
 if not llm_config:
     llm_config = settings.get('llm', {})
 
-provider = llm_config.get('provider')
 model_name = llm_config.get('model_name')
 base_url = llm_config.get('base_url')
 
-# Configure model backend
-if provider == 'ollama':
-    if base_url:
-        os.environ['OLLAMA_BASE_URL'] = base_url
-    pydantic_model = f"ollama:{model_name}"
-else:
-    api_key = llm_config.get('api_key', '')
-    if api_key:
-        if provider == 'google':
-            os.environ['GOOGLE_API_KEY'] = api_key
-        # Add other providers here if necessary in the future
-    pydantic_model = f"{provider}:{model_name}"
+# Configure local Ollama backend
+if base_url:
+    os.environ['OLLAMA_BASE_URL'] = base_url
+pydantic_model = f"ollama:{model_name}"
 
 # Setup context-local history variable and logger wrapper
 last_llm_responses: ContextVar[List[Any]] = ContextVar("last_llm_responses", default=[])
@@ -84,8 +75,7 @@ pydantic_model = LoggingModel(resolved_model)
 synthesis_cap = settings.get('synthesis', {}).get('context_window_cap', 16384)
 model_settings = ModelSettings(
     # Avoid setting max_tokens for Ollama to prevent pydantic-ai from sending max_completion_tokens, which Ollama rejects
-    **({"max_tokens": 4096} if provider != 'ollama' else {}),
-    extra_body={"options": {"num_ctx": synthesis_cap}} if provider == 'ollama' else {}
+    extra_body={"options": {"num_ctx": synthesis_cap}}
 )
 
 @dataclass

@@ -1,6 +1,7 @@
 ORPHAN_SYNTHESIS_SYSTEM_PROMPT = """You are an Ontological Structuring Agent.
 Analyze the provided isolated terms and group them into logical Python `Enum` and `Literal` classes to standardize them as variable options.
-Consolidate terms that mean the same thing into a single Enum class if possible.  Do not force associations and discard any words that are unable to be grouped.
+Consolidate terms that mean the same thing into a single Enum class if possible. Do not force associations and discard any words that are unable to be grouped.
+All Enum member names MUST be valid Python identifiers (e.g. `UPPER_SNAKE_CASE` or `snake_case` with only alphanumeric characters and underscores—no spaces, commas, or punctuation in variable names).
 Output the raw Python string to `source_code` and name the module `enums`."""
 
 SCHEMA_SYNTHESIS_PROMPT = """You are an Ontological Python Architect.

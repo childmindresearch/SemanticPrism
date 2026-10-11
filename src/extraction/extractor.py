@@ -14,18 +14,60 @@ from . import prompts
 from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
 from src.config import settings
 
-try:
-    import pyarrow as pa
-    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
-    if _orig_unregister:
-        def _safe_unregister(type_name):
-            try:
-                _orig_unregister(type_name)
-            except Exception:
-                pass
-        pa.unregister_extension_type = _safe_unregister
-except Exception:
-    pass
+def load_input_documents() -> List[dict]:
+    """
+    Loads input documents based on configuration settings.
+    Supports directory of txt files or a single parquet file (via polars).
+    Returns a list of dicts: [{'id': str, 'text': str}]
+    """
+    ingestion_cfg = settings.get('ingestion', {})
+    source_type = ingestion_cfg.get('source_type', 'directory')
+    
+    docs = []
+    if source_type == 'parquet':
+        parquet_cfg = ingestion_cfg.get('parquet', {})
+        filename = parquet_cfg.get('filename')
+        id_field = parquet_cfg.get('id_field')
+        text_field = parquet_cfg.get('text_field')
+        
+        if not filename or not id_field or not text_field:
+            raise ValueError(
+                f"Parquet ingestion is selected but filename ({filename}), "
+                f"id_field ({id_field}), or text_field ({text_field}) is missing from config."
+            )
+            
+        print(f"Loading input documents from Parquet file: {filename}")
+        parquet_path = Path(filename)
+        if not parquet_path.exists():
+            raise FileNotFoundError(f"Parquet file not found at: {filename}")
+            
+        import polars as pl
+        df = pl.read_parquet(filename)
+        
+        # Validate columns
+        if id_field not in df.columns:
+            raise ValueError(f"id_field '{id_field}' not found in Parquet columns: {df.columns}")
+        if text_field not in df.columns:
+            raise ValueError(f"text_field '{text_field}' not found in Parquet columns: {df.columns}")
+            
+        # Extract documents
+        for row in df.iter_rows(named=True):
+            doc_id = str(row[id_field])
+            text = str(row[text_field])
+            docs.append({'id': doc_id, 'text': text})
+            
+    else:
+        # Default: Directory of txt files
+        input_dir = Path(settings.get('directories', {}).get('inputs', 'inputs/testdocs'))
+        print(f"Loading input documents from Directory: {input_dir}")
+        input_dir.mkdir(parents=True, exist_ok=True)
+        txt_files = sorted(list(input_dir.glob("*.txt")))
+        
+        for txt_file in txt_files:
+            text = txt_file.read_text(encoding='utf-8')
+            docs.append({'id': txt_file.name, 'text': text})
+            
+    return docs
 
 class PipelineRunContext:
     """
@@ -400,7 +442,10 @@ class ExtractionPipeline:
             from sklearn.metrics.pairwise import cosine_similarity
             from sentence_transformers import SentenceTransformer
 
-            model_name = settings.get('refinement', {}).get('theme_embedding_model', settings.get('refinement', {}).get('embedding_model', 'all-MiniLM-L6-v2'))
+            ref_cfg = settings.get('refinement', {})
+            ext_cfg = settings.get('extraction', {})
+
+            model_name = ext_cfg.get('theme_embedding_model') or ref_cfg.get('theme_embedding_model') or ref_cfg.get('embedding_model', 'all-MiniLM-L6-v2')
             models_dir = Path("models/embeddings")
             models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -409,10 +454,10 @@ class ExtractionPipeline:
             except Exception:
                 embedding_model = SentenceTransformer(model_name, cache_folder=str(models_dir), local_files_only=False)
 
-            payload_mode = settings.get('refinement', {}).get('theme_embedding_payload', 'title_desc_reasoning')
-            high_thresh = settings.get('refinement', {}).get('theme_confidence_high_threshold', 0.40)
-            med_thresh = settings.get('refinement', {}).get('theme_confidence_medium_threshold', 0.25)
-            low_thresh = settings.get('refinement', {}).get('theme_confidence_low_threshold', 0.15)
+            payload_mode = ext_cfg.get('theme_embedding_payload') or ref_cfg.get('theme_embedding_payload', 'title_desc_reasoning')
+            high_thresh = ext_cfg.get('theme_confidence_high_threshold') or ref_cfg.get('theme_confidence_high_threshold', 0.40)
+            med_thresh = ext_cfg.get('theme_confidence_medium_threshold') or ref_cfg.get('theme_confidence_medium_threshold', 0.25)
+            low_thresh = ext_cfg.get('theme_confidence_low_threshold') or ref_cfg.get('theme_confidence_low_threshold', 0.15)
 
             orig_theme_texts = []
             original_themes = self.context.all_discovered_themes

@@ -47,20 +47,6 @@ class ConfigLoader:
 
             cls._config = merged_config
                 
-            # Automatically override the API key from the environment
-            env_key = os.getenv("GEMINI_API_KEY")
-            if env_key:
-                if "llm" in cls._config and isinstance(cls._config["llm"], dict):
-                    cls._config["llm"]["api_key"] = env_key
-                for stage in ["extraction", "refinement", "synthesis"]:
-                    if stage in cls._config and isinstance(cls._config[stage], dict):
-                        for key in ["llm", "llm_theme", "llm_triple"]:
-                            if (
-                                key in cls._config[stage]
-                                and isinstance(cls._config[stage][key], dict)
-                            ):
-                                cls._config[stage][key]["api_key"] = env_key
-                
         return cls._config
 
 # Expose a global, read-only dictionary that any file can import
@@ -80,5 +66,19 @@ try:
                     msg["content"] = ""
         return messages
     OpenAIChatModel._map_messages = _patched_map_messages
+except Exception:
+    pass
+
+# Monkey patch pyarrow extension type unregister to prevent unhandled unregister exceptions
+try:
+    import pyarrow as pa
+    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
+    if _orig_unregister:
+        def _safe_unregister(type_name):
+            try:
+                _orig_unregister(type_name)
+            except Exception:
+                pass
+        pa.unregister_extension_type = _safe_unregister
 except Exception:
     pass

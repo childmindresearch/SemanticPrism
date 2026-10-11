@@ -11,7 +11,7 @@ def main():
     input_path = Path("outputs/02_refinement/refined_triplets.json")
     if not input_path.exists():
         print(f"CRITICAL ERROR: Required input file '{input_path}' not found.")
-        print("Please run Stage 2 first ('python3 run_stage_2.py' or 'python3 run_pipeline.py').")
+        print("Please run Stage 2 first ('python3 run_stage_2_refinement.py' or 'python3 run_pipeline.py').")
         sys.exit(1)
         
     try:

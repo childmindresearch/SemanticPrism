@@ -1,28 +1,15 @@
 """
 SemanticPrism Stage 2: Refinement Pipeline
-Handles lexical normalization, embedding mapping, clustering, and taxonomic lifting.
+Handles embedding mapping, HDBSCAN clustering, and taxonomic lifting.
 """
 
 import json
 import re
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Tuple, Optional
+from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import numpy as np
-
-try:
-    import pyarrow as pa
-    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
-    if _orig_unregister:
-        def _safe_unregister(type_name):
-            try:
-                _orig_unregister(type_name)
-            except Exception:
-                pass
-        pa.unregister_extension_type = _safe_unregister
-except Exception:
-    pass
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -61,7 +48,7 @@ try:
 except Exception:
     plt = None
 
-from src.agents.refinement_agents import subject_norm_agent, predicate_norm_agent, object_norm_agent, lift_agent
+from src.agents.refinement_agents import lift_agent
 from src.agents.vram_manager import purge_vram
 from src.extraction.schemas import RawTriple  # Stage 1 schema
 from src.refinement import prompts
@@ -78,6 +65,7 @@ class RefinementPipeline:
         self.config = config
         self.context = context
         self.embedding_model = None
+        self.embedding_model_name = self.config.get('refinement', {}).get('embedding_model', 'all-MiniLM-L6-v2')
         
         # Setup Output and Log Directories
         base_out_dir = self.config.get('directories', {}).get('outputs', 'outputs')
@@ -121,13 +109,6 @@ class RefinementPipeline:
         conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
-        conn.execute("""
-        CREATE TABLE IF NOT EXISTS lexical_normalization (
-            original_term TEXT PRIMARY KEY,
-            normalized_term TEXT,
-            term_type TEXT
-        );
-        """)
         conn.execute("""
         CREATE TABLE IF NOT EXISTS taxonomic_lifting (
             cluster_key TEXT PRIMARY KEY,
@@ -218,6 +199,7 @@ class RefinementPipeline:
             if SentenceTransformer is None:
                 from sentence_transformers import SentenceTransformer
             model_name = self.config.get('refinement', {}).get('embedding_model', 'all-MiniLM-L6-v2')
+            self.embedding_model_name = model_name
             
             # Ensure model is downloaded and stored locally in the project directory
             models_dir = Path("models/embeddings")
@@ -238,285 +220,134 @@ class RefinementPipeline:
                     local_files_only=False
                 )
 
-    def execute(self, raw_triples: List[RawTriple]):
-        print("[Refinement] Starting Stage 2 Pipeline...")
-        subject_map, predicate_map, object_map = self.execute_part_1(raw_triples)
-        return self.execute_part_2(raw_triples, subject_map, predicate_map, object_map)
-
-    def execute_part_1(self, raw_triples: List[RawTriple], master_themes: Optional[List[str]] = None) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, str]]:
-        master_themes = master_themes or []
-        print("[Refinement] Starting Stage 2 Pipeline Part 1 (Lexical Normalization)...")
+    def get_or_compute_embeddings(self, terms: List[str], component: str) -> np.ndarray:
+        """
+        Model-aware vector cache with metadata validation.
+        Prevents dimension mismatch collisions when switching backbones.
+        """
         ref_cfg = self.config.get('refinement', {})
-        enable_norm = ref_cfg.get('enable_normalization', True)
-        norm_subj = ref_cfg.get('normalize_subjects', True) if enable_norm else False
-        norm_pred = ref_cfg.get('normalize_predicates', True) if enable_norm else False
-        norm_obj = ref_cfg.get('normalize_objects', True) if enable_norm else False
+        cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+        cache_dir.mkdir(parents=True, exist_ok=True)
 
-        out_dir = Path("outputs/02_refinement")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        model_name = getattr(self, 'embedding_model_name', ref_cfg.get('embedding_model', 'all-MiniLM-L6-v2'))
+        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
+        comp_key = component.lower()
+        npy_path = cache_dir / f"{comp_key}_{model_slug}_embeddings.npy"
+        meta_path = cache_dir / f"{comp_key}_{model_slug}_meta.json"
 
-        if not enable_norm or not (norm_subj or norm_pred or norm_obj):
-            print("   -> Lexical Normalization is DISABLED or all fields toggled off in config.")
-            print("   -> Bypassing LLM normalization passes and preserving raw/preprocessed terms.")
+        if npy_path.exists() and meta_path.exists():
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                if meta.get("model_name") == model_name and meta.get("vocab") == terms:
+                    embs = np.load(npy_path)
+                    if embs.shape[0] == len(terms):
+                        print(f"   -> [{component}] Loaded {len(terms)} cached vectors ({embs.shape[1]}d) from {npy_path.name}")
+                        return embs
+            except Exception as e:
+                print(f"   -> [{component}] Cache read warning ({e}); recomputing embeddings...")
+
+        # Encode and L2-normalize
+        embs = self.embedding_model.encode(
+            terms,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            batch_size=ref_cfg.get('batch_size', 128)
+        )
+        try:
+            np.save(npy_path, embs)
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "model_name": model_name,
+                    "dimensions": int(embs.shape[1]),
+                    "vocab": terms
+                }, f, indent=2)
+            print(f"   -> [{component}] Computed and cached {len(terms)} vectors ({embs.shape[1]}d) to {npy_path.name}")
+        except Exception as e:
+            print(f"   -> [{component}] Warning: Failed to write vector cache: {e}")
+
+        return embs
+
+    def resolve_clustering_params(self, embedding_dim: int, component: str = 'subject') -> dict:
+        """
+        Dynamically resolves clustering hyperparameters based on embedding dimension
+        and component role directly from configs/refinement.yaml.
+        """
+        ref_cfg = self.config.get('refinement', {})
+        calib_cfg = ref_cfg.get('calibration', {})
+        is_pred = (component.lower() == 'predicate')
+
+        if embedding_dim > 768:
+            tier = calib_cfg.get('high_dim', {})
+            def_neighbors = 15
+            def_dist = 0.05
+            def_samples = 2
+            def_selection = "leaf"
+            def_linkage = "complete"
+            def_rescue = 0.15 if is_pred else 0.18
+            def_macro = 0.18 if is_pred else 0.22
+        elif embedding_dim > 512:
+            tier = calib_cfg.get('mid_dim', {})
+            def_neighbors = 15
+            def_dist = 0.03
+            def_samples = 2
+            def_selection = "eom"
+            def_linkage = "average"
+            def_rescue = 0.22 if is_pred else 0.26
+            def_macro = 0.30 if is_pred else 0.36
+        else:
+            tier = calib_cfg.get('low_dim', {})
+            def_neighbors = 20
+            def_dist = 0.00
+            def_samples = 1
+            def_selection = "eom"
+            def_linkage = "average"
+            def_rescue = 0.28 if is_pred else 0.32
+            def_macro = 0.38 if is_pred else 0.48
+
+        role_key = 'predicate' if is_pred else 'entity'
+        role_cfg = tier.get(role_key, {})
+
+        return {
+            "umap_n_neighbors": tier.get('umap_n_neighbors', def_neighbors),
+            "umap_min_dist": tier.get('umap_min_dist', def_dist),
+            "hdbscan_min_samples": tier.get('hdbscan_min_samples', def_samples),
+            "hdbscan_selection": tier.get('hdbscan_selection', def_selection),
+            "macro_linkage": tier.get('macro_linkage', def_linkage),
+            "rescue_tau": role_cfg.get('rescue_tau', def_rescue),
+            "tau_macro": role_cfg.get('tau_macro', def_macro),
+        }
+
+    def compute_spherical_centroid(
+        self,
+        member_indices: List[int],
+        embeddings: np.ndarray,
+        weights: np.ndarray
+    ) -> np.ndarray:
+        """
+        Computes the frequency-weighted Spherical Fréchet Mean projected onto the unit hypersphere.
+        Centroids are L2-normalized: c = sum(w_i * v_i) / ||sum(w_i * v_i)||_2.
+        """
+        vecs = embeddings[member_indices]
+        w = weights[member_indices]
+        w_sum = np.sum(vecs * w[:, None], axis=0)
+        norm = np.linalg.norm(w_sum)
+        return w_sum / norm if norm > 0 else w_sum
+
+    def execute(
+        self,
+        raw_triples: List[RawTriple],
+        subject_map: Optional[Dict[str, str]] = None,
+        predicate_map: Optional[Dict[str, str]] = None,
+        object_map: Optional[Dict[str, str]] = None,
+    ) -> List[RawTriple]:
+        print("[Refinement] Starting Stage 2 Pipeline (Vector Clustering & Taxonomic Lifting)...")
+        if subject_map is None:
             subject_map = {t.subject: self._nlp_preprocess(t.subject) for t in raw_triples}
+        if predicate_map is None:
             predicate_map = {t.predicate: self._nlp_preprocess(t.predicate) for t in raw_triples}
+        if object_map is None:
             object_map = {t.object: self._nlp_preprocess(t.object) for t in raw_triples}
-            for t in raw_triples:
-                self.context.term_frequencies[self._nlp_preprocess(t.subject)] += 1
-                self.context.term_frequencies[self._nlp_preprocess(t.predicate)] += 1
-                self.context.term_frequencies[self._nlp_preprocess(t.object)] += 1
-            
-            with open(out_dir / "subject_normalization_map.json", "w") as f:
-                json.dump(subject_map, f, indent=2)
-            with open(out_dir / "predicate_normalization_map.json", "w") as f:
-                json.dump(predicate_map, f, indent=2)
-            with open(out_dir / "object_normalization_map.json", "w") as f:
-                json.dump(object_map, f, indent=2)
-
-            normalization_map = {}
-            normalization_map.update(subject_map)
-            normalization_map.update(predicate_map)
-            normalization_map.update(object_map)
-            with open(out_dir / "normalization_map.json", "w") as f:
-                json.dump(normalization_map, f, indent=2)
-
-            print("   -> Exported preprocessed identity normalization maps to 'outputs/02_refinement'.")
-            return subject_map, predicate_map, object_map
-
-        print("   -> Step 1: Lexical Normalization")
-        normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
-        
-        unique_subjects = set()
-        unique_predicates = set()
-        unique_objects = set()
-        
-        for t in normalized_triples:
-            t.subject = self._nlp_preprocess(t.subject)
-            t.predicate = self._nlp_preprocess(t.predicate)
-            t.object = self._nlp_preprocess(t.object)
-            unique_subjects.add(t.subject)
-            unique_predicates.add(t.predicate)
-            unique_objects.add(t.object)
-            
-            # Count frequencies
-            self.context.term_frequencies[t.subject] += 1
-            self.context.term_frequencies[t.predicate] += 1
-            self.context.term_frequencies[t.object] += 1
-
-        batch_size = self.config.get('refinement', {}).get('batch_size', 15)
-        max_async = self.config.get('refinement', {}).get('max_async_calls', 1)
-        refinement_cap = self.config.get('refinement', {}).get('context_window_cap', 2048)
-
-        async def process_batch(batch: list, sem: asyncio.Semaphore, agent, batch_idx: int, total_batches: int, target_map: dict, term_type: str):
-            async with sem:
-                print(f"      -> Running API call for batch {batch_idx}/{total_batches}...")
-                user_prompt = prompts.LLM_PREPROCESSING_USER_PROMPT.format(
-                    master_themes=', '.join(master_themes),
-                    batch_json=json.dumps(batch)
-                )
-                
-                if term_type == 'subject':
-                    sys_prompt = prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT
-                elif term_type == 'predicate':
-                    sys_prompt = prompts.PREDICATE_NORMALIZATION_SYSTEM_PROMPT
-                else:
-                    sys_prompt = prompts.OBJECT_NORMALIZATION_SYSTEM_PROMPT
-                    
-                full_prompt = f"=== SYSTEM PROMPT ===\n{sys_prompt}\nDomain Context: {self.context.master_domain}\n\n=== USER PROMPT ===\n{user_prompt}"
-                self._save_payload_text("stage_02_lexical_normalization.txt", full_prompt)
-                try:
-                    timeout_val = self.config.get('refinement', {}).get('timeout', 300.0)
-                    if timeout_val and timeout_val > 0:
-                        result = await asyncio.wait_for(
-                            agent.run(
-                                user_prompt,
-                                deps=self.context.master_domain
-                            ),
-                            timeout=timeout_val
-                        )
-                    else:
-                        result = await agent.run(
-                            user_prompt,
-                            deps=self.context.master_domain
-                        )
-                    db_tuples = []
-                    for pair in result.output.tokens:
-                        target_map[pair.original] = pair.normalized
-                        db_tuples.append((pair.original, pair.normalized, term_type))
-                    await self._run_db_executemany(
-                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                        db_tuples
-                    )
-                except asyncio.TimeoutError:
-                    print(f"      -> Timeout error on API call for batch {batch_idx}/{total_batches}")
-                    error_record = {
-                        "phase": "lexical_normalization",
-                        "batch_index": batch_idx,
-                        "total_batches": total_batches,
-                        "error": "TimeoutError: API call exceeded configured limit"
-                    }
-                    self._log_error(error_record)
-                    db_tuples = []
-                    for term in batch:
-                        target_map[term] = term
-                        db_tuples.append((term, term, term_type))
-                    await self._run_db_executemany(
-                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                        db_tuples
-                    )
-                except Exception as e:
-                    print(f"      -> Error normalizing batch {batch_idx}/{total_batches}: {e}")
-                    error_record = {
-                        "phase": "lexical_normalization",
-                        "batch_index": batch_idx,
-                        "total_batches": total_batches,
-                        "error": str(e)
-                    }
-                    self._log_error(error_record)
-                    db_tuples = []
-                    for term in batch:
-                        target_map[term] = term
-                        db_tuples.append((term, term, term_type))
-                    await self._run_db_executemany(
-                        "INSERT OR REPLACE INTO lexical_normalization (original_term, normalized_term, term_type) VALUES (?, ?, ?)",
-                        db_tuples
-                    )
-
-        async def run_all_batches(term_set: set, agent, target_map: dict, term_type: str):
-            term_list = sorted(list(term_set))
-            sem = asyncio.Semaphore(max_async)
-            tasks = []
-            
-            from src.utils.token_helper import estimate_tokens
-            from src.refinement import prompts as ref_prompts
-            
-            base_prompt_tokens = estimate_tokens(
-                prompts.LLM_PREPROCESSING_USER_PROMPT.format(
-                    master_themes=', '.join(master_themes),
-                    batch_json="[]"
-                )
-            )
-            sys_prompt_tokens = estimate_tokens(ref_prompts.SUBJECT_NORMALIZATION_SYSTEM_PROMPT) + estimate_tokens(f"\nDomain Context: {self.context.master_domain}")
-            max_json_tokens = refinement_cap - base_prompt_tokens - sys_prompt_tokens - 500
-            if max_json_tokens < 100:
-                max_json_tokens = 100
-                
-            batches = []
-            current_batch = []
-            for term in term_list:
-                hypothetical_batch = current_batch + [term]
-                hypothetical_tokens = estimate_tokens(json.dumps(hypothetical_batch))
-                if hypothetical_tokens > max_json_tokens or len(current_batch) >= batch_size:
-                    if current_batch:
-                        batches.append(current_batch)
-                        current_batch = [term]
-                    else:
-                        batches.append([term])
-                        current_batch = []
-                else:
-                    current_batch.append(term)
-            if current_batch:
-                batches.append(current_batch)
-                
-            total_batches = len(batches)
-            
-            async def wrapped_process(batch, sem, agent, batch_idx):
-                print(f"      -> Enqueued batch {batch_idx}/{total_batches} ({len(batch)} terms)...")
-                try:
-                    await process_batch(batch, sem, agent, batch_idx, total_batches, target_map, term_type)
-                    print(f"      -> Completed batch {batch_idx}/{total_batches}")
-                except Exception as e:
-                    print(f"      -> Unexpected error on batch {batch_idx}/{total_batches}: {e}")
-
-            for idx, batch in enumerate(batches, start=1):
-                tasks.append(wrapped_process(batch, sem, agent, idx))
-                
-            if tasks:
-                await asyncio.gather(*tasks)
-
-        pre_subject_map = {}
-        pre_predicate_map = {}
-        pre_object_map = {}
-
-        async def process_all_terms():
-            if self.resume:
-                print("   -> Loading cached lexical normalization mappings from database...")
-                cached_rows = await self._run_db_query(
-                    "SELECT original_term, normalized_term, term_type FROM lexical_normalization"
-                )
-                for row in cached_rows:
-                    orig, norm, term_type = row
-                    if term_type == "subject":
-                        pre_subject_map[orig] = norm
-                    elif term_type == "predicate":
-                        pre_predicate_map[orig] = norm
-                    elif term_type == "object":
-                        pre_object_map[orig] = norm
-            else:
-                print("   -> Starting fresh run (skipping cached database loading)...")
-
-            if norm_subj:
-                subjects_to_process = unique_subjects - set(pre_subject_map.keys())
-                print(f"   -> Normalizing Subjects ({len(subjects_to_process)} remaining)...")
-                await run_all_batches(subjects_to_process, subject_norm_agent, pre_subject_map, "subject")
-            else:
-                print("   -> Normalizing Subjects SKIPPED (toggled off in config).")
-
-            if norm_pred:
-                predicates_to_process = unique_predicates - set(pre_predicate_map.keys())
-                print(f"   -> Normalizing Predicates ({len(predicates_to_process)} remaining)...")
-                await run_all_batches(predicates_to_process, predicate_norm_agent, pre_predicate_map, "predicate")
-            else:
-                print("   -> Normalizing Predicates SKIPPED (toggled off in config).")
-
-            if norm_obj:
-                objects_to_process = unique_objects - set(pre_object_map.keys())
-                print(f"   -> Normalizing Objects ({len(objects_to_process)} remaining)...")
-                await run_all_batches(objects_to_process, object_norm_agent, pre_object_map, "object")
-            else:
-                print("   -> Normalizing Objects SKIPPED (toggled off in config).")
-            
-        asyncio.run(process_all_terms())
-
-        # Construct final case-sensitive maps using the original raw string keys
-        subject_map = {}
-        predicate_map = {}
-        object_map = {}
-
-        for t in raw_triples:
-            pre_subj = self._nlp_preprocess(t.subject)
-            pre_pred = self._nlp_preprocess(t.predicate)
-            pre_obj = self._nlp_preprocess(t.object)
-            
-            subject_map[t.subject] = pre_subject_map.get(pre_subj, pre_subj) if norm_subj else pre_subj
-            predicate_map[t.predicate] = pre_predicate_map.get(pre_pred, pre_pred) if norm_pred else pre_pred
-            object_map[t.object] = pre_object_map.get(pre_obj, pre_obj) if norm_obj else pre_obj
-
-        normalization_map = {}
-        if norm_subj:
-            with open(out_dir / "subject_normalization_map.json", "w") as f:
-                json.dump(subject_map, f, indent=2)
-            normalization_map.update(subject_map)
-
-        if norm_pred:
-            with open(out_dir / "predicate_normalization_map.json", "w") as f:
-                json.dump(predicate_map, f, indent=2)
-            normalization_map.update(predicate_map)
-
-        if norm_obj:
-            with open(out_dir / "object_normalization_map.json", "w") as f:
-                json.dump(object_map, f, indent=2)
-            normalization_map.update(object_map)
-
-        if normalization_map:
-            with open(out_dir / "normalization_map.json", "w") as f:
-                json.dump(normalization_map, f, indent=2)
-
-        print("[Refinement] Stage 2 Pipeline Part 1 Completed.")
-        return subject_map, predicate_map, object_map
-
-    def execute_part_2(self, raw_triples: List[RawTriple], subject_map: Dict[str, str], predicate_map: Dict[str, str], object_map: Dict[str, str]) -> List[RawTriple]:
-        print("[Refinement] Starting Stage 2 Pipeline Part 2 (Vector Clustering & Taxonomic Lifting)...")
         ref_cfg = self.config.get('refinement', {})
         refinement_cap = ref_cfg.get('context_window_cap', 2048)
         max_async = ref_cfg.get('max_async_calls', 1)
@@ -545,186 +376,200 @@ class RefinementPipeline:
             norm_obj = object_map.get(t.object, t.object)
             normalized_frequencies[norm_obj] += 1
 
-        threshold = ref_cfg.get('clustering_threshold', 0.4)
-
         def cluster_field(terms_list: List[str], label_prefix: str):
             if not terms_list:
                 return [], None, None
-                
-            # 1. Native L2-normalized embeddings directly via SentenceTransformer
-            term_embeddings_l2 = self.embedding_model.encode(terms_list, normalize_embeddings=True)
-            term_to_idx = {t: i for i, t in enumerate(terms_list)}
-            num_terms = len(terms_list)
 
-            alg = ref_cfg.get('clustering_algorithm', 'umap_hdbscan')
-            
-            if alg == 'agglomerative' or num_terms <= 2 or umap is None or hdbscan is None:
-                # Fallback to Agglomerative Clustering
-                if num_terms > 1 and AgglomerativeClustering is not None:
-                    clustering = AgglomerativeClustering(
-                        metric='cosine', 
-                        linkage='average', 
-                        distance_threshold=threshold, 
+            num_terms = len(terms_list)
+            term_to_idx = {t: i for i, t in enumerate(terms_list)}
+
+            # 1. Obtain L2-normalized embeddings via model-aware vector cache
+            term_embeddings_l2 = self.get_or_compute_embeddings(terms_list, label_prefix)
+            dim = term_embeddings_l2.shape[1]
+
+            # 2. Resolve dimension- and role-aware clustering hyperparameters from config
+            params = self.resolve_clustering_params(dim, label_prefix)
+
+            weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in terms_list])
+
+            if num_terms < 4 or umap is None or hdbscan is None:
+                # Direct single-cluster or singleton fallback for minimal vocabularies
+                cluster_records = []
+                for idx, t in enumerate(terms_list):
+                    c_vec = term_embeddings_l2[idx]
+                    rec = {
+                        "cluster_number": idx,
+                        "centroid_term": t,
+                        "members": [t]
+                    }
+                    if ref_cfg.get('print_centroid_vector', True):
+                        rec["centroid_vector"] = c_vec.tolist()
+                    cluster_records.append(rec)
+                return cluster_records, term_embeddings_l2, terms_list
+
+            # 3. Dynamic guardrails for UMAP reduction
+            n_neighbors = min(params["umap_n_neighbors"], max(2, num_terms - 1))
+            n_components = min(5, max(2, num_terms - 2))
+            min_dist = params["umap_min_dist"]
+            metric = "cosine"
+            random_state = 42
+
+            # Plot UMAP Trustworthiness vs n_components if requested
+            plot_trust = ref_cfg.get('plot_trustworthiness', False)
+            if plot_trust and trustworthiness is not None and plt is not None and num_terms >= 4:
+                try:
+                    dim_candidates = [2, 3, 5, 8, 10, 15, 20, 30]
+                    valid_dims = sorted(list(set([d for d in dim_candidates if d < num_terms - 1] + [n_components])))
+                    trust_scores = []
+                    eval_neighbors = min(n_neighbors, max(1, (num_terms // 2) - 1))
+                    for d in valid_dims:
+                        reducer_eval = umap.UMAP(
+                            n_components=d,
+                            n_neighbors=n_neighbors,
+                            min_dist=min_dist,
+                            metric=metric,
+                            random_state=random_state
+                        )
+                        embedded_eval = reducer_eval.fit_transform(term_embeddings_l2)
+                        score = trustworthiness(term_embeddings_l2, embedded_eval, n_neighbors=eval_neighbors, metric=metric)
+                        trust_scores.append(score)
+
+                    plt.figure(figsize=(8, 5))
+                    plt.plot(valid_dims, trust_scores, marker='o', linewidth=2, color='#2b5c8f', label='Trustworthiness Score')
+                    if n_components in valid_dims:
+                        target_score = trust_scores[valid_dims.index(n_components)]
+                        plt.plot(n_components, target_score, marker='*', markersize=14, color='#d9534f', label=f'Selected n_components={n_components}')
+                    plt.title(f"UMAP Trustworthiness Evaluation - {label_prefix} ({num_terms} terms)", fontsize=12, fontweight='bold')
+                    plt.xlabel("Dimensions (n_components)", fontsize=10)
+                    plt.ylabel("Trustworthiness Score [0 - 1]", fontsize=10)
+                    plt.ylim([0.0, 1.05])
+                    plt.grid(True, linestyle='--', alpha=0.6)
+                    plt.legend(loc='lower right')
+                    plt.tight_layout()
+                    plot_path = out_dir / f"umap_trustworthiness_{label_prefix}.jpg"
+                    plt.savefig(plot_path, dpi=300)
+                    plt.close()
+                    print(f"   -> [{label_prefix}] Exported UMAP Trustworthiness plot to: {plot_path}")
+                except Exception as pe:
+                    print(f"   -> [{label_prefix}] Warning: Failed to render trustworthiness plot: {pe}")
+
+            # 4. TIER 1: Dense Micro-Clustering & Legitimate Singleton Protection
+            reducer = umap.UMAP(
+                n_components=n_components,
+                n_neighbors=n_neighbors,
+                min_dist=min_dist,
+                metric=metric,
+                random_state=random_state
+            )
+            space_reduced = reducer.fit_transform(term_embeddings_l2)
+
+            hdb = hdbscan.HDBSCAN(
+                min_cluster_size=2,
+                min_samples=params["hdbscan_min_samples"],
+                metric="euclidean",
+                cluster_selection_method=params["hdbscan_selection"]
+            )
+            labels_raw = hdb.fit_predict(space_reduced)
+
+            raw_clusters = defaultdict(list)
+            outliers = []
+            for t, lbl in zip(terms_list, labels_raw):
+                if lbl == -1:
+                    outliers.append(t)
+                else:
+                    raw_clusters[lbl].append(t)
+
+            # Compute Spherical Fréchet Centroids for micro-clusters
+            micro_centroids = {}
+            for lbl, mems in raw_clusters.items():
+                m_idx = [term_to_idx[t] for t in mems]
+                micro_centroids[lbl] = self.compute_spherical_centroid(m_idx, term_embeddings_l2, weights)
+
+            # Conservative Outlier Rescue (isolate legitimate singletons)
+            singletons = []
+            if outliers and micro_centroids:
+                c_lbls = list(micro_centroids.keys())
+                c_matrix = np.array([micro_centroids[lbl] for lbl in c_lbls])
+                out_idx = [term_to_idx[t] for t in outliers]
+                out_mat = term_embeddings_l2[out_idx]
+
+                dists = 1.0 - np.dot(out_mat, c_matrix.T)
+                best_c_idx = np.argmin(dists, axis=1)
+                min_dists = np.min(dists, axis=1)
+
+                for i, out_t in enumerate(outliers):
+                    if min_dists[i] <= params["rescue_tau"]:
+                        raw_clusters[c_lbls[best_c_idx[i]]].append(out_t)
+                    else:
+                        singletons.append(out_t)
+            else:
+                singletons.extend(outliers)
+
+            # Split into multi-member micro-clusters and true singletons
+            multi_micro_clusters = {}
+            for lbl, mems in raw_clusters.items():
+                if len(mems) > 1:
+                    multi_micro_clusters[lbl] = mems
+                else:
+                    singletons.extend(mems)
+
+            # 5. TIER 2: Macro-Category Agglomeration
+            final_clusters = defaultdict(list)
+
+            if multi_micro_clusters:
+                micro_lbls = list(multi_micro_clusters.keys())
+                micro_cents = []
+                for lbl in micro_lbls:
+                    m_idx = [term_to_idx[t] for t in multi_micro_clusters[lbl]]
+                    micro_cents.append(self.compute_spherical_centroid(m_idx, term_embeddings_l2, weights))
+                micro_cents_mat = np.array(micro_cents)
+
+                if len(micro_lbls) > 1 and AgglomerativeClustering is not None:
+                    agg = AgglomerativeClustering(
+                        metric="cosine",
+                        linkage=params["macro_linkage"],
+                        distance_threshold=params["tau_macro"],
                         n_clusters=None
                     )
-                    cluster_labels = clustering.fit_predict(term_embeddings_l2)
+                    macro_partitions = agg.fit_predict(micro_cents_mat)
+
+                    for micro_lbl, macro_cid in zip(micro_lbls, macro_partitions):
+                        final_clusters[int(macro_cid)].extend(multi_micro_clusters[micro_lbl])
                 else:
-                    cluster_labels = np.zeros(num_terms, dtype=int)
-            else:
-                # 2. UMAP + HDBSCAN Manifold Pipeline
-                umap_cfg = ref_cfg.get('umap', {})
-                hdbscan_cfg = ref_cfg.get('hdbscan', {})
-                
-                enable_umap = umap_cfg.get('enabled', umap_cfg.get('enable_umap', True))
+                    for i, micro_lbl in enumerate(micro_lbls):
+                        final_clusters[i].extend(multi_micro_clusters[micro_lbl])
 
-                if enable_umap:
-                    n_components_cfg = umap_cfg.get('n_components', 5)
-                    n_neighbors_cfg = umap_cfg.get('n_neighbors', 15)
-                    min_dist = umap_cfg.get('min_dist', 0.0)
-                    metric = umap_cfg.get('metric', 'cosine')
-                    random_state = umap_cfg.get('random_state', 42)
-                    plot_trust = umap_cfg.get('plot_trustworthiness', False)
+            # Append protected singletons
+            next_id = max(final_clusters.keys()) + 1 if final_clusters else 0
+            for s_term in singletons:
+                final_clusters[next_id] = [s_term]
+                next_id += 1
 
-                    # Dynamic guardrails for small vocabularies
-                    n_neighbors = min(n_neighbors_cfg, max(2, num_terms - 1))
-                    n_components = min(n_components_cfg, max(2, num_terms - 2))
-
-                    # Plot UMAP Trustworthiness vs n_components if requested
-                    if plot_trust and trustworthiness is not None and plt is not None and num_terms >= 4:
-                        try:
-                            dim_candidates = [2, 3, 5, 8, 10, 15, 20, 30]
-                            valid_dims = sorted(list(set([d for d in dim_candidates if d < num_terms - 1] + [n_components])))
-                            trust_scores = []
-                            
-                            eval_neighbors = min(n_neighbors, max(1, (num_terms // 2) - 1))
-                            for d in valid_dims:
-                                reducer_eval = umap.UMAP(
-                                    n_components=d,
-                                    n_neighbors=n_neighbors,
-                                    min_dist=min_dist,
-                                    metric=metric,
-                                    random_state=random_state
-                                )
-                                embedded_eval = reducer_eval.fit_transform(term_embeddings_l2)
-                                score = trustworthiness(term_embeddings_l2, embedded_eval, n_neighbors=eval_neighbors, metric=metric)
-                                trust_scores.append(score)
-                                
-                            plt.figure(figsize=(8, 5))
-                            plt.plot(valid_dims, trust_scores, marker='o', linewidth=2, color='#2b5c8f', label='Trustworthiness Score')
-                            if n_components in valid_dims:
-                                target_score = trust_scores[valid_dims.index(n_components)]
-                                plt.plot(n_components, target_score, marker='*', markersize=14, color='#d9534f', label=f'Selected n_components={n_components}')
-                            plt.title(f"UMAP Trustworthiness Evaluation - {label_prefix} ({num_terms} terms)", fontsize=12, fontweight='bold')
-                            plt.xlabel("Dimensions (n_components)", fontsize=10)
-                            plt.ylabel("Trustworthiness Score [0 - 1]", fontsize=10)
-                            plt.ylim([0.0, 1.05])
-                            plt.grid(True, linestyle='--', alpha=0.6)
-                            plt.legend(loc='lower right')
-                            plt.tight_layout()
-                            plot_path = out_dir / f"umap_trustworthiness_{label_prefix}.jpg"
-                            plt.savefig(plot_path, dpi=300)
-                            plt.close()
-                            print(f"   -> [{label_prefix}] Exported UMAP Trustworthiness plot to: {plot_path}")
-                        except Exception as pe:
-                            print(f"   -> [{label_prefix}] Warning: Failed to render trustworthiness plot: {pe}")
-
-                    # Execute UMAP dimensionality reduction
-                    reducer = umap.UMAP(
-                        n_components=n_components,
-                        n_neighbors=n_neighbors,
-                        min_dist=min_dist,
-                        metric=metric,
-                        random_state=random_state
-                    )
-                    embedded_space = reducer.fit_transform(term_embeddings_l2)
-                else:
-                    print(f"   -> [{label_prefix}] UMAP Dimensionality Reduction SKIPPED (toggled off in config).")
-                    embedded_space = term_embeddings_l2
-
-                # Execute HDBSCAN density-based clustering
-                h_min_cluster_size = hdbscan_cfg.get('min_cluster_size', 2)
-                h_min_samples = hdbscan_cfg.get('min_samples', 1)
-                h_metric = hdbscan_cfg.get('metric', 'euclidean')
-                h_selection = hdbscan_cfg.get('cluster_selection_method', 'eom')
-                
-                try:
-                    clusterer = hdbscan.HDBSCAN(
-                        min_cluster_size=h_min_cluster_size,
-                        min_samples=h_min_samples,
-                        metric=h_metric,
-                        cluster_selection_method=h_selection
-                    )
-                    cluster_labels = clusterer.fit_predict(embedded_space)
-                except Exception as he:
-                    print(f"   -> [{label_prefix}] HDBSCAN failed ({he}); falling back to zero labels.")
-                    cluster_labels = np.zeros(num_terms, dtype=int)
-            
-            # 3. Group members and resolve HDBSCAN outliers (-1)
-            clusters_dict = defaultdict(list)
-            outliers = []
-            for term, label in zip(terms_list, cluster_labels):
-                if label == -1:
-                    outliers.append(term)
-                else:
-                    clusters_dict[label].append(term)
-                    
-            # Outlier resolution: reassign to closest centroid if within distance threshold, else promote to singleton
-            if outliers:
-                reassign_thresh = ref_cfg.get('hdbscan', {}).get('outlier_reassignment_threshold', 0.35)
-                valid_centroids = {}
-                for lbl, members in clusters_dict.items():
-                    m_idx = [term_to_idx[t] for t in members]
-                    m_vecs = term_embeddings_l2[m_idx]
-                    m_weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in members])
-                    valid_centroids[lbl] = np.average(m_vecs, axis=0, weights=m_weights)
-
-                next_cluster_id = max(clusters_dict.keys()) + 1 if clusters_dict else 0
-
-                for out_term in outliers:
-                    out_vec = term_embeddings_l2[term_to_idx[out_term]]
-                    best_label = None
-                    min_dist = float('inf')
-
-                    for lbl, cent_vec in valid_centroids.items():
-                        dist = cosine_distances([cent_vec], [out_vec])[0][0]
-                        if dist < min_dist:
-                            min_dist = dist
-                            best_label = lbl
-
-                    if best_label is not None and min_dist <= reassign_thresh:
-                        clusters_dict[best_label].append(out_term)
-                    else:
-                        clusters_dict[next_cluster_id].append(out_term)
-                        next_cluster_id += 1
-
-            # 4. Construct sorted cluster records with sub-linear weighted centroids
+            # 6. Determine Exemplar Terms & Build Output Records
             print_centroid_vec = ref_cfg.get('print_centroid_vector', True)
             cluster_records = []
-            for label, cluster_members in clusters_dict.items():
-                if len(cluster_members) == 1:
-                    centroid = term_embeddings_l2[term_to_idx[cluster_members[0]]]
-                    centroid_term = cluster_members[0]
+
+            for cid, mems in final_clusters.items():
+                m_sorted = sorted(list(set(mems)))
+                if len(m_sorted) == 1:
+                    c_vec = term_embeddings_l2[term_to_idx[m_sorted[0]]]
+                    ex_term = m_sorted[0]
                 else:
-                    idx = [term_to_idx[t] for t in cluster_members]
-                    cluster_vecs = term_embeddings_l2[idx]
-                    weights = np.array([1.0 + np.log(normalized_frequencies.get(t, 1)) for t in cluster_members])
-                    
-                    centroid = np.average(cluster_vecs, axis=0, weights=weights)
-                    distances = cosine_distances([centroid], cluster_vecs)[0]
-                    closest_idx = np.argmin(distances)
-                    centroid_term = cluster_members[closest_idx]
-                    
+                    m_idx = [term_to_idx[t] for t in m_sorted]
+                    c_vec = self.compute_spherical_centroid(m_idx, term_embeddings_l2, weights)
+                    dists = 1.0 - np.dot(term_embeddings_l2[m_idx], c_vec)
+                    ex_term = m_sorted[int(np.argmin(dists))]
+
                 rec = {
-                    "cluster_number": int(label),
-                    "centroid_term": centroid_term,
-                    "members": sorted(cluster_members)
+                    "cluster_number": int(cid),
+                    "centroid_term": ex_term,
+                    "members": m_sorted
                 }
                 if print_centroid_vec:
-                    rec["centroid_vector"] = centroid.tolist()
-
+                    rec["centroid_vector"] = c_vec.tolist()
                 cluster_records.append(rec)
-                
-            cluster_records.sort(key=lambda c: c["cluster_number"])
+
+            cluster_records.sort(key=lambda c: len(c["members"]), reverse=True)
             for idx_rec, rec in enumerate(cluster_records):
                 rec["cluster_number"] = idx_rec
 
@@ -1049,9 +894,9 @@ class RefinementPipeline:
         lower_pred_tax = {k.lower(): v for k, v in predicate_taxonomic_map.items()}
         lower_obj_tax = {k.lower(): v for k, v in object_taxonomic_map.items()}
 
-        # Apply both Lexical Normalization and Taxonomic Lifting maps to raw triples
-        normalized_triples = [t.model_copy(deep=True) for t in raw_triples]
-        for t in normalized_triples:
+        # Apply Taxonomic Lifting maps to raw triples
+        refined_triples = [t.model_copy(deep=True) for t in raw_triples]
+        for t in refined_triples:
             # 1. Normalization lookup: case-sensitive direct with case-insensitive fallback
             norm_subj = subject_map.get(t.subject)
             if norm_subj is None:
@@ -1089,9 +934,12 @@ class RefinementPipeline:
         # Save refined triplets to outputs/02_refinement/refined_triplets.json
         refined_path = out_dir / "refined_triplets.json"
         with open(refined_path, "w", encoding="utf-8") as f:
-            json.dump([t.model_dump() for t in normalized_triples], f, indent=2)
+            json.dump([t.model_dump() for t in refined_triples], f, indent=2)
 
         print(f"[Refinement] Exported refined triplets to: {refined_path}")
         print("[Refinement] Pipeline complete. Purging VRAM.")
         purge_vram()
-        return normalized_triples
+        return refined_triples
+
+    # Alias for backward compatibility
+    execute_part_2 = execute

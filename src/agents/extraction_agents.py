@@ -24,26 +24,18 @@ def resolve_llm_config(sub_key: str) -> tuple[str, ModelSettings]:
     if not llm_config:
         llm_config = settings.get('llm', {})
         
-    provider = llm_config.get('provider')
     model_name = llm_config.get('model_name')
     base_url = llm_config.get('base_url')
     
-    # Configure model backend
-    if provider == 'ollama':
-        if base_url:
-            os.environ['OLLAMA_BASE_URL'] = base_url
-        pydantic_model = f"ollama:{model_name}"
-    else:
-        api_key = llm_config.get('api_key', '')
-        if api_key:
-            if provider == 'google':
-                os.environ['GOOGLE_API_KEY'] = api_key
-        pydantic_model = f"{provider}:{model_name}"
+    # Configure local Ollama backend
+    if base_url:
+        os.environ['OLLAMA_BASE_URL'] = base_url
+    pydantic_model = f"ollama:{model_name}"
         
     extraction_cap = stage_cfg.get('context_window_cap', 8192)
     model_settings = ModelSettings(
         max_tokens=extraction_cap,
-        extra_body={"options": {"num_ctx": extraction_cap}} if provider == 'ollama' else {}
+        extra_body={"options": {"num_ctx": extraction_cap}}
     )
     return pydantic_model, model_settings
 

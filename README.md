@@ -1,202 +1,93 @@
 # SemanticPrism
 
-SemanticPrism is an autonomous agentic pipeline designed to process unstructured, complex domain knowledge (such as clinical diagnostic texts) and mathematically synthesize it into structured, deployable Python Ontologies (Pydantic models).
+SemanticPrism is an automated pipeline that transforms unstructured domain knowledge (such as clinical reports or technical documentation) into structured, deployable Python ontologies (Pydantic models).
 
-Rather than relying on single-shot LLM schema generation—which often leads to hallucinations and overlapping domain definitions—SemanticPrism converts source text into mathematical graph networks, clusters those networks using graph theory and representation learning, and uses those structural boundaries to generate decoupled, high-fidelity data models.
+Instead of generating schemas in a single LLM prompt—which often leads to hallucinations and overlapping concepts—SemanticPrism extracts atomic facts, groups them with vector clustering, maps them into mathematical graph networks, and uses topological boundaries to synthesize clean, modular data models.
 
 ---
 
-## Prerequisites & Quickstart
+## Pipeline Overview
+
+```mermaid
+graph TD
+    Inputs["Source Documents<br/>(Text / Parquet)"] --> S1["Stage 1: Extraction<br/><i>Theme Discovery & Triplet Extraction</i>"]
+    S1 -->|"Semantic Triplets"| S2["Stage 2: Refinement<br/><i>Vector Clustering & Taxonomic Lifting</i>"]
+    S2 -->|"Refined Triplets"| S3["Stage 3: Graph Topology<br/><i>Community & Structural Partitioning</i>"]
+    S3 -->|"Graph Partitions"| S4["Stage 4: Synthesis<br/><i>Pydantic Schema & Enum Generation</i>"]
+    S4 --> Outputs["Python Ontologies<br/>(Pydantic Models)"]
+```
+
+---
+
+## Quickstart
 
 ### Prerequisites
-- **Python**: 3.10 or higher
-- **LLM Provider**: Local [Ollama](https://ollama.com/) instance (e.g., `gemma4:26b`)
+- **Python**: 3.10+
+- **Local LLM**: [Ollama](https://ollama.com/) (e.g., `qwen2.5:7b`)
 
 ### Installation
-1. Clone the repository and navigate to the root directory:
-   ```bash
-   cd SemanticPrism
-   ```
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. (Optional) Create a `.env` file for API keys if using cloud LLM providers:
-   ```bash
-   echo "GEMINI_API_KEY=your_api_key_here" > .env
-   ```
-
----
-
-## Data Ingestion & Input Configuration
-
-SemanticPrism supports two input loading modes configured in **[configs/io.yaml](configs/io.yaml)**:
-
-### 1. Directory Mode (`source_type: "directory"`)
-Loads individual plain text (`.txt`) files from a specified folder. The filename is used as the document identifier.
-
-```yaml
-directories:
-  inputs: "inputs/testdocs"    # Folder containing .txt files
-
-ingestion:
-  source_type: "directory"
+```bash
+git clone https://github.com/childmindresearch/SemanticPrism.git
+cd SemanticPrism
+pip install -r requirements.txt
 ```
 
-### 2. Parquet Mode (`source_type: "parquet"`)
-Reads a `.parquet` tabular dataset file (using Polars) for fast batch ingestion across large document corpora.
+### Running the Pipeline
 
-```yaml
-ingestion:
-  source_type: "parquet"
-  parquet:
-    filename: "inputs/testdocs.parquet"  # Path to parquet file
-    id_field: "unique_val"              # Column name for document IDs
-    text_field: "report"                  # Column name for text content
-```
-
-### Pipeline Execution Toggles (`configs/io.yaml`)
-* **`use_async`**: `true` (enables parallel chunk processing via `asyncio`) or `false` (sequential execution).
-* **`resume_mode`**: `"skip"` (resumes run by skipping existing document outputs on disk) or `"overwrite"` (re-processes all documents).
-
----
-
-The full end-to-end pipeline is executed via the master orchestrator script [run_pipeline.py](run_pipeline.py):
-
+Execute the full end-to-end pipeline:
 ```bash
 python3 run_pipeline.py
 ```
 
-Each stage runs in an isolated subprocess to ensure system memory and GPU VRAM are cleanly garbage collected between intensive LLM and mathematical operations.
-
-### Sub-Stage Execution Runners
-
-Individual stage runner scripts are available for isolated execution or debugging:
-
-- **Stage 1 (Extraction)**: `python3 run_stage_1.py`
-  - Theme Discovery & Synthesis: `python3 substages/run_stage_1_themes.py`
-  - Triple Extraction & Aggregation: `python3 substages/run_stage_1_triples.py`
-- **Stage 2 (Refinement)**: `python3 run_stage_2.py`
-  - Lexical Normalization: `python3 substages/run_stage_2_normalization.py`
-  - Taxonomic Lifting & Theme Mapping: `python3 substages/run_stage_2_taxonomic_lifting.py`
-- **Stage 3 (Topology)**: `python3 run_stage_3.py`
-- **Stage 4 (Synthesis)**: `python3 run_stage_4.py`
+Or run individual stages independently:
+- **Stage 1 (Extraction)**: `python3 run_stage_1_extraction.py`
+- **Stage 2 (Refinement)**: `python3 run_stage_2_refinement.py`
+- **Stage 3 (Topology)**: `python3 run_stage_3_topology.py`
+- **Stage 4 (Synthesis)**: `python3 run_stage_4_synthesis.py`
 
 ---
 
-## Pipeline Architecture & Stage Breakdowns
+## Pipeline Stages
 
-### Stage 1: Extraction ([run_stage_1.py](run_stage_1.py))
+### Stage 1: Extraction
+Ingests plain text files or Parquet datasets, identifies overarching domain themes, and extracts structured Subject-Predicate-Object (S-P-O) semantic triplets anchored to verbatim source quotes.
 
-**Purpose:** Ingest source texts, discover domain themes, and extract raw Subject-Predicate-Object (S-P-O) semantic triplets.
+### Stage 2: Refinement
+Encodes extracted entities and relations into vector embeddings, groups them into semantic clusters, and optionally maps terms into standardized taxonomic concepts using LLM hypernym resolution.
 
-* **Multi-Format Ingestion:** Loads raw text files (`.txt`/`.md`) or reads directly from Parquet datasets using Polars.
-* **Global Theme Discovery & Synthesis:** Scans documents in sliding text chunks to identify localized themes, then synthesizes them into a unified master domain mapping. Anchoring subsequent triple extraction to these master themes prevents LLM hallucination drift over large documents.
-* **Triplet Extraction & Recovery:** Uses Pydantic-AI agents to extract S-P-O triplets anchored to master themes, backed by an automated recovery agent to fix malformed response payloads.
+### Stage 3: Graph Topology
+Builds a directed network graph from the refined triplets and partitions the network along two complementary paths:
+- **Community Workflow Path**: Uses the Leiden algorithm to identify modular event sequences and functional subgraphs.
+- **Embedding Categorical Path**: Uses Node2Vec graph embeddings and K-Means to identify structural categories.
 
----
-
-### Stage 2: Refinement ([run_stage_2.py](run_stage_2.py))
-
-**Purpose:** Clean, deduplicate, and normalize raw triplets into a standardized taxonomy with granular component-level control.
-
-```mermaid
-graph TD
-    RawTriplets["Raw Triples"] --> LexicalNorm{"Lexical Normalization (Optional)"}
-    LexicalNorm -->|"Enabled per S-V-O"| NormPass["LLM Normalization Batches + SQLite Cache"]
-    LexicalNorm -->|"Bypassed"| DirectRemap["Identity Mapping"]
-    NormPass --> VectorClust{"Taxonomic Lifting (Optional)"}
-    DirectRemap --> VectorClust
-    VectorClust -->|"Enabled per S-V-O"| NativeEmbed["SentenceTransformer (normalize_embeddings=True)"]
-    NativeEmbed --> UMAPToggle{"UMAP Reduction (Optional)"}
-    UMAPToggle -->|"Enabled"| UMAPPass["UMAP (384D -> 5D) + Trustworthiness JPG Plotting"]
-    UMAPToggle -->|"Disabled"| HDBSCANPass["HDBSCAN Density Clustering + Outlier Resolution"]
-    UMAPPass --> HDBSCANPass
-    HDBSCANPass --> SublinearCentroid["Sub-linear Centroid Math (1 + ln(freq))"]
-    SublinearCentroid --> TaxoLifting["LLM Hypernym Resolution"]
-    VectorClust -->|"Bypassed"| RefinedOut["Refined Triplets (refined_triplets.json)"]
-    TaxoLifting --> RefinedOut
-```
-
-* **Granular Component Control:** Normalization and taxonomic lifting can be toggled globally or independently for **Subjects**, **Predicates**, and **Objects** via `configs/refinement.yaml`.
-* **Lexical Normalization (Optional):** Standardizes spelling, expands acronyms, and normalizes phrasing using batch LLM calls backed by a persistent SQLite cache.
-  * **To Enable (`enable_normalization: true`)**: Executes LLM normalization passes across S-V-O components.
-  * **To Bypass (`enable_normalization: false`)**: Skips LLM normalization calls entirely to save time and API tokens. The pipeline automatically exports 1-to-1 identity maps so downstream Taxonomic Lifting proceeds without interruption.
-* **Native $L_2$ Sentence Embeddings:** Encodes terms via SentenceTransformers (`all-MiniLM-L6-v2`) with native $L_2$ normalization (`normalize_embeddings=True`) to project vectors onto the unit hypersphere $S^{d-1}$.
-* **Optional UMAP Dimensionality Reduction:** Features a configurable UMAP reduction pass (`umap.enabled: true/false`) that compresses $384\text{D} \rightarrow 5\text{D}$ manifolds while preserving local/global structure. Includes dynamic small-vocabulary guardrails ($N < 15$).
-* **UMAP Trustworthiness Metric Evaluation Plotting:** When `plot_trustworthiness: true` is set, evaluates $n\_components$ vs. local neighbor ranking preservation and exports 300 DPI `.jpg` plots (`umap_trustworthiness_Subject.jpg`, `umap_trustworthiness_Predicate.jpg`, `umap_trustworthiness_Object.jpg`).
-* **HDBSCAN Density-Based Clustering:** Groups related vector representations using `hdbscan.HDBSCAN` to discover non-spherical clusters of varying density. HDBSCAN outliers (label `-1`) are automatically reassigned to the nearest cluster centroid if within an $L_2$ cosine distance threshold or promoted to clean **singleton clusters**.
-* **Sub-linear Frequency Centroid Weighting:** Calculates cluster centroid vectors using sub-linear term weights ($w = 1 + \ln(\text{freq})$) to prevent high-frequency terms from drowning out cluster mean vectors.
-* **Configurable Centroid Vector Output (`print_centroid_vector`):** Optionally toggle inclusion of `"centroid_vector"` in cluster JSON outputs (`true`/`false`) to produce lightweight files.
-* **Taxonomic Lifting:** Resolves synonym clusters into formal hypernym parent concepts using LLM agents, with full token trimming protection to ensure zero data loss across mapped terms.
-* **Outputs:** Always outputs `outputs/02_refinement/refined_triplets.json` for downstream compatibility. Emits specific component map JSON files (`subject_clusters.json`, `predicate_clusters.json`, `object_clusters.json`, `subject_taxonomic_map.json`, etc.) and `.jpg` metric charts under `outputs/02_refinement/`.
-
----
-
-### Stage 3: Dual-Path Graph Topology ([run_stage_3.py](run_stage_3.py))
-
-**Purpose:** Map refined triplets into a directed network graph and partition the graph down isolated topological execution paths (Path 1: Leiden Community Modularity, Path 2: Node2Vec Embedding Categorical).
-
-```mermaid
-graph TD
-    Triplets["Refined Triplets"] --> Graph["NetworkX Directed Graph"]
-    Graph --> HubDetect{"Hub Centrality Detection"}
-    
-    subgraph path1 ["Path 1: Community Workflow (Leiden)"]
-        HubDetect -->|"Prune Global Hubs (Participation >= 0.65)"| GraphPruned1["Pruned Subgraph"]
-        GraphPruned1 --> Leiden["Leiden Modularity Algorithm (Integer Node Mapping)"]
-        Leiden --> CommPart["Spoke Communities"]
-    end
-
-    subgraph path2 ["Path 2: Embedding Categorical (Node2Vec)"]
-        HubDetect -->|"Prune Boundary Nodes (Modularity Vitality)"| GraphPruned2["Pruned Subgraph"]
-        GraphPruned2 --> Node2Vec["Node2Vec Random Walks & Embeddings"]
-        Node2Vec --> KMeans["K-Means Silhouette Optimization"]
-        KMeans --> StructPart["Structural Clusters"]
-    end
-
-    CommPart --> TargetRes["Target Resolver (resolver.py)"]
-    StructPart --> TargetRes
-```
-
-* **Dual-Path Partitioning:**
-  1. **Path 1 (Community Workflow Path):** Prunes cross-domain connector hubs (via Participation Coefficient $P_i$ and betweenness centrality) to isolate tight event sequences using the **Leiden Modularity Algorithm** (backed by integer node index mapping for fast, error-free execution).
-  2. **Path 2 (Embedding Categorical Path):** Prunes boundary-blurring nodes via Modularity Vitality ($\Delta Q$), generates **Node2Vec** random walk embeddings, and clusters them using **K-Means Silhouette Optimization**.
-* **Target Resolution:** Uses `TargetResolver` to qualify valid community/embedding clusters vs. hub/orphan enum pools for isolated downstream synthesis.
-* **Interactive Visualizations:** Renders interactive PyVis HTML dashboards (topology graphs, ego networks, and modularity plots) under `outputs/visuals/`.
-
----
-
-### Stage 4: Synthesis Engine ([run_stage_4.py](run_stage_4.py))
-
-**Purpose:** Translate mathematical graph partitions into deployable Pydantic ontologies using path-isolated, multi-pass LLM synthesis.
-
-```mermaid
-graph TD
-    S3_Topology["Stage 3 Topology Partitions & Triplets"] --> TargetRes{"Target Resolution (resolver.py)"}
-    
-    TargetRes -->|"Small Clusters / Orphans"| Enums["Phase 1: Enums Synthesis (enums.py)"]
-    TargetRes -->|"Qualified Clusters"| Schemas["Phase 2: Pydantic Schema Generation"]
-    
-    Enums --> Schemas
-    Schemas --> Consolidation["Phase 3: Schema Consolidation"]
-    Enums --> Consolidation
-    
-    Consolidation --> Final["Phase 4: Comprehensive Ontology (comprehensive_ontology.py)"]
-```
-
-* **Target Resolution & Payload Pruning:** Filters graph nodes into orphan enum pools vs primary schema targets based on cluster size, PageRank scoring, and hub centrality caps (`max_hub_targets`, `max_triplets_per_target`).
-* **Multi-Pass Schema Synthesis & Provenance:** Synthesizes Pydantic schemas under dedicated data provenance subfolders (`outputs/04_synthesis/schemas/<path_type>/normalized/` and `/raw/`) backed by automated recovery agents for malformed LLM outputs.
-* **Consolidation, AST Enum Pruning & Formatting:** Consolidates cluster schemas into a master module, applies deterministic AST post-processing to prune unreferenced orphan Enums, and formats the final `comprehensive_ontology.py` using Ruff.
+### Stage 4: Synthesis
+Translates graph partitions and low-density nodes into deployable Python code:
+- Generates Python `Enum` classes for orphan and boundary entities (`enums.py`).
+- Synthesizes Pydantic `BaseModel` classes for qualified clusters.
+- Consolidates schemas and formats the final `comprehensive_ontology.py` using Ruff.
 
 ---
 
 ## Configuration (`configs/`)
 
-Pipeline behavior is configured via modular YAML files in the `configs/` directory:
+Pipeline behavior is configured via modular YAML files:
 
-- **[configs/llm.yaml](configs/llm.yaml)**: Provider endpoints, LLM model names, temperature, VRAM management (`manage_vram`), context window limits, and async concurrency caps.
-- **[configs/io.yaml](configs/io.yaml)**: Input/output paths, ingestion settings (directory vs. Parquet), and execution modes (`resume_mode`, `use_async`).
-- **[configs/refinement.yaml](configs/refinement.yaml)**: Master and component-level normalization/lifting toggles (`enable_normalization`, `enable_taxonomic_lifting`), separate embedding models (`embedding_model` for triplet lifting vs. `theme_embedding_model` for theme mapping), dynamic target theme count guidance (`target_master_theme_count`), multi-tier confidence thresholds (`theme_confidence_high_threshold`, `theme_confidence_medium_threshold`, `theme_confidence_low_threshold`), clustering algorithms (`umap_hdbscan` vs `agglomerative`), optional UMAP reduction (`umap.enabled: true/false`), UMAP Trustworthiness evaluation plotting (`plot_trustworthiness`), HDBSCAN density clustering options (`min_cluster_size`, `outlier_reassignment_threshold`), and centroid vector output toggles (`print_centroid_vector`).
-- **[configs/topology.yaml](configs/topology.yaml)**: Execution modes (`community`, `embedding`, `both`), Leiden resolution, Node2Vec parameters, and visualization limits.
-- **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster size for schema targets, max hub schema targets, and per-target triplet payload caps.
+- **[configs/llm.yaml](configs/llm.yaml)**: Local Ollama model name, API endpoints, temperature, and context window limits.
+- **[configs/io.yaml](configs/io.yaml)**: Ingestion source (`directory` vs. `parquet`), input/output paths, and resume modes (`skip` vs. `overwrite`).
+- **[configs/refinement.yaml](configs/refinement.yaml)**: Embedding models, taxonomic lifting toggles, target theme count guidance, and clustering thresholds.
+- **[configs/topology.yaml](configs/topology.yaml)**: Execution mode (`community`, `embedding`, `both`), Leiden modularity, and Node2Vec parameters.
+- **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster sizes, hub target caps, and payload options.
+
+---
+
+## Output Structure (`outputs/`)
+
+```text
+outputs/
+├── 01_extraction/          # Raw triplets, discovered themes, and master theme mappings
+├── 02_refinement/          # Refined triplets, vector cluster mappings, and taxonomic maps
+├── 03_topology/            # Community and embedding graph partitions
+├── 04_synthesis/           # Generated Pydantic schemas, enums, and comprehensive ontologies
+├── payload_text/           # Centralized record of prompts and payloads sent to the LLM
+└── visuals/                # Interactive PyVis HTML network graphs
+```

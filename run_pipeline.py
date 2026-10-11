@@ -38,10 +38,10 @@ def main():
     global_start = time.time()
     
     stages = [
-        ("run_stage_1.py", "Stage 1: Triplet Extraction & Theme Discovery"),
-        ("run_stage_2.py", "Stage 2: Lexical Refinement & Taxonomic Lifting"),
-        ("run_stage_3.py", "Stage 3: Topology Graphing & Structural Clustering"),
-        ("run_stage_4.py", "Stage 4: Pydantic Schema Synthesis")
+        ("run_stage_1_extraction.py", "Stage 1: Triplet Extraction & Theme Discovery"),
+        ("run_stage_2_refinement.py", "Stage 2: Vector Clustering & Taxonomic Lifting"),
+        ("run_stage_3_topology.py", "Stage 3: Topology Graphing & Structural Clustering"),
+        ("run_stage_4_synthesis.py", "Stage 4: Pydantic Schema Synthesis")
     ]
     
     for script, desc in stages:

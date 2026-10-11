@@ -11,7 +11,7 @@ synthesis:
   execution_mode: "both"
 
   # Stage 4 Schema Pass Execution Mode
-  # Options: Use "normalized" text (refined_triplets.json), the original text: "raw" (original_triplets.json), "both"
+  # Options: "normalized" (taxonomically lifted triplets from refined_triplets.json), "raw" (original_triplets.json), "both"
   schema_pass_mode: "raw"
 
   # Entity threshold for Synthesis schema creation.
@@ -30,7 +30,7 @@ synthesis:
   # Controls whether to save the full text payloads sent to the LLM during Stage 4 Synthesis.
   # When true, payloads are saved to the directory specified in payload_output_dir.
   save_llm_payloads: true
-  payload_output_dir: "outputs/04_synthesis/payloads"
+  payload_output_dir: "outputs/payload_text/stage_04_synthesis"
 
   # Specifies the item structure of Phase 2 schema synthesis payloads sent to the LLM.
   # Options:

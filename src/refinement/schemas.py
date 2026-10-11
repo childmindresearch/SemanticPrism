@@ -1,32 +1,5 @@
-from typing import List
 from pydantic import BaseModel, Field
 
-
-class NormalizedToken(BaseModel):
-    """A mapping from the original raw string to its normalized form."""
-    original: str = Field(description="The exact original string provided.")
-    normalized: str = Field(description="The finalized, normalized version of the string.")
-
-class NormalizedStrings(BaseModel):
-    """The normalized array mapping original strings to their transformed states."""
-    tokens: List[NormalizedToken] = Field(description="The explicit mappings of original strings to normalized strings.")
-    
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "tokens": [
-                    {
-                        "original": "data warehouses",
-                        "normalized": "data warehouse"
-                    },
-                    {
-                        "original": "is a part of",
-                        "normalized": "part of"
-                    }
-                ]
-            }
-        }
-    }
 
 
 class TaxonomicVerification(BaseModel):
