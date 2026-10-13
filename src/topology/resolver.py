@@ -129,13 +129,26 @@ class TargetResolver:
     def _get_or_load_concept_embeddings(
         nodes: List[str],
         cache_dir: Path = Path("outputs/02_refinement/cache"),
-        model_name: str = "all-MiniLM-L6-v2"
+        model_name: Optional[str] = None
     ) -> Dict[str, np.ndarray]:
         """
         Loads L2-normalized concept embeddings from refinement caches (subject, object, concept),
         and encodes any missing terms using the active model, saving the unified concept cache.
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
+        if not model_name:
+            # Auto-detect from cache directory with all-MiniLM-L6-v2 as default fallback
+            found_slugs = []
+            for f in cache_dir.glob("subject_*_embeddings.npy"):
+                slug = f.stem.replace("subject_", "").replace("_embeddings", "")
+                found_slugs.append(slug)
+            if "all_MiniLM_L6_v2" in found_slugs:
+                model_name = "all-MiniLM-L6-v2"
+            elif found_slugs:
+                model_name = found_slugs[0].replace("_", "/")
+            else:
+                model_name = "all-MiniLM-L6-v2"
+
         model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
         concept_npy = cache_dir / f"concept_{model_slug}_embeddings.npy"
         concept_meta = cache_dir / f"concept_{model_slug}_meta.json"
@@ -437,7 +450,14 @@ class TargetResolver:
             all_target_nodes = set()
             for target in targets:
                 all_target_nodes.update(target.get("nodes", []))
-            concept_embeddings = TargetResolver._get_or_load_concept_embeddings(list(all_target_nodes))
+            ref_cfg = config.get('refinement', {}) if 'refinement' in config else config
+            model_name = ref_cfg.get('embedding_model') or config.get('embedding_model')
+            cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
+                list(all_target_nodes),
+                cache_dir=cache_dir,
+                model_name=model_name
+            )
 
         # 3. Build target payload records with sorted & capped triplets and architectural tiers
         target_payloads = []

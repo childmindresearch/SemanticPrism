@@ -107,6 +107,11 @@ def main():
         help="Fast generation of Fréchet centroid & semantic dispersion multi-panel dashboard (< 1s)",
     )
     parser.add_argument(
+        "--galaxy-3d",
+        action="store_true",
+        help="Fast generation of interactive 3D WebGL (Three.js) galaxy cluster visualization",
+    )
+    parser.add_argument(
         "--dir",
         type=str,
         default="outputs/03_topology",
@@ -135,6 +140,13 @@ def main():
         print("=== SemanticPrism: Generating Cluster Centroid Dispersion Dashboard ===")
         out_f = ClusterEmbeddingVisualizer(config=settings).generate_centroid_dispersion_dashboard()
         print(f"✅ Dashboard generated: {out_f}")
+        return
+
+    if args.galaxy_3d:
+        from src.topology.embedding import ClusterEmbeddingVisualizer
+        print("=== SemanticPrism: Generating 3D Galaxy Cluster & Embedding Dashboard ===")
+        out_3d = ClusterEmbeddingVisualizer(config=settings).generate_3d_galaxy_dashboard()
+        print(f"✅ 3D Galaxy Visualization generated: {out_3d}")
         return
 
     # Lazy-load heavy pipeline dependencies for full run
@@ -187,6 +199,7 @@ def main():
         v2_hub = Path("outputs/03_topology/02_core_separation/hub_backbone_network.html")
         v3_comm = Path("outputs/03_topology/03_paths/community/isolated_communities_only.html")
         v3_disp = Path("outputs/03_topology/03_paths/community/cluster_semantic_dispersion_map.html")
+        v3_galaxy = Path("outputs/03_topology/03_paths/community/cluster_3d_galaxy_visualization.html")
 
         print("\n--- Visuals Verification (Co-Located in 03_topology) ---")
         if v1.exists():
@@ -199,6 +212,8 @@ def main():
             print(f"   [OK] Stage 3.3 Community Visuals: {v3_comm.parent}")
         if v3_disp.exists():
             print(f"   [OK] Stage 3.3 Centroid Dispersion Dashboard: {v3_disp}")
+        if v3_galaxy.exists():
+            print(f"   [OK] Stage 3.3 3D Galaxy Visualization: {v3_galaxy}")
 
         # Tabular CSV Verification
         csv_sum = Path("outputs/03_topology/topology_metrics_comparative_summary.csv")

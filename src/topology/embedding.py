@@ -22,6 +22,7 @@ Provides:
 import json
 import math
 import sys
+import re
 from pathlib import Path
 from collections import defaultdict
 from typing import Dict, Any, List, Optional, Tuple
@@ -59,16 +60,40 @@ class ClusterEmbeddingVisualizer:
         """
         # 1. Load Concept Embeddings & Metadata
         cache_dir = refinement_dir / "cache"
-        concept_npy = cache_dir / "concept_all_MiniLM_L6_v2_embeddings.npy"
-        concept_meta = cache_dir / "concept_all_MiniLM_L6_v2_meta.json"
+        ref_cfg = self.config.get('refinement', {}) if 'refinement' in self.config else self.config
+        model_name = getattr(self, 'embedding_model_name', ref_cfg.get('embedding_model'))
+
+        # Auto-detect model if not explicitly specified, defaulting to all-MiniLM-L6-v2
+        if not model_name:
+            if list(cache_dir.glob("subject_all_MiniLM_L6_v2*.npy")) or list(cache_dir.glob("concept_all_MiniLM_L6_v2*.npy")):
+                model_name = "all-MiniLM-L6-v2"
+            elif list(cache_dir.glob("concept_*_embeddings.npy")):
+                found = list(cache_dir.glob("concept_*_embeddings.npy"))[0].stem
+                slug = found.replace("concept_", "").replace("_embeddings", "")
+                model_name = slug.replace("_", "/")
+            elif list(cache_dir.glob("subject_*_embeddings.npy")):
+                found = list(cache_dir.glob("subject_*_embeddings.npy"))[0].stem
+                slug = found.replace("subject_", "").replace("_embeddings", "")
+                model_name = slug.replace("_", "/")
+            else:
+                model_name = "all-MiniLM-L6-v2"
+
+        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
+        concept_npy = cache_dir / f"concept_{model_slug}_embeddings.npy"
+        concept_meta = cache_dir / f"concept_{model_slug}_meta.json"
 
         if not concept_npy.exists() or not concept_meta.exists():
-            subject_npy = cache_dir / "subject_all_MiniLM_L6_v2_embeddings.npy"
-            subject_meta = cache_dir / "subject_all_MiniLM_L6_v2_meta.json"
+            subject_npy = cache_dir / f"subject_{model_slug}_embeddings.npy"
+            subject_meta = cache_dir / f"subject_{model_slug}_meta.json"
             if subject_npy.exists() and subject_meta.exists():
                 concept_npy, concept_meta = subject_npy, subject_meta
             else:
-                raise FileNotFoundError(f"Concept embeddings not found in '{cache_dir}'. Ensure Stage 2 is complete.")
+                avail = list(cache_dir.glob("concept_*_embeddings.npy"))
+                if avail:
+                    concept_npy = avail[0]
+                    concept_meta = cache_dir / (concept_npy.stem.replace("_embeddings", "_meta.json"))
+                else:
+                    raise FileNotFoundError(f"Concept embeddings not found in '{cache_dir}'. Ensure Stage 2 is complete.")
 
         with open(concept_meta, "r", encoding="utf-8") as f:
             meta_data = json.load(f)
@@ -2259,6 +2284,26 @@ class ClusterEmbeddingVisualizer:
         print(f"   [OK] Enhanced Cluster Semantic Dispersion Dashboard Generated: {output_path}")
         return output_path
 
+    def generate_3d_galaxy_dashboard(
+        self,
+        base_dir: Path = Path("outputs/03_topology"),
+        refinement_dir: Path = Path("outputs/02_refinement"),
+        output_path: Optional[Path] = None,
+        force_recompute: bool = False
+    ) -> Path:
+        """
+        Generates the interactive 3D WebGL (Three.js) Galaxy Cluster & Embedding Dashboard,
+        supporting dual-engine UMAP-3D/PCA-3D, hierarchical celestial clouds, density hulls,
+        highway conduits, and cross-border refugee vectors.
+        """
+        from src.topology.galaxy_3d import Galaxy3DVisualizer
+        visualizer = Galaxy3DVisualizer(config=self.config)
+        return visualizer.generate_3d_galaxy_dashboard(
+            base_dir=base_dir,
+            refinement_dir=refinement_dir,
+            output_path=output_path
+        )
+
 
 # =============================================================================
 # STANDALONE CLI ENTRYPOINT
@@ -2268,3 +2313,6 @@ if __name__ == "__main__":
     visualizer = ClusterEmbeddingVisualizer()
     out_file = visualizer.generate_centroid_dispersion_dashboard()
     print(f"✅ Dashboard generated successfully: {out_file}")
+    out_3d = visualizer.generate_3d_galaxy_dashboard()
+    print(f"✅ 3D Galaxy visualization generated successfully: {out_3d}")
+

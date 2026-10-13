@@ -3706,7 +3706,14 @@ class TopologyVisualizer:
             all_target_nodes = set()
             for target in targets:
                 all_target_nodes.update(target.get("nodes", []))
-            concept_embeddings = TargetResolver._get_or_load_concept_embeddings(list(all_target_nodes))
+            ref_cfg = getattr(self, 'full_config', {}).get('refinement', {}) if hasattr(self, 'full_config') else {}
+            model_name = ref_cfg.get('embedding_model') or self.config.get('embedding_model')
+            cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
+                list(all_target_nodes),
+                cache_dir=cache_dir,
+                model_name=model_name
+            )
             
         payload_data = []
         for i, target in enumerate(targets, start=1):

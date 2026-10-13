@@ -14,12 +14,12 @@ refinement:
   # Can be toggled independently for subjects, predicates, and objects.
   enable_taxonomic_lifting: true
   lift_subjects: true
-  lift_predicates: true
+  lift_predicates: false
   lift_objects: true
 
-  embedding_model: "all-MiniLM-L6-v2"       # SentenceTransformers vector embedding model for triplet hypernym lifting
-  theme_embedding_model: "all-MiniLM-L6-v2" # SentenceTransformers vector embedding model for theme consolidation mapping
-  target_master_theme_count: 10              # Target number of synthesized master themes for LLM guidance
+  embedding_model: "all-MiniLM-L6-v2"  # "BAAI/bge-large-en-v1.5" // SentenceTransformers vector embedding model for triplet hypernym lifting
+  theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector embedding model for theme consolidation mapping
+  target_master_theme_count: 6              # Target number of synthesized master themes for LLM guidance
   
   # Theme Consolidation Multi-Tier Confidence Thresholds
   theme_confidence_high_threshold: 0.40     # Cosine score >= 0.40 -> High Confidence

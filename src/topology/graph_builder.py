@@ -309,7 +309,10 @@ class TopologyPipeline:
         try:
             print("   ==> [Embedding] Generating Cluster Centroid Dispersion Dashboard...")
             from src.topology.embedding import ClusterEmbeddingVisualizer
-            ClusterEmbeddingVisualizer(config=self.full_config).generate_centroid_dispersion_dashboard()
+            emb_vis = ClusterEmbeddingVisualizer(config=self.full_config)
+            emb_vis.generate_centroid_dispersion_dashboard()
+            print("   ==> [Embedding] Generating Interactive 3D Galaxy Cluster Visualization...")
+            emb_vis.generate_3d_galaxy_dashboard()
         except Exception as e:
             print(f"   [Warning] Centroid dispersion dashboard generation skipped: {e}")
 
