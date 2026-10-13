@@ -4,24 +4,25 @@ Consolidate terms that mean the same thing into a single Enum class if possible.
 All Enum member names MUST be valid Python identifiers (e.g. `UPPER_SNAKE_CASE` or `snake_case` with only alphanumeric characters and underscores—no spaces, commas, or punctuation in variable names).
 Output the raw Python string to `source_code` and name the module `enums`."""
 
-SCHEMA_SYNTHESIS_PROMPT = """You are an Ontological Python Architect.
-You will receive a JSON payload containing:
-1. `architectural_tiers`: A three-tier topological breakdown of community concepts:
-   - **Tier 1 (Thematic Nucleus / Core Invariants)**: Central high-scoring concepts that form the semantic backbone of this community.
-   - **Tier 2 (Relational Mechanics / Domain Spokes)**: Intermediate connected concepts that define domain mechanisms and relations.
-   - **Tier 3 (Contextual Modifiers / Peripheral Nuances)**: Nuances, qualifiers, and peripheral leaf concepts.
-2. `thematic_triplets`: Extracted relational statements and source quotes grounding these concepts.
+SCHEMA_SYNTHESIS_PROMPT = """You are an Expert Domain Modeling and Ontological Architect.
 
-You must define executable Pydantic (v2) `BaseModel` classes modeling this domain:
+You will receive an extracted thematic cluster of concepts and source text observations.
+Because this data is harvested from raw, unstructured documents, it represents a loose, imperfect collection of terms, fragments, and colloquial phrases. Your job is NOT to map every word literally, but to interpret the underlying domain and synthesize a clean, practical, and coherent Pydantic (v2) schema.
+You must define Pydantic (v2) `BaseModel` classes that model the ontology based on relationships, processes, categories, or contents of this cluster.
+INPUT STRUCTURE:
+1. `architectural_tiers`: Conceptual signals grouped by centrality to help orient your model design:
+   - **Tier 1 (Thematic Nucleus)**: High-level anchor concepts representing the primary subject matter of this cluster. Use these as guiding inspiration for your main root class(es).
+   - **Tier 2 (Relational Mechanics)**: Intermediate domain terms describing attributes, states, actions, or sub-processes. Use the most meaningful terms to inform fields, properties, or nested components.
+   - **Tier 3 (Contextual Modifiers)**: Peripheral, granular, or colloquial details. Use them selectively if they suggest meaningful optional attributes, or ignore them if they are redundant or noisy.
+2. `thematic_triplets`: Relational statements and source quotes. Consult these to understand the real-world context and intent behind the terms.
 
-CRITICAL ARCHITECTURAL RULES:
-1. **Tier 1 -> Root Entities:** Model Tier 1 (Thematic Nucleus) concepts as primary root `BaseModel` classes (e.g. `ClinicalAssessment`, `TreatmentProtocol`, `BehavioralObservation`).
-2. **Tier 2 -> Relational Mechanics:** Model Tier 2 entities as typed relationships, nested sub-models, or fields referenced within the Tier 1 root models.
-3. **Tier 3 -> Contextual Modifiers:** Model Tier 3 entities as optional descriptive attributes (`Optional[str] = None`), flags, or granular classifications on the relevant models.
-4. **Type Specificity:** Use Python `Enum` or `Literal` types for categorical fields instead of open-ended strings.
-5. **Default to Optional:** Wrap all generated model fields in `Optional[...] = None`.
-6. **Inheritance & Hierarchy:** When appropriate, use subclassing to capture ontological inheritance.
-7. **Self-Contained Code:** Output solely valid Python code with all required imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Union`, `from enum import Enum`). Do not include markdown fences or conversational text."""
+CRITICAL MODELING RULES:
+1. **Synthesize, Do Not Transcribe:** Do NOT mechanically turn every listed term into a separate class or field. Instead, step back, identify the coherent domain workflow (e.g. `PatientAssessment`, `TreatmentPlan`, `InterpersonalConflict`), and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
+2. **Filter Out Noise:** Discard ambiguous phrases, conversational fragments, duplicates, and awkward syntax. Generalize specific jargon into clean, idiomatic Python attribute names.
+3. **Inheritance Logic:** If the dominant theme of these triples has a hierarchical structure, subclass its corresponding parent schema. Otherwise, generate an independent root schema.
+4. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
+5. **Default to Optional:**  Use `Optional[...] = None` for all fields to support sparse, variable real-world data.
+6. **Self-Contained & Valid:** Output solely valid, executable Python code with all necessary imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Dict, Union`). Do not wrap output in markdown code fences or conversational commentary."""
 
 LEIDEN_SCHEMA_SYNTHESIS_PROMPT = SCHEMA_SYNTHESIS_PROMPT
 

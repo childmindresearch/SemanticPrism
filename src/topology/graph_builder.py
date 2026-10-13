@@ -303,6 +303,16 @@ class TopologyPipeline:
             top_out_dir = Path("outputs/03_topology")
             self.tabular_exporter.export_all_from_artifacts(top_out_dir)
 
+        # ---------------------------------------------------------------------
+        # CLUSTER EMBEDDING & FRÉCHET CENTROID DISPERSION DASHBOARD
+        # ---------------------------------------------------------------------
+        try:
+            print("   ==> [Embedding] Generating Cluster Centroid Dispersion Dashboard...")
+            from src.topology.embedding import ClusterEmbeddingVisualizer
+            ClusterEmbeddingVisualizer(config=self.full_config).generate_centroid_dispersion_dashboard()
+        except Exception as e:
+            print(f"   [Warning] Centroid dispersion dashboard generation skipped: {e}")
+
         print("[Topology] Stage 3 Pipeline execution complete.")
         return results
 

@@ -102,6 +102,11 @@ def main():
         help="Fast recomputation of TargetResolver community architectural tiers from existing partitions (< 2s)",
     )
     parser.add_argument(
+        "--dispersion-only",
+        action="store_true",
+        help="Fast generation of Fréchet centroid & semantic dispersion multi-panel dashboard (< 1s)",
+    )
+    parser.add_argument(
         "--dir",
         type=str,
         default="outputs/03_topology",
@@ -123,6 +128,13 @@ def main():
 
     if args.resolver_only:
         run_resolver_only(Path(args.dir), settings)
+        return
+
+    if args.dispersion_only:
+        from src.topology.embedding import ClusterEmbeddingVisualizer
+        print("=== SemanticPrism: Generating Cluster Centroid Dispersion Dashboard ===")
+        out_f = ClusterEmbeddingVisualizer(config=settings).generate_centroid_dispersion_dashboard()
+        print(f"✅ Dashboard generated: {out_f}")
         return
 
     # Lazy-load heavy pipeline dependencies for full run
@@ -174,6 +186,7 @@ def main():
         v2 = Path("outputs/03_topology/02_core_separation/reduced_core_graph.html")
         v2_hub = Path("outputs/03_topology/02_core_separation/hub_backbone_network.html")
         v3_comm = Path("outputs/03_topology/03_paths/community/isolated_communities_only.html")
+        v3_disp = Path("outputs/03_topology/03_paths/community/cluster_semantic_dispersion_map.html")
 
         print("\n--- Visuals Verification (Co-Located in 03_topology) ---")
         if v1.exists():
@@ -184,6 +197,8 @@ def main():
             print(f"   [OK] Stage 3.2 Visuals (Reduced Graph): {v2.parent}")
         if v3_comm.exists():
             print(f"   [OK] Stage 3.3 Community Visuals: {v3_comm.parent}")
+        if v3_disp.exists():
+            print(f"   [OK] Stage 3.3 Centroid Dispersion Dashboard: {v3_disp}")
 
         # Tabular CSV Verification
         csv_sum = Path("outputs/03_topology/topology_metrics_comparative_summary.csv")
