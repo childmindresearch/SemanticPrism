@@ -6,10 +6,13 @@ Handles embedding mapping, HDBSCAN clustering, and taxonomic lifting.
 import json
 import re
 import asyncio
+import warnings
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from collections import defaultdict
 import numpy as np
+
+warnings.filterwarnings("ignore", message=r".*n_jobs value.*overridden to 1.*", category=UserWarning)
 
 try:
     from sentence_transformers import SentenceTransformer
@@ -428,7 +431,8 @@ class RefinementPipeline:
                             n_neighbors=n_neighbors,
                             min_dist=min_dist,
                             metric=metric,
-                            random_state=random_state
+                            random_state=random_state,
+                            n_jobs=1
                         )
                         embedded_eval = reducer_eval.fit_transform(term_embeddings_l2)
                         score = trustworthiness(term_embeddings_l2, embedded_eval, n_neighbors=eval_neighbors, metric=metric)
@@ -459,7 +463,8 @@ class RefinementPipeline:
                 n_neighbors=n_neighbors,
                 min_dist=min_dist,
                 metric=metric,
-                random_state=random_state
+                random_state=random_state,
+                n_jobs=1
             )
             space_reduced = reducer.fit_transform(term_embeddings_l2)
 
@@ -931,15 +936,177 @@ class RefinementPipeline:
             t.predicate = final_pred
             t.object = final_obj
             
+        # 4. Contextual Sentence Grounding & Fidelity Computation
+        triplet_dicts = self._compute_and_cache_sentence_context(refined_triples, out_dir)
+
         # Save refined triplets to outputs/02_refinement/refined_triplets.json
         refined_path = out_dir / "refined_triplets.json"
         with open(refined_path, "w", encoding="utf-8") as f:
-            json.dump([t.model_dump() for t in refined_triples], f, indent=2)
+            json.dump(triplet_dicts, f, indent=2)
 
         print(f"[Refinement] Exported refined triplets to: {refined_path}")
         print("[Refinement] Pipeline complete. Purging VRAM.")
         purge_vram()
         return refined_triples
+
+    def _compute_and_cache_sentence_context(
+        self,
+        refined_triples: List[RawTriple],
+        out_dir: Path
+    ) -> List[Dict[str, Any]]:
+        """
+        Embeds unique source quotes, computes edge contextual fidelity (gamma_e),
+        and exports a non-breaking diagnostic report.
+        """
+        print("[Refinement] Step 4: Computing Contextual Sentence Vectors & Edge Fidelity...")
+        self._load_embedding_model()
+
+        ref_cfg = self.config.get('refinement', {})
+        cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        model_name = getattr(self, 'embedding_model_name', ref_cfg.get('embedding_model', 'all-MiniLM-L6-v2'))
+        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
+
+        # 1. Collect unique source quotes
+        def get_field(item: Any, field_name: str) -> str:
+            if hasattr(item, field_name):
+                return str(getattr(item, field_name) or "").strip()
+            if isinstance(item, dict):
+                return str(item.get(field_name, "") or "").strip()
+            return ""
+
+        quotes_map: Dict[str, int] = {}
+        for t in refined_triples:
+            q = get_field(t, "source_quote")
+            if q and q not in quotes_map:
+                quotes_map[q] = len(quotes_map)
+
+        unique_quotes = list(quotes_map.keys())
+        print(f"   -> Extracted {len(unique_quotes)} unique source sentences across {len(refined_triples)} triplets.")
+
+        # Cache paths for sentence vectors
+        sent_npy_path = cache_dir / f"sentence_{model_slug}_embeddings.npy"
+        sent_meta_path = cache_dir / f"sentence_{model_slug}_meta.json"
+
+        sent_embeddings = None
+        if sent_npy_path.exists() and sent_meta_path.exists():
+            try:
+                with open(sent_meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                if meta.get("model_name") == model_name and meta.get("vocab") == unique_quotes:
+                    sent_embeddings = np.load(sent_npy_path)
+                    print(f"   -> Loaded {len(unique_quotes)} cached sentence vectors ({sent_embeddings.shape[1]}d)")
+            except Exception as e:
+                print(f"   -> Sentence cache read warning: {e}; recomputing...")
+
+        if sent_embeddings is None or len(sent_embeddings) != len(unique_quotes):
+            sent_embeddings = self.embedding_model.encode(
+                unique_quotes,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                batch_size=ref_cfg.get('batch_size', 128)
+            )
+            try:
+                np.save(sent_npy_path, sent_embeddings)
+                with open(sent_meta_path, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "model_name": model_name,
+                        "dimensions": int(sent_embeddings.shape[1]),
+                        "vocab": unique_quotes
+                    }, f, indent=2)
+                print(f"   -> Cached {len(unique_quotes)} sentence vectors to {sent_npy_path.name}")
+            except Exception as e:
+                print(f"   -> Warning: Failed to cache sentence vectors: {e}")
+
+        # 2. Encode unique relational phrases ("subject predicate object")
+        phrase_list = [f"{get_field(t, 'subject')} {get_field(t, 'predicate')} {get_field(t, 'object')}".strip() for t in refined_triples]
+        unique_phrases = sorted(list(set(phrase_list)))
+        phrase_to_idx = {p: i for i, p in enumerate(unique_phrases)}
+
+        phrase_embeddings = self.embedding_model.encode(
+            unique_phrases,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+            batch_size=ref_cfg.get('batch_size', 128)
+        )
+
+        # 3. Compute Contextual Fidelity (gamma_e) for each triplet
+        triplet_dicts = []
+        fidelity_scores = []
+
+        for i, t in enumerate(refined_triples):
+            if hasattr(t, "model_dump"):
+                td = t.model_dump()
+            elif isinstance(t, dict):
+                td = dict(t)
+            else:
+                td = dict(t.__dict__)
+
+            q = get_field(t, "source_quote")
+            phrase = phrase_list[i]
+
+            if q in quotes_map and phrase in phrase_to_idx:
+                q_idx = quotes_map[q]
+                p_idx = phrase_to_idx[phrase]
+                gamma_e = float(np.dot(phrase_embeddings[p_idx], sent_embeddings[q_idx]))
+                gamma_e = max(0.0, min(1.0, gamma_e))  # Clip to [0.0, 1.0]
+            else:
+                gamma_e = 0.5  # Neutral fallback
+
+            td["contextual_fidelity"] = round(gamma_e, 4)
+            td["sentence_id"] = quotes_map.get(q, -1)
+            triplet_dicts.append(td)
+            fidelity_scores.append(gamma_e)
+
+        # 4. Generate Diagnostic Grounding Report
+        f_arr = np.array(fidelity_scores)
+        q25, q50, q75 = np.percentile(f_arr, [25, 50, 75])
+
+        indexed_scores = sorted(enumerate(fidelity_scores), key=lambda x: x[1], reverse=True)
+        top_samples = [
+            {
+                "phrase": phrase_list[idx],
+                "quote": get_field(refined_triples[idx], "source_quote")[:120],
+                "fidelity": round(score, 4)
+            }
+            for idx, score in indexed_scores[:5]
+        ]
+        bottom_samples = [
+            {
+                "phrase": phrase_list[idx],
+                "quote": get_field(refined_triples[idx], "source_quote")[:120],
+                "fidelity": round(score, 4)
+            }
+            for idx, score in indexed_scores[-5:]
+        ]
+
+        diag_report = {
+            "summary": {
+                "total_triplets": len(refined_triples),
+                "total_unique_sentences": len(unique_quotes),
+                "fidelity_stats": {
+                    "min": round(float(np.min(f_arr)), 4),
+                    "max": round(float(np.max(f_arr)), 4),
+                    "mean": round(float(np.mean(f_arr)), 4),
+                    "median": round(float(q50), 4),
+                    "std_dev": round(float(np.std(f_arr)), 4),
+                    "q25": round(float(q25), 4),
+                    "q75": round(float(q75), 4)
+                }
+            },
+            "sample_high_fidelity_triplets": top_samples,
+            "sample_low_fidelity_triplets": bottom_samples
+        }
+
+        diag_path = out_dir / "contextual_grounding_diagnostics.json"
+        with open(diag_path, "w", encoding="utf-8") as f:
+            json.dump(diag_report, f, indent=2)
+
+        print(f"   -> Fidelity: mean={np.mean(f_arr):.3f}, median={q50:.3f}, std={np.std(f_arr):.3f}")
+        print(f"   -> Exported grounding diagnostics to: {diag_path}")
+
+        return triplet_dicts
 
     # Alias for backward compatibility
     execute_part_2 = execute

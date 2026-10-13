@@ -6,15 +6,55 @@ Executes two-tier vector clustering, taxonomic hypernym lifting, and theme assoc
 import sys
 import json
 import time
+import argparse
 from pathlib import Path
 
 from src.config import settings
 from src.extraction.schemas import RawTriple
 from src.refinement.refiner import RefinementPipeline, PipelineRunContext
 
+
+def run_fidelity_only(pipeline: RefinementPipeline, out_dir: Path):
+    """Fast computation of sentence vectors and contextual fidelity on existing refined triplets (< 10s)."""
+    refined_path = out_dir / "refined_triplets.json"
+    if not refined_path.exists():
+        print(f"CRITICAL ERROR: Required file '{refined_path}' not found.")
+        print("Please run Stage 2 fully first before running --fidelity-only.")
+        sys.exit(1)
+
+    print(f"=== SemanticPrism Stage 2: Fast Contextual Fidelity Update ({refined_path}) ===")
+    with open(refined_path, "r", encoding="utf-8") as f:
+        refined_data = json.load(f)
+
+    triplet_dicts = pipeline._compute_and_cache_sentence_context(refined_data, out_dir)
+    with open(refined_path, "w", encoding="utf-8") as f:
+        json.dump(triplet_dicts, f, indent=2)
+
+    print(f"✅ Successfully updated {len(triplet_dicts)} triplets with contextual fidelity in '{refined_path}'.")
+    print(f"✅ Grounding diagnostics saved in '{out_dir / 'contextual_grounding_diagnostics.json'}'.")
+
+
 def main():
+    parser = argparse.ArgumentParser(
+        description="SemanticPrism Stage 2: Refinement Pipeline (Vector Clustering & Taxonomic Lifting)"
+    )
+    parser.add_argument(
+        "--fidelity-only",
+        action="store_true",
+        help="Fast computation of sentence vectors and contextual fidelity on existing refined triplets (< 10s)",
+    )
+    args = parser.parse_args()
+
+    master_domain = settings.get('extraction', {}).get('domain', 'General')
+    context = PipelineRunContext(master_domain=master_domain)
+    pipeline = RefinementPipeline(config=settings, context=context)
+    out_dir = Path("outputs/02_refinement")
+
+    if args.fidelity_only:
+        run_fidelity_only(pipeline, out_dir)
+        return
+
     print("=== SemanticPrism Stage 2: Refinement Pipeline (Vector Clustering & Taxonomic Lifting) ===")
-    
     resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
     print(f"Pipeline Resume Mode: {resume_mode}\n")
     
@@ -42,11 +82,6 @@ def main():
         print(f"CRITICAL ERROR: Failed to load original triplets: {e}")
         sys.exit(1)
 
-    # Initialize Pipeline Context and Pipeline
-    master_domain = settings.get('extraction', {}).get('domain', 'General')
-    context = PipelineRunContext(master_domain=master_domain)
-    pipeline = RefinementPipeline(config=settings, context=context)
-
     try:
         pipeline.execute(raw_triples=raw_triples)
         
@@ -62,6 +97,7 @@ def main():
         print(" - predicate_taxonomic_map.json")
         print(" - object_taxonomic_map.json")
         print(" - refined_triplets.json")
+        print(" - contextual_grounding_diagnostics.json")
         print("="*60 + "\n")
     except Exception as e:
         print(f"Error during Stage 2 Refinement execution: {e}")

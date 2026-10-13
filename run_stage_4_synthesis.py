@@ -37,32 +37,18 @@ def main():
 
     # Phase 0: Dynamic Target Resolution using CURRENT synthesis.yaml config
     print("   -> Phase 0: Resolving Synthesis Targets from Stage 3 Graph Partitions...")
-    comm_targets = None
-    emb_targets = None
-
-    if synth_mode in ("both", "community"):
-        comm_topology = load_json("outputs/03_topology/community/topology_partitions.json", required=False)
-        if comm_topology:
-            comm_target_file = TargetResolver.export_resolved_targets_json(
-                comm_topology, "community", refined_triplets, config, Path("outputs/04_synthesis/community")
-            )
-            comm_targets = load_json(comm_target_file)
-        else:
-            print("   [Warning] Path 1 (Community) topology_partitions.json not found.")
-
-    if synth_mode in ("both", "embedding"):
-        emb_topology = load_json("outputs/03_topology/embedding/topology_partitions.json", required=False)
-        if emb_topology:
-            emb_target_file = TargetResolver.export_resolved_targets_json(
-                emb_topology, "embedding", refined_triplets, config, Path("outputs/04_synthesis/embedding")
-            )
-            emb_targets = load_json(emb_target_file)
-        else:
-            print("   [Warning] Path 2 (Embedding) topology_partitions.json not found.")
-
-    if not (comm_targets or emb_targets):
-        print("Error: Cannot run Stage 4. Missing required Stage 3 topology partition outputs.")
+    comm_file = Path("outputs/03_topology/03_paths/community/topology_partitions.json")
+    if not comm_file.exists():
+        comm_file = Path("outputs/03_topology/community/topology_partitions.json")
+    comm_topology = load_json(comm_file, required=False)
+    if not comm_topology:
+        print(f"CRITICAL ERROR: Cannot run Stage 4. Missing required Stage 3 community topology partition outputs ({comm_file}).")
         sys.exit(1)
+
+    comm_target_file = TargetResolver.export_resolved_targets_json(
+        comm_topology, "community", refined_triplets, config, Path("outputs/03_topology/03_paths/community")
+    )
+    comm_targets = load_json(comm_target_file)
 
     master_themes = []
     if isinstance(master_themes_raw, dict):
@@ -71,7 +57,7 @@ def main():
         master_themes = master_themes_raw
 
     pipeline = SynthesisPipeline(config)
-    pipeline.execute(comm_targets=comm_targets, emb_targets=emb_targets, refined_triplets=refined_triplets, original_triplets=original_triplets, taxonomic_map=taxonomic_map, master_themes=master_themes)
+    pipeline.execute(comm_targets=comm_targets, refined_triplets=refined_triplets, original_triplets=original_triplets, taxonomic_map=taxonomic_map, master_themes=master_themes)
     
     print("=== Stage 4 Synthesis Completed Successfully ===")
 

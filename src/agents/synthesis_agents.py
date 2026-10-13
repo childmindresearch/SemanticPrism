@@ -96,17 +96,16 @@ orphan_agent = Agent(
 def add_orphan_context(ctx: RunContext[OrphanContext]) -> str:
     return f"\nMaster Themes Context: {json.dumps(ctx.deps.master_themes)}"
 
-# Agent 2: Schema Synthesis Agent
-schema_synthesis_agent = Agent(
+# Agent 2: Schema Synthesis Agent (Community Path)
+leiden_schema_agent = Agent(
     model=pydantic_model,
     output_type=schemas.GeneratedModule,
-    system_prompt=prompts.SCHEMA_SYNTHESIS_PROMPT,
+    system_prompt=prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT,
     model_settings=model_settings,
     retries=1
 )
 
-leiden_schema_agent = schema_synthesis_agent
-node2vec_schema_agent = schema_synthesis_agent
+schema_synthesis_agent = leiden_schema_agent
 
 # Agent 3: Consolidation Agent
 consolidation_agent = Agent(

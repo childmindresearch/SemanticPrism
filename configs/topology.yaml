@@ -1,30 +1,39 @@
 # =========================================================================
-# STAGE 3: GRAPH TOPOLOGY CONFIGURATION (Dual-Path Isolated Architecture)
+# STAGE 3: GRAPH TOPOLOGY CONFIGURATION (Core-Separation & Community Architecture)
 # =========================================================================
-# Controls graph partitioning, community workflow discovery, embedding
-# categorizations, and HTML canvas visual rendering.
+# Controls graph partitioning, community workflow discovery,
+# architectural tier partitioning, and HTML canvas visual rendering.
 # =========================================================================
 
 topology:
   # Execution Mode for Stage 3 Topology Pipeline
-  # Options: "both" (Concurrent Leiden & Node2Vec), "community" (Leiden only), "embedding" (Node2Vec only)
-  execution_mode: "both"
+  execution_mode: "community"
   # For Extracted THEMES: Threshold for discovering child -> parent theme inheritance links based on shared concepts.
   # Value range: 0.0 to 1.0 (e.g., 0.3 means a child theme must share >= 30% of its entities with a parent theme).
   # - Increase (e.g. 0.5): Stricter matching -> creates FEWER theme hierarchy links.
   # - Decrease (e.g. 0.1): Looser matching -> creates MORE theme hierarchy links.
   inheritance_overlap_threshold: 0.4
+  # Export tabular CSV diagnostic reports (Complete graph, Top N Hubs, Pruned Subgraph, Communities)
+  export_tabular_reports: true
+  top_n_hubs_export: 30       # Minimum top hubs to export in registry (union of top N by degree and all flagged hubs; default 30)
 
 
   # =========================================================================
-  # PATH 1: COMMUNITY PATH (Approach A - Workflow & Event Isolation)
+  # GLOBAL HUB PRUNING CONFIGURATION (Stage 3.1 & Stage 3.2 Universal Pruning)
   # =========================================================================
-  community_path:
+  # Evaluated on the complete graph before Stage 3.3 community partitioning.
+  # Concepts meeting these thresholds are identified as systemic hubs,
+  # pruned in Stage 3.2 to decouple modular communities, and routed to enums.py.
+  hub_pruning:
     # Participation Coefficient (P_i) cutoff for extracting cross-community hub nodes.
     # Value range: 0.0 to 1.0 (Measures how evenly a concept bridges different themes).
     # - Increase (e.g. 0.8): Extract FEWER hubs (only concepts spanning many themes evenly).
     # - Decrease (e.g. 0.5): Extract MORE hubs (includes moderately connected concepts).
-    participation_threshold: 0.65
+    participation_threshold: 0.80
+
+    # Minimum total node degree required to qualify as a global hub.
+    # Prevents low-degree peripheral concepts from being classified as structural hubs.
+    min_hub_degree: 40
 
     # Shortest-path betweenness percentile cutoff for extracting workflow chokepoints.
     # Value range: 0.0 to 1.0 (e.g. 0.95 extracts concepts in top 1 - 0.95 = 5% betweenness).
@@ -32,27 +41,39 @@ topology:
     # - Decrease (e.g. 0.90): Extract MORE hubs (top 10% workflow chokepoints).
     betweenness_percentile: 0.95
 
+  # =========================================================================
+  # COMMUNITY PATH CONFIGURATION (Leiden Modularity Optimization)
+  # =========================================================================
+  community_path:
     leiden_resolution: 1.0        # Leiden modularity resolution density parameter
 
   # =========================================================================
-  # PATH 2: EMBEDDING PATH (Approach B - Pure Category & Role Isolation)
+  # ARCHITECTURAL TIER PARTITIONING (Hybrid Geometric-Topological Scoring)
   # =========================================================================
-  embedding_path:
-    # Participation Coefficient (P_i) cutoff for extracting cross-theme structural hubs.
-    # - Increase (e.g. 0.6): Extract FEWER structural hubs.
-    # - Decrease (e.g. 0.3): Extract MORE structural hubs.
-    participation_threshold: 0.65
-    enable_modularity_vitality_pruning: false # Prunes boundary-blurring nodes (Delta Q < -0.005)
-    max_structural_clusters: 12              # Max K evaluated during K-Means Silhouette optimization
-    node2vec_dimensions: 64                 # Vector space dimensionality for Node2Vec
-    node2vec_walk_length: 8                 # Length of random walk trajectories per node
-    node2vec_num_walks: 100                  # Number of random walk iterations per node
+  # Dynamically partitions community concepts into three typed architectural tiers:
+  #   - Tier 1: Thematic Nucleus (Core Invariants -> Pydantic root entities)
+  #   - Tier 2: Relational Mechanics (Domain Spokes -> Typed fields/sub-models)
+  #   - Tier 3: Contextual Modifiers (Peripheral nuances -> Optional fields)
+  architectural_tiers:
+    enabled: true
 
-  # =========================================================================
-  # VISUALIZATION RENDERING OPTIMIZATIONS (PyVis HTML Canvas Only)
-  # =========================================================================
-  visualizations:
-    min_node_degree: 2           # Minimum node degree to render on global diagnostic HTML charts
-    max_nodes_per_cluster: 30     # Max central nodes per cluster to render on global diagnostic HTML charts
-    max_total_visual_nodes: 0.75 # Max nodes as fraction of total graph nodes (e.g. 0.25 = top 25%)
-    freeze_physics: true         # Disable live physics engine after stabilization for smooth panning
+    # Composite Score Formulation:
+    # S_u = (max(0, P_u))^w_proto * (D_u)^w_cent * (Gamma_u)^w_fid
+    weights:
+      prototypicality: 0.40      # Weight for cosine similarity to community centroid
+      centrality: 0.40           # Weight for normalized internal community degree
+      fidelity: 0.20             # Weight for contextual grounding to source quotes
+
+    # Dynamic Percentile Cutoffs & Entity Bounds
+    tier_1_percentile: 0.80      # Top 20% scoring concepts qualify for Tier 1
+    tier_1_min_entities: 2       # Minimum entity count guaranteed for Tier 1
+    tier_1_max_entities: 8       # Maximum cap for Tier 1 entities
+    tier_2_percentile: 0.30      # Next 50% (30th to 80th percentile) form Tier 2
+    # Tier 3 captures the remaining bottom 30% and all degree-1 leaves
+
+    # Grounding Quality Safeguard
+    min_fidelity_tier_1: 0.10    # Minimum average fidelity required to enter Tier 1
+
+    # Human Evaluation & Reporting Exports
+    export_tier_csv: true        # Exports human-readable spreadsheet (community_architectural_tiers.csv)
+    export_diagnostics: true     # Exports summary stats (tier_partitioning_diagnostics.json)

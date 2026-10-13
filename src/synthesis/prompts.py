@@ -5,18 +5,25 @@ All Enum member names MUST be valid Python identifiers (e.g. `UPPER_SNAKE_CASE` 
 Output the raw Python string to `source_code` and name the module `enums`."""
 
 SCHEMA_SYNTHESIS_PROMPT = """You are an Ontological Python Architect.
-You will receive JSON-serialized string of a list of text dictionaries representing a cluster of connected entities based on knowledge graph topology.
-You must define Pydantic (v2) `BaseModel` classes that model the ontology based on relationships, processes, categories, or contents of this cluster.
+You will receive a JSON payload containing:
+1. `architectural_tiers`: A three-tier topological breakdown of community concepts:
+   - **Tier 1 (Thematic Nucleus / Core Invariants)**: Central high-scoring concepts that form the semantic backbone of this community.
+   - **Tier 2 (Relational Mechanics / Domain Spokes)**: Intermediate connected concepts that define domain mechanisms and relations.
+   - **Tier 3 (Contextual Modifiers / Peripheral Nuances)**: Nuances, qualifiers, and peripheral leaf concepts.
+2. `thematic_triplets`: Extracted relational statements and source quotes grounding these concepts.
 
-CRITICAL RULES:
-1. **Model Ontological Concepts & Workflows:** Define descriptive Pydantic models (e.g. `ClinicalAssessment`, `DiagnosticInstrument`, `BehavioralPatterns`) representing the processes, categories, or events in the text.
-2. **Inheritance Logic:** If the dominant theme of these triples has a hierarchical structure, subclass its corresponding parent schema. Otherwise, generate an independent root schema.
-3. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
-4. **Default to Optional:** Wrap all generated fields in `Optional[...] = None`.
-5. **Self-Contained Code:** Output solely source Python code containing all necessary imports. Do not wrap in markdown code blocks or explanations."""
+You must define executable Pydantic (v2) `BaseModel` classes modeling this domain:
+
+CRITICAL ARCHITECTURAL RULES:
+1. **Tier 1 -> Root Entities:** Model Tier 1 (Thematic Nucleus) concepts as primary root `BaseModel` classes (e.g. `ClinicalAssessment`, `TreatmentProtocol`, `BehavioralObservation`).
+2. **Tier 2 -> Relational Mechanics:** Model Tier 2 entities as typed relationships, nested sub-models, or fields referenced within the Tier 1 root models.
+3. **Tier 3 -> Contextual Modifiers:** Model Tier 3 entities as optional descriptive attributes (`Optional[str] = None`), flags, or granular classifications on the relevant models.
+4. **Type Specificity:** Use Python `Enum` or `Literal` types for categorical fields instead of open-ended strings.
+5. **Default to Optional:** Wrap all generated model fields in `Optional[...] = None`.
+6. **Inheritance & Hierarchy:** When appropriate, use subclassing to capture ontological inheritance.
+7. **Self-Contained Code:** Output solely valid Python code with all required imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Union`, `from enum import Enum`). Do not include markdown fences or conversational text."""
 
 LEIDEN_SCHEMA_SYNTHESIS_PROMPT = SCHEMA_SYNTHESIS_PROMPT
-NODE2VEC_SCHEMA_SYNTHESIS_PROMPT = SCHEMA_SYNTHESIS_PROMPT
 
 CONSOLIDATION_SYSTEM_PROMPT = """You are a Master Ontologist.
 Merge, deduplicate, and consolidate the provided fragmented Pydantic schema files into a single, comprehensive `master_ontology.py` file.

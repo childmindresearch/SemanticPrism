@@ -1,14 +1,15 @@
 import json
+import re
 import subprocess
 import shutil
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from src.agents.synthesis_agents import (
     OrphanContext,
-    orphan_agent, leiden_schema_agent, node2vec_schema_agent,
+    orphan_agent, leiden_schema_agent,
     consolidation_agent, comprehensive_ontology_agent,
     schema_reformat_agent,
     last_llm_responses
@@ -54,29 +55,18 @@ class SynthesisPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.config = config
 
-    def execute(self, comm_targets: Dict[str, Any] = None, emb_targets: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
+    def execute(self, comm_targets: Dict[str, Any] = None, refined_triplets: List[Dict[str, Any]] = None, original_triplets: List[Dict[str, Any]] = None, taxonomic_map: Dict[str, str] = None, master_themes: List[str] = None):
         print("[Synthesis] Starting Stage 4 Pipeline...")
-        synth_mode = self.config.get('synthesis', {}).get('execution_mode', 'community')
-        print(f"   -> Synthesis Execution Mode: '{synth_mode}'")
-        
-        if synth_mode in ("both", "community"):
-            if comm_targets:
-                print("   ==> Executing Path 1: Community Path Synthesis...")
-                self.execute_path_synthesis(comm_targets, "community", refined_triplets, original_triplets, master_themes)
-            else:
-                print("   [Warning] Community resolved targets file not found. Skipping Path 1 synthesis.")
-
-        if synth_mode in ("both", "embedding"):
-            if emb_targets:
-                print("   ==> Executing Path 2: Embedding Path Synthesis...")
-                self.execute_path_synthesis(emb_targets, "embedding", refined_triplets, original_triplets, master_themes)
-            else:
-                print("   [Warning] Embedding resolved targets file not found. Skipping Path 2 synthesis.")
+        if comm_targets:
+            print("   ==> Executing Community Path Schema Synthesis...")
+            self.execute_path_synthesis(comm_targets, "community", refined_triplets, original_triplets, master_themes)
+        else:
+            print("   [Warning] Community resolved targets file not found. Skipping synthesis.")
 
         print("[Synthesis] Stage 4 Pipeline complete.")
 
     def execute_path_synthesis(self, targets_data: Dict[str, Any], path_type: str, refined_triplets: List[dict], original_triplets: List[dict], master_themes: List[str]):
-        path_label = "Path 1: Community Workflow" if path_type == "community" else "Path 2: Embedding Categorical"
+        path_label = "Community Workflow" if path_type == "community" else f"Path: {path_type.title()}"
         print(f"   -> Starting Synthesis Pass for [{path_label}]...")
 
         # Read config options
@@ -188,7 +178,7 @@ class SynthesisPipeline:
         # Ingest pre-resolved Targets and Enum Nodes directly from target JSON payload
         targets = targets_data.get("targets", [])
         all_enum_nodes = targets_data.get("enum_nodes", [])
-        active_agent = node2vec_schema_agent if path_type == "embedding" else leiden_schema_agent
+        active_agent = leiden_schema_agent
         
         # Phase 1: Orphan & Low-Density Node Aggregation (Enums)
         print(f"   -> [{path_label}] Phase 1: Orphan & Low-Density Node Aggregation (Enums)...")
@@ -232,17 +222,13 @@ class SynthesisPipeline:
 
         # Phase 2: Schema Generation
         print(f"   -> [{path_label}] Phase 2: Schema Generation...")
-        spoke_count = sum(1 for t in targets if t.get("target_type") != "hub" and t.get("type") != "hub")
-        hub_count = sum(1 for t in targets if t.get("target_type") == "hub" or t.get("type") == "hub")
-        print(f"      -> Target Composition: {len(targets)} total targets ({spoke_count} spokes + {hub_count} global hubs)")
-            
-
+        print(f"      -> Target Composition: {len(targets)} qualified schema targets (global hubs routed to enums.py)")
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
         max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
         payload_mode = self.config.get('synthesis', {}).get('payload_values', 'triples')
 
-        def format_phase2_payload(subset: List[dict], mode: str) -> str:
+        def format_phase2_payload(subset: List[dict], mode: str, tiers_data: Optional[Dict[str, Any]] = None) -> str:
             theme_to_texts = {}
             for t in subset:
                 subj = str(t.get('subject', '')).strip()
@@ -284,19 +270,42 @@ class SynthesisPipeline:
                 }
                 for theme, texts in theme_to_texts.items()
             ]
+
+            if tiers_data:
+                tier_1_items = [
+                    {
+                        "entity": item["entity"],
+                        "exemplar_quote": item.get("exemplar_quote", "")
+                    }
+                    for item in tiers_data.get("tier_1_nucleus", [])
+                ]
+                tier_2_items = [item["entity"] for item in tiers_data.get("tier_2_mechanics", [])]
+                tier_3_items = [item["entity"] for item in tiers_data.get("tier_3_modifiers", [])]
+
+                payload_dict = {
+                    "community_id": tiers_data.get("community_id"),
+                    "community_label": tiers_data.get("community_label", f"Community #{tiers_data.get('community_id', 'unknown')}"),
+                    "architectural_tiers": {
+                        "tier_1_thematic_nucleus (core_root_entities)": tier_1_items,
+                        "tier_2_relational_mechanics (spoke_attributes_and_sub_models)": tier_2_items,
+                        "tier_3_contextual_modifiers (optional_nuances_and_leaves)": tier_3_items
+                    },
+                    "thematic_triplets": formatted_items
+                }
+                return json.dumps(payload_dict, indent=2)
                 
             return json.dumps(formatted_items, indent=2)
 
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
             
-            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, node_count):
+            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, node_count, tiers_data=None):
                 async with sem:
                     pass_name = "normalized" if is_normalized else "raw"
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
-                    user_payload = format_phase2_payload(subset, payload_mode)
-                    active_sys_prompt = synth_prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT if path_type == "embedding" else synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
+                    user_payload = format_phase2_payload(subset, payload_mode, tiers_data)
+                    active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                     save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                     last_llm_responses.set([])
                     from pydantic_ai import capture_run_messages
@@ -336,28 +345,29 @@ class SynthesisPipeline:
                     target_nodes = set(target["nodes"])
                     target_type = target.get("target_type", target.get("type", "spoke"))
                     target_id = target.get("target_id", target.get("id"))
+                    tiers_data = target.get("architectural_tiers")
                     
                     if run_norm:
                         norm_subset = target.get("triplets", [])
                         if norm_subset:
-                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, len(target_nodes)))
+                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, len(target_nodes), tiers_data))
                     
                     if run_raw:
                         raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
                         if raw_subset:
-                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, len(target_nodes)))
+                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, len(target_nodes), tiers_data))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
 
             asyncio.run(run_phase2_async())
         else:
-            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, node_count):
+            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, node_count, tiers_data=None):
                 pass_name = "normalized" if is_normalized else "raw"
                 target_dir = norm_dir if is_normalized else raw_dir
                 print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
-                user_payload = format_phase2_payload(subset, payload_mode)
-                active_sys_prompt = synth_prompts.NODE2VEC_SCHEMA_SYNTHESIS_PROMPT if path_type == "embedding" else synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
+                user_payload = format_phase2_payload(subset, payload_mode, tiers_data)
+                active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                 save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                 last_llm_responses.set([])
                 from pydantic_ai import capture_run_messages
@@ -394,16 +404,17 @@ class SynthesisPipeline:
                 target_type = target.get("target_type", target.get("type", "spoke"))
                 target_id = target.get("target_id", target.get("id"))
                 node_count = len(target_nodes)
+                tiers_data = target.get("architectural_tiers")
                 
                 if run_norm:
                     norm_subset = target.get("triplets", [])
                     if norm_subset:
-                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, node_count)
+                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, node_count, tiers_data)
                         
                 if run_raw:
                     raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
                     if raw_subset:
-                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, node_count)
+                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, node_count, tiers_data)
 
         # Phase 3: Global Consolidation
         print(f"   -> [{path_label}] Phase 3: Consolidation...")

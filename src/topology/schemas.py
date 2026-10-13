@@ -38,7 +38,8 @@ class TopologyResult(BaseModel):
     global_hubs: List[str]
     hub_partitions: List[HubPartition] = []
     communities: List[CommunityPartition]
-    structural_clusters: List[StructuralCluster]
+    structural_clusters: List[StructuralCluster] = []
     orphans: List[str]
     node_metrics: Dict[str, NodeMetrics]
     theme_inheritance: List[ThemeInheritance]
+    node_embeddings: Dict[str, List[float]] = {}

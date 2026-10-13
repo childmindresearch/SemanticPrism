@@ -1,27 +1,44 @@
 import json
+import math
+import shutil
 import networkx as nx
+import numpy as np
+from scipy import stats
 from pyvis.network import Network
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
 from collections import defaultdict
 from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult, HubPartition
 from src.topology.resolver import TargetResolver
+from src.topology.visualizer import TopologyVisualizer
+from src.topology.tabular_exporter import TopologyTabularExporter
+
+import io
+import contextlib
 
 try:
-    from cdlib import algorithms
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        from cdlib import algorithms
 except ImportError:
     algorithms = None
 
-try:
-    import numpy as np
-    from node2vec import Node2Vec
-    from sklearn.cluster import KMeans
-    from sklearn.metrics import silhouette_score
-except ImportError:
-    np = None
-    Node2Vec = None
-    KMeans = None
-    silhouette_score = None
+
+def _calc_distribution_stats(arr: List[Any]) -> Dict[str, Any]:
+    """Computes summary statistics (min, max, mean, median, std_dev, skewness) for a numeric array."""
+    if not arr:
+        return {"min": 0, "max": 0, "mean": 0.0, "median": 0.0, "std_dev": 0.0, "skewness": 0.0}
+    arr_np = np.array(arr, dtype=float)
+    skew = float(stats.skew(arr_np)) if len(arr_np) > 2 else 0.0
+    if math.isnan(skew):
+        skew = 0.0
+    return {
+        "min": int(np.min(arr_np)),
+        "max": int(np.max(arr_np)),
+        "mean": round(float(np.mean(arr_np)), 3),
+        "median": round(float(np.median(arr_np)), 3),
+        "std_dev": round(float(np.std(arr_np)), 3),
+        "skewness": round(skew, 3)
+    }
 
 
 def _calculate_participation_coefficient(dg: nx.DiGraph, refined_triplets: List[dict]) -> Dict[str, float]:
@@ -130,38 +147,36 @@ class TopologyPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.full_config = config
         self.config = config.get('topology', {})
-        self.mode = self.config.get('execution_mode', 'both')
-        self.inheritance_threshold = self.config.get('inheritance_overlap_threshold', 0.3)
+        self.mode = self.config.get('execution_mode', 'community')
+        self.inheritance_threshold = self.config.get('inheritance_overlap_threshold', 0.4)
         
+        # Global Hub Pruning Config (Stages 3.1 & 3.2 - Universal Evaluation)
+        self.hub_cfg = self.config.get('hub_pruning', {})
+        self.hub_p_thresh = self.hub_cfg.get('participation_threshold', 0.80)
+        self.min_hub_degree = self.hub_cfg.get('min_hub_degree', 40)
+        self.hub_betw_percentile = self.hub_cfg.get('betweenness_percentile', 0.95)
+        # Backward-compatibility aliases
+        self.comm_p_thresh = self.hub_p_thresh
+        self.comm_betw_percentile = self.hub_betw_percentile
+
         # Path 1 Config (Approach A: Community Path)
         self.comm_cfg = self.config.get('community_path', {})
-        self.comm_p_thresh = self.comm_cfg.get('participation_threshold', 0.5)
-        self.comm_betw_percentile = self.comm_cfg.get('betweenness_percentile', 0.90)
         self.leiden_res = self.comm_cfg.get('leiden_resolution', 1.0)
-        
-        # Path 2 Config (Approach B: Embedding Path)
-        self.emb_cfg = self.config.get('embedding_path', {})
-        self.emb_p_thresh = self.emb_cfg.get('participation_threshold', 0.5)
-        self.enable_mod_vitality = self.emb_cfg.get('enable_modularity_vitality_pruning', True)
-        self.max_structural_clusters = self.emb_cfg.get('max_structural_clusters', 10)
-        self.n2v_dim = self.emb_cfg.get('node2vec_dimensions', 64)
-        self.n2v_walk_len = self.emb_cfg.get('node2vec_walk_length', 10)
-        self.n2v_num_walks = self.emb_cfg.get('node2vec_num_walks', 100)
+        self.enable_mod_vitality = self.config.get('enable_modularity_vitality_pruning', False)
 
-        # Visual Pruning & Rendering Config (HTML files ONLY - 0 impact on JSON partitions)
-        self.vis_cfg = self.config.get('visualizations', {})
-        self.min_node_degree = self.vis_cfg.get('min_node_degree', 0)
-        self.max_nodes_per_cluster = self.vis_cfg.get('max_nodes_per_cluster', 0)
-        self.max_total_visual_nodes = self.vis_cfg.get('max_total_visual_nodes', 0)
-        self.freeze_physics = self.vis_cfg.get('freeze_physics', True)
+        # Dedicated Visualization Engine
+        self.visualizer = TopologyVisualizer(config=config)
+
+        # Tabular CSV Exporter & Top Hubs Export Target
+        self.top_n_hubs_export = self.config.get('top_n_hubs_export', 30) or 30
+        self.tabular_exporter = TopologyTabularExporter(config=self.config)
 
     def execute(self, refined_triplets: List[Dict[str, Any]]) -> Dict[str, TopologyResult]:
-        print("[Topology] Starting Stage 3 Pipeline...")
+        print("=== SemanticPrism Stage 3: Topology Pipeline (Rebuilt 3-Stage Architecture) ===")
+        print("[Topology] Initializing Stage 3 Graph Construction...")
         
-        # 3.1 NetworkX Graph Construction
-        print("   -> Constructing Network Graphs...")
+        # 1. Normalize Triplets & Construct Raw Network Graphs
         dg = nx.DiGraph()
-        
         normalized_triplets = []
         for t in refined_triplets:
             subj = t.get('subject')
@@ -185,14 +200,8 @@ class TopologyPipeline:
                 dg.add_edge(subj_norm, obj_norm, predicate=pred, weight=1)
                 
         ug = dg.to_undirected()
-        
-        # Save normalized triplets as JSON
-        out_dir = Path("outputs/03_topology")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with open(out_dir / "normalized_triplets.json", "w") as f:
-            json.dump(normalized_triplets, f, indent=2)
-        
-        # Build Theme Sets
+
+        # Build Theme Sets from refined triplets
         theme_sets = defaultdict(set)
         for t in refined_triplets:
             subj = t.get('subject')
@@ -202,31 +211,712 @@ class TopologyPipeline:
                 if subj: theme_sets[theme].add(str(subj).lower().strip())
                 if obj: theme_sets[theme].add(str(obj).lower().strip())
 
-        # 3.2 Compute Advanced Metrics
-        print("   -> Calculating Centrality Metrics (PageRank, Betweenness, Participation, Modularity Vitality)...")
+        # ---------------------------------------------------------------------
+        # STAGE 3.1: Raw Overall Graph Evaluation, Modularity & Hub Identification
+        # ---------------------------------------------------------------------
+        raw_diagnostics, global_hubs, global_hubs_registry, node_metrics = self._stage_3_1_raw_graph_evaluation(
+            dg=dg,
+            ug=ug,
+            refined_triplets=refined_triplets,
+            normalized_triplets=normalized_triplets,
+            theme_sets=theme_sets
+        )
+
+        # ---------------------------------------------------------------------
+        # STAGE 3.2: Hub Removal & Modular Separation Enhancement
+        # ---------------------------------------------------------------------
+        core_dg, core_ug, cluster_ug, orphans, hub_partitions, core_diagnostics, separation_report, attachable_leaves = self._stage_3_2_core_separation(
+            dg=dg,
+            ug=ug,
+            global_hubs=global_hubs,
+            raw_diagnostics=raw_diagnostics
+        )
+
+        # Update node_metrics with finalized segregated orphans from Stage 3.2
+        orphans_set = set(orphans)
+        for node, nm in node_metrics.items():
+            nm.is_orphan = (node in orphans_set)
+
+        # ---------------------------------------------------------------------
+        # STAGE 3.3: Community Discovery (Leiden Modularity Optimization)
+        # ---------------------------------------------------------------------
+        results = {}
+        results["community"] = self._stage_3_3_community_path(
+            dg=dg,
+            core_dg=core_dg,
+            cluster_ug=cluster_ug,
+            global_hubs=global_hubs,
+            hub_partitions=hub_partitions,
+            orphans=orphans,
+            attachable_leaves=attachable_leaves,
+            theme_sets=theme_sets,
+            node_metrics=node_metrics,
+            refined_triplets=refined_triplets
+        )
+
+        # ---------------------------------------------------------------------
+        # VISUALIZATIONS GENERATION (Co-located directly in 03_topology directories)
+        # ---------------------------------------------------------------------
+        print("   ==> [Visuals] Generating Co-Located HTML Visuals in 03_topology...")
+        # Remove legacy separate visuals directory if present
+        legacy_vis_base = Path("outputs/visuals")
+        if legacy_vis_base.exists():
+            shutil.rmtree(legacy_vis_base, ignore_errors=True)
+
+        # 1. 01_raw_graph_evaluation: Operations on entire raw graph
+        self.visualizer.generate_stage_3_1_overview_visuals(
+            dg=dg,
+            ug=ug,
+            global_hubs=global_hubs,
+            node_metrics=node_metrics,
+            raw_diagnostics=raw_diagnostics,
+            vis_dir=Path("outputs/03_topology/01_raw_graph_evaluation"),
+            community_result=results.get("community")
+        )
+
+        # 2. 02_core_separation: Reduced graph (hubs removed) & Hub Backbone Network
+        self.visualizer.generate_stage_3_2_reduced_core_visuals(
+            core_dg=core_dg,
+            cluster_ug=cluster_ug,
+            global_hubs=global_hubs,
+            separation_report=separation_report,
+            vis_dir=Path("outputs/03_topology/02_core_separation"),
+            dg=dg,
+            hub_partitions=hub_partitions,
+            node_metrics=node_metrics
+        )
+
+        # 3. 03_paths/community: Dedicated community path visuals
+        if "community" in results:
+            self.visualizer.generate_stage_3_3_community_visuals(
+                dg=dg,
+                result=results["community"],
+                refined_triplets=refined_triplets,
+                vis_dir=Path("outputs/03_topology/03_paths/community")
+            )
+
+        # ---------------------------------------------------------------------
+        # TABULAR DIAGNOSTICS EXPORT (CSV Reports for Spreadsheets & Diagnostics)
+        # ---------------------------------------------------------------------
+        if self.config.get("export_tabular_reports", True):
+            print("   ==> [Tabular] Exporting Graph Diagnostics & Pruning Metrics to CSV...")
+            top_out_dir = Path("outputs/03_topology")
+            self.tabular_exporter.export_all_from_artifacts(top_out_dir)
+
+        print("[Topology] Stage 3 Pipeline execution complete.")
+        return results
+
+    # =========================================================================
+    # STAGE 3.1: RAW GRAPH EVALUATION, MODULARITY & HUB IDENTIFICATION
+    # =========================================================================
+    def _stage_3_1_raw_graph_evaluation(
+        self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict],
+        normalized_triplets: List[dict], theme_sets: Dict[str, set]
+    ) -> Tuple[Dict[str, Any], List[str], List[Dict[str, Any]], Dict[str, NodeMetrics]]:
+        print("   ==> [Stage 3.1] Overall Graph Evaluation, Modularity & Hub Identification...")
+        out_dir = Path("outputs/03_topology/01_raw_graph_evaluation")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Save normalized triplets
+        with open(out_dir / "normalized_triplets.json", "w") as f:
+            json.dump(normalized_triplets, f, indent=2)
+
+        # 2. Basic Scale & Density
+        num_nodes = len(dg)
+        num_dir_edges = dg.number_of_edges()
+        num_undir_edges = ug.number_of_edges()
+        density = round(float(nx.density(dg)), 6) if num_nodes > 1 else 0.0
+
+        # 3. Degree Distribution Statistics
+        deg_stats = _calc_distribution_stats([d for n, d in dg.degree()])
+        in_deg_stats = _calc_distribution_stats([d for n, d in dg.in_degree()])
+        out_deg_stats = _calc_distribution_stats([d for n, d in dg.out_degree()])
+
+        # 4. Connected Components
+        wcc = list(nx.weakly_connected_components(dg))
+        scc = list(nx.strongly_connected_components(dg))
+        ug_comps = list(nx.connected_components(ug))
+        giant_comp = max(ug_comps, key=len) if ug_comps else set()
+        giant_ratio = round(len(giant_comp) / max(1, num_nodes), 4)
+
+        # 5. Macro Topological Properties
+        reciprocity = round(float(nx.reciprocity(dg)), 4) if num_nodes > 0 else 0.0
+        assortativity = round(float(nx.degree_assortativity_coefficient(ug)), 4) if num_nodes > 1 else 0.0
+        transitivity = round(float(nx.transitivity(ug)), 4) if num_nodes > 0 else 0.0
+        avg_clustering = round(float(nx.average_clustering(ug)), 4) if num_nodes > 0 else 0.0
+
+        # 6. Baseline Raw Modularity (Leiden on raw graph)
+        leiden_raw_q = 0.0
+        leiden_raw_comms_count = 0
+        if algorithms and len(ug.nodes()) > 0:
+            try:
+                node_list = list(ug.nodes())
+                mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                g_int = nx.relabel_nodes(ug, mapping)
+                raw_coms = algorithms.leiden(g_int)
+                leiden_raw_comms = [[rev_mapping[x] for x in c] for c in raw_coms.communities]
+                leiden_raw_q = round(float(nx.community.modularity(ug, leiden_raw_comms)), 4)
+                leiden_raw_comms_count = len(leiden_raw_comms)
+            except Exception:
+                pass
+
+        # 7. Semantic Theme Modularity
+        theme_groups = defaultdict(list)
+        for t in refined_triplets:
+            th = t.get('theme_association', 'Unassigned')
+            s, o = t.get('subject'), t.get('object')
+            if s: theme_groups[th].append(str(s).lower().strip())
+            if o: theme_groups[th].append(str(o).lower().strip())
+        theme_comms = [list(set(nodes).intersection(set(ug.nodes()))) for nodes in theme_groups.values() if len(nodes) > 0]
+        theme_comms = [c for c in theme_comms if len(c) > 0]
+        theme_q = 0.0
+        try:
+            if len(theme_comms) >= 2:
+                assigned = set()
+                disjoint_theme_comms = []
+                for tc in sorted(theme_comms, key=len, reverse=True):
+                    curr = [n for n in tc if n not in assigned]
+                    if curr:
+                        disjoint_theme_comms.append(curr)
+                        assigned.update(curr)
+                unassigned = [n for n in ug.nodes() if n not in assigned]
+                if unassigned:
+                    disjoint_theme_comms.append(unassigned)
+                if len(disjoint_theme_comms) >= 2:
+                    theme_q = round(float(nx.community.modularity(ug, disjoint_theme_comms)), 4)
+        except Exception:
+            pass
+
+        raw_diagnostics = {
+            "graph_scale": {
+                "num_nodes": num_nodes,
+                "num_directed_edges": num_dir_edges,
+                "num_undirected_edges": num_undir_edges,
+                "density": density
+            },
+            "degree_distribution": {
+                "total_degree": deg_stats,
+                "in_degree": in_deg_stats,
+                "out_degree": out_deg_stats
+            },
+            "component_structure": {
+                "weakly_connected_components": len(wcc),
+                "strongly_connected_components": len(scc),
+                "undirected_connected_components": len(ug_comps),
+                "giant_component_nodes": len(giant_comp),
+                "giant_component_ratio": giant_ratio
+            },
+            "macro_topological_metrics": {
+                "reciprocity": reciprocity,
+                "degree_assortativity": assortativity,
+                "transitivity": transitivity,
+                "average_clustering_coefficient": avg_clustering
+            },
+            "baseline_modularity": {
+                "leiden_raw_modularity": leiden_raw_q,
+                "leiden_raw_community_count": leiden_raw_comms_count,
+                "semantic_theme_modularity": theme_q
+            }
+        }
+
+        with open(out_dir / "raw_graph_diagnostics.json", "w") as f:
+            json.dump(raw_diagnostics, f, indent=2)
+
+        # 8. Compute Node Centralities & Identify Hubs
         pagerank = nx.pagerank(dg) if len(dg) > 0 else {}
         degree_cent = nx.degree_centrality(dg) if len(dg) > 0 else {}
         betweenness = _calculate_betweenness(dg)
         participation = _calculate_participation_coefficient(dg, refined_triplets)
-        mod_vitality = _calculate_modularity_vitality(ug, refined_triplets)
+        if self.enable_mod_vitality:
+            mod_vitality = _calculate_modularity_vitality(ug, refined_triplets)
+        else:
+            mod_vitality = {n: 0.0 for n in dg.nodes()}
 
-        results = {}
-        
-        # Execute Path 1: Community Path (Approach A)
-        if self.mode in ("both", "community"):
-            print("   ==> Executing Path 1: Community Path (Approach A: P_i + Betweenness -> Leiden)...")
-            results["community"] = self.execute_community_path(dg, ug, refined_triplets, theme_sets, pagerank, degree_cent, betweenness, participation, mod_vitality)
+        betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
+        betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.hub_betw_percentile)))
+        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0.02])
 
-        # Execute Path 2: Embedding Path (Approach B)
-        if self.mode in ("both", "embedding"):
-            print("   ==> Executing Path 2: Embedding Path (Approach B: P_i + Modularity Vitality -> Node2Vec)...")
-            results["embedding"] = self.execute_embedding_path(dg, ug, refined_triplets, theme_sets, pagerank, degree_cent, betweenness, participation, mod_vitality)
+        if self.enable_mod_vitality:
+            mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1])
+            neg_mod_v_nodes = set([n for n, val in mod_v_sorted[:10] if val < -0.005 and dg.degree(n) >= 3])
+        else:
+            neg_mod_v_nodes = set()
 
-        print("[Topology] Stage 3 Pipeline complete.")
-        return results
+        min_top_hubs = getattr(self, "top_n_hubs_export", 30) or 30
 
-    def _build_node_metrics(self, dg: nx.DiGraph, ug: nx.Graph, global_hubs: List[str], pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> Dict[str, NodeMetrics]:
-        orphans = [node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs]
+        global_hubs = []
+        global_hubs_set = set()
+        node_candidates = {}
+
+        for node in dg.nodes():
+            p_val = participation.get(node, 0.0)
+            b_val = betweenness.get(node, 0.0)
+            pr_val = pagerank.get(node, 0.0)
+            deg_val = dg.degree(node)
+            mv_val = mod_vitality.get(node, 0.0)
+
+            is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= self.min_hub_degree)
+            is_workflow_chokepoint = (node in top_betweenness_nodes)
+            is_boundary_blurring = self.enable_mod_vitality and (node in neg_mod_v_nodes)
+
+            reasons = []
+            if is_thematic_bridge: reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {self.min_hub_degree})")
+            if is_workflow_chokepoint: reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > 0.02)")
+            if is_boundary_blurring: reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < -0.005)")
+
+            is_hub = (is_thematic_bridge or is_workflow_chokepoint or is_boundary_blurring)
+            if is_hub:
+                global_hubs.append(node)
+                global_hubs_set.add(node)
+            else:
+                reasons = [f"Retained Core Concept (P_i={p_val:.3f} < {self.hub_p_thresh})"]
+
+            node_candidates[node] = {
+                "node_id": node,
+                "removed": is_hub,
+                "total_degree": deg_val,
+                "in_degree": dg.in_degree(node),
+                "out_degree": dg.out_degree(node),
+                "pagerank": round(pr_val, 6),
+                "betweenness_centrality": round(b_val, 6),
+                "participation_coefficient": round(p_val, 4),
+                "modularity_vitality": round(mv_val, 6),
+                "qualification_reasons": reasons
+            }
+
+        # Select Top N by degree UNION all flagged hubs (Comprehensive Union)
+        all_nodes_sorted_by_deg = sorted(
+            dg.nodes(),
+            key=lambda n: (dg.degree(n), betweenness.get(n, 0.0), pagerank.get(n, 0.0)),
+            reverse=True
+        )
+        top_n_by_deg = set(all_nodes_sorted_by_deg[:min_top_hubs])
+        registry_nodes_set = top_n_by_deg.union(global_hubs_set)
+
+        global_hubs_registry = [node_candidates[n] for n in registry_nodes_set]
+        # Sort registry primarily by total degree (descending), then betweenness, then pagerank
+        global_hubs_registry.sort(
+            key=lambda x: (x["total_degree"], x["betweenness_centrality"], x["pagerank"]),
+            reverse=True
+        )
+
+        with open(out_dir / "global_hubs_registry.json", "w") as f:
+            json.dump({
+                "total_global_hubs": len(global_hubs),
+                "total_global_hubs_removed": len(global_hubs),
+                "total_registry_nodes": len(global_hubs_registry),
+                "min_top_hubs_configured": min_top_hubs,
+                "hub_criteria": {
+                    "participation_threshold": self.hub_p_thresh,
+                    "min_hub_degree": self.min_hub_degree,
+                    "betweenness_percentile": self.hub_betw_percentile,
+                    "betweenness_min_score": 0.02,
+                    "enable_modularity_vitality": self.enable_mod_vitality
+                },
+                "hubs": global_hubs_registry
+            }, f, indent=2)
+
+        node_metrics = self._build_node_metrics(dg, ug, global_hubs, pagerank, degree_cent, betweenness, participation, mod_vitality)
+
+        print(f"      -> Scale: {num_nodes} nodes, {num_dir_edges} edges, Density: {density:.6f}")
+        print(f"      -> Baseline Modularity: Q_raw={leiden_raw_q:.4f} ({leiden_raw_comms_count} communities)")
+        print(f"      -> Identified Global Hubs: {len(global_hubs)} nodes")
+
+        return raw_diagnostics, global_hubs, global_hubs_registry, node_metrics
+
+    # =========================================================================
+    # STAGE 3.2: HUB REMOVAL & MODULAR SEPARATION ENHANCEMENT
+    # =========================================================================
+    def _stage_3_2_core_separation(
+        self, dg: nx.DiGraph, ug: nx.Graph, global_hubs: List[str], raw_diagnostics: Dict[str, Any]
+    ) -> Tuple[nx.DiGraph, nx.Graph, nx.Graph, List[str], List[HubPartition], Dict[str, Any], Dict[str, Any]]:
+        print("   ==> [Stage 3.2] Removing Hubs & Quantifying Modular Separation Enhancement...")
+        out_dir = Path("outputs/03_topology/02_core_separation")
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Isolate Hub Backbone Network
+        hub_dg = dg.subgraph(global_hubs).copy()
+        hub_ug = ug.subgraph(global_hubs).copy()
+        hub_partitions = self._partition_hub_network(dg, global_hubs)
+
+        hub_backbone_data = {
+            "num_hub_nodes": len(hub_ug),
+            "num_inter_hub_edges": hub_ug.number_of_edges(),
+            "inter_hub_density": round(float(nx.density(hub_dg)), 5) if len(hub_dg) > 1 else 0.0,
+            "hub_partitions_count": len(hub_partitions),
+            "hub_partitions": [hp.model_dump() for hp in hub_partitions]
+        }
+        with open(out_dir / "hub_backbone_network.json", "w") as f:
+            json.dump(hub_backbone_data, f, indent=2)
+
+        # 2. Extract Core Graph (G_core = G \ V_hubs)
+        core_dg = dg.copy()
+        core_dg.remove_nodes_from(global_hubs)
+        core_ug = ug.copy()
+        core_ug.remove_nodes_from(global_hubs)
+
+        # 3. Segregate Core Nodes for Two-Pass Partitioning
+        # True Isolates: degree == 0 in G_core (were connected ONLY to global hubs)
+        true_isolates = [n for n in core_ug.nodes() if core_ug.degree(n) == 0]
+        # Dense Core: degree > 1 in G_core (retained for Pass 1 clean community discovery)
+        dense_core_nodes = set(n for n in core_ug.nodes() if core_ug.degree(n) > 1)
+        # Pendant Leaves: degree == 1 in G_core
+        d1_nodes = [n for n in core_ug.nodes() if core_ug.degree(n) == 1]
+
+        # Map attachable leaves (whose sole neighbor is in dense core) vs isolated pairs/chains
+        attachable_leaves = {}
+        isolated_dyads = []
+        for u in d1_nodes:
+            nbrs = list(core_ug.neighbors(u))
+            if len(nbrs) == 1 and nbrs[0] in dense_core_nodes:
+                attachable_leaves[u] = nbrs[0]
+            else:
+                isolated_dyads.append(u)
+
+        # True unattached orphans are degree-0 isolates and disconnected pairs
+        orphans = sorted(true_isolates + isolated_dyads)
+
+        with open(out_dir / "orphans_and_singletons.json", "w") as f:
+            json.dump({
+                "summary": {
+                    "dense_core_nodes": len(dense_core_nodes),
+                    "attachable_pendant_leaves": len(attachable_leaves),
+                    "true_isolated_singletons": len(true_isolates),
+                    "isolated_dyads": len(isolated_dyads),
+                    "unattached_orphans_total": len(orphans)
+                },
+                "true_isolated_singletons": sorted(true_isolates),
+                "attachable_pendant_leaves": [
+                    {"node": u, "core_neighbor": v} for u, v in sorted(attachable_leaves.items())
+                ],
+                "isolated_dyads": sorted(isolated_dyads)
+            }, f, indent=2)
+
+        # 4. Target graph for cluster/community detection (G_cluster = dense core with degree > 1)
+        cluster_ug = core_ug.subgraph(dense_core_nodes).copy()
+
+        # 4b. Write Unified Removed Nodes Manifest
+        removed_manifest = {
+            "summary": {
+                "total_raw_nodes": len(dg),
+                "total_removed_or_segregated": len(global_hubs) + len(orphans) + len(attachable_leaves),
+                "retained_dense_core_for_clustering": len(cluster_ug),
+                "attachable_pendant_leaves": len(attachable_leaves),
+                "unattached_orphans": len(orphans),
+                "breakdown": {
+                    "global_hubs_extracted": len(global_hubs),
+                    "true_singletons": len(true_isolates),
+                    "attachable_leaves": len(attachable_leaves),
+                    "isolated_dyads": len(isolated_dyads)
+                }
+            },
+            "global_hubs_removed": [
+                {
+                    "node_id": h,
+                    "removal_role": "Global Hub",
+                    "removal_reason": "High Thematic Dispersion / Shortest-Path Chokepoint",
+                    "raw_total_degree": dg.degree(h),
+                    "raw_in_degree": dg.in_degree(h),
+                    "raw_out_degree": dg.out_degree(h)
+                }
+                for h in global_hubs
+            ],
+            "unattached_singletons_and_dyads": [
+                {
+                    "node_id": o,
+                    "removal_role": "Singleton/Isolated Dyad",
+                    "removal_reason": "No direct connection to dense core",
+                    "core_degree": core_ug.degree(o),
+                    "raw_degree": dg.degree(o)
+                }
+                for o in sorted(orphans)
+            ],
+            "attachable_pendant_leaves": [
+                {
+                    "node_id": u,
+                    "core_neighbor": v,
+                    "raw_degree": dg.degree(u)
+                }
+                for u, v in sorted(attachable_leaves.items())
+            ],
+            "retained_dense_core_nodes": sorted(list(cluster_ug.nodes()))
+        }
+        with open(out_dir / "removed_nodes_manifest.json", "w") as f:
+            json.dump(removed_manifest, f, indent=2)
+
+        # 5. Core Diagnostics
+        core_nodes = len(core_ug)
+        core_edges = core_ug.number_of_edges()
+        core_density = round(float(nx.density(core_dg)), 6) if core_nodes > 1 else 0.0
+        core_deg_stats = _calc_distribution_stats([d for n, d in core_ug.degree()])
+        core_comps = list(nx.connected_components(core_ug))
+        core_giant = max(core_comps, key=len) if core_comps else set()
+        core_giant_ratio = round(len(core_giant) / max(1, core_nodes), 4)
+
+        core_modularity_q = 0.0
+        core_comm_count = 0
+        if algorithms and len(cluster_ug.nodes()) > 0:
+            try:
+                node_list = list(cluster_ug.nodes())
+                mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                g_int = nx.relabel_nodes(cluster_ug, mapping)
+                coms = algorithms.leiden(g_int)
+                comms_list = [[rev_mapping[x] for x in c] for c in coms.communities]
+                core_modularity_q = round(float(nx.community.modularity(cluster_ug, comms_list)), 4)
+                core_comm_count = len(comms_list)
+            except Exception:
+                pass
+
+        cluster_deg_stats = _calc_distribution_stats([d for n, d in cluster_ug.degree()]) if len(cluster_ug) > 0 else {}
+        cluster_comps = list(nx.connected_components(cluster_ug)) if len(cluster_ug) > 0 else []
+        cluster_giant = max(cluster_comps, key=len) if cluster_comps else set()
+        cluster_giant_ratio = round(len(cluster_giant) / max(1, len(cluster_ug)), 4) if len(cluster_ug) > 0 else 0.0
+
+        # Macro Topological Metrics for Core and Cluster Subgraphs
+        core_avg_clustering = round(float(nx.average_clustering(core_ug)), 4) if len(core_ug) > 0 else 0.0
+        core_assortativity = round(float(nx.degree_assortativity_coefficient(core_ug)), 4) if len(core_ug) > 1 else 0.0
+        core_transitivity = round(float(nx.transitivity(core_ug)), 4) if len(core_ug) > 0 else 0.0
+
+        cluster_avg_clustering = round(float(nx.average_clustering(cluster_ug)), 4) if len(cluster_ug) > 0 else 0.0
+        cluster_assortativity = round(float(nx.degree_assortativity_coefficient(cluster_ug)), 4) if len(cluster_ug) > 1 else 0.0
+        cluster_transitivity = round(float(nx.transitivity(cluster_ug)), 4) if len(cluster_ug) > 0 else 0.0
+
+        core_diagnostics = {
+            "graph_scale": {
+                "num_nodes": core_nodes,
+                "num_edges": core_edges,
+                "density": core_density,
+                "cluster_subgraph_nodes": len(cluster_ug),
+                "cluster_subgraph_edges": cluster_ug.number_of_edges()
+            },
+            "degree_distribution": core_deg_stats,
+            "cluster_degree_distribution": cluster_deg_stats,
+            "component_structure": {
+                "connected_components_count": len(core_comps),
+                "giant_component_nodes": len(core_giant),
+                "giant_component_ratio": core_giant_ratio,
+                "cluster_connected_components_count": len(cluster_comps),
+                "cluster_giant_component_nodes": len(cluster_giant),
+                "cluster_giant_component_ratio": cluster_giant_ratio
+            },
+            "modular_separation": {
+                "core_leiden_modularity": core_modularity_q,
+                "core_communities_count": core_comm_count
+            },
+            "macro_topological_metrics": {
+                "core_average_clustering_coefficient": core_avg_clustering,
+                "core_degree_assortativity": core_assortativity,
+                "core_transitivity": core_transitivity,
+                "cluster_average_clustering_coefficient": cluster_avg_clustering,
+                "cluster_degree_assortativity": cluster_assortativity,
+                "cluster_transitivity": cluster_transitivity
+            }
+        }
+        with open(out_dir / "core_graph_diagnostics.json", "w") as f:
+            json.dump(core_diagnostics, f, indent=2)
+
+        # 6. Separation Impact Report
+        raw_scale = raw_diagnostics["graph_scale"]
+        raw_deg = raw_diagnostics["degree_distribution"]["total_degree"]
+        raw_comp = raw_diagnostics["component_structure"]
+        raw_mod = raw_diagnostics["baseline_modularity"]["leiden_raw_modularity"]
+
+        modularity_gain = round(core_modularity_q - raw_mod, 4)
+        separation_report = {
+            "modularity_enhancement": {
+                "raw_modularity_q": raw_mod,
+                "core_modularity_q": core_modularity_q,
+                "modularity_gain_delta_q": modularity_gain,
+                "percent_modularity_increase": round((modularity_gain / max(0.001, raw_mod)) * 100, 2)
+            },
+            "network_fragmentation": {
+                "raw_component_count": raw_comp["undirected_connected_components"],
+                "core_component_count": len(core_comps),
+                "raw_giant_component_ratio": raw_comp["giant_component_ratio"],
+                "core_giant_component_ratio": core_giant_ratio
+            },
+            "degree_distribution_normalization": {
+                "raw_max_degree": raw_deg.get("max", 0),
+                "core_max_degree": core_deg_stats.get("max", 0),
+                "raw_degree_std_dev": raw_deg.get("std_dev", 0),
+                "core_degree_std_dev": core_deg_stats.get("std_dev", 0),
+                "raw_degree_skewness": raw_deg.get("skewness", 0),
+                "core_degree_skewness": core_deg_stats.get("skewness", 0),
+                "skewness_reduction": round(raw_deg.get("skewness", 0) - core_deg_stats.get("skewness", 0), 3)
+            }
+        }
+        with open(out_dir / "separation_impact_report.json", "w") as f:
+            json.dump(separation_report, f, indent=2)
+
+        print(f"      -> Core Graph: {core_nodes} nodes, {core_edges} edges, {len(orphans)} orphans segregated")
+        print(f"      -> Modularity Jump: Q_raw={raw_mod:.4f} -> Q_core={core_modularity_q:.4f} (ΔQ={modularity_gain:+.4f})")
+        print(f"      -> Component Fragmentation: {raw_comp['undirected_connected_components']} -> {len(core_comps)} components")
+
+        return core_dg, core_ug, cluster_ug, orphans, hub_partitions, core_diagnostics, separation_report, attachable_leaves
+
+    # =========================================================================
+    # STAGE 3.3 - PATH 1: COMMUNITY PATH (Approach A - Leiden Modularity)
+    # =========================================================================
+    def _stage_3_3_community_path(
+        self, dg: nx.DiGraph, core_dg: nx.DiGraph, cluster_ug: nx.Graph,
+        global_hubs: List[str], hub_partitions: List[HubPartition], orphans: List[str],
+        attachable_leaves: Dict[str, str],
+        theme_sets: Dict[str, set], node_metrics: Dict[str, NodeMetrics], refined_triplets: List[dict]
+    ) -> TopologyResult:
+        print("   ==> [Stage 3.3 - Path 1] Executing Community Path (Leiden Modularity)...")
+        path_out_dir = Path("outputs/03_topology/03_paths/community")
+        path_out_dir.mkdir(parents=True, exist_ok=True)
+
+        communities = []
+        if algorithms and len(cluster_ug.nodes()) > 0:
+            try:
+                node_list = list(cluster_ug.nodes())
+                mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                g_int = nx.relabel_nodes(cluster_ug, mapping)
+                coms = algorithms.leiden(g_int)
+                for i, c_nodes in enumerate(coms.communities):
+                    orig_nodes = [rev_mapping[n] for n in c_nodes]
+                    communities.append(CommunityPartition(community_id=i, nodes=orig_nodes))
+            except Exception as e:
+                print(f"[Topology Community] Error in Leiden: {e}. Falling back to connected components...")
+                for i, comp in enumerate(nx.connected_components(cluster_ug)):
+                    communities.append(CommunityPartition(community_id=i, nodes=list(comp)))
+        else:
+            for i, comp in enumerate(nx.connected_components(cluster_ug)):
+                communities.append(CommunityPartition(community_id=i, nodes=list(comp)))
+
+        # Initial Core Community Map
+        comm_map = {}
+        for c in communities:
+            for n in c.nodes: comm_map[n] = c.community_id
+
+        # Baseline Core Modularity Q (computed on pure dense core)
+        final_q = 0.0
+        try:
+            if len(communities) >= 2:
+                final_q = round(float(nx.community.modularity(cluster_ug, [c.nodes for c in communities])), 4)
+        except Exception:
+            pass
+
+        # Pass 2: Two-Pass Leaf Reattachment
+        # Re-attach degree-1 pendant leaves to their unique core neighbor's community
+        comm_lookup = {c.community_id: c for c in communities}
+        reattached_leaf_count = 0
+        for u, v in attachable_leaves.items():
+            if v in comm_map:
+                target_cid = comm_map[v]
+                comm_lookup[target_cid].nodes.append(u)
+                comm_map[u] = target_cid
+                reattached_leaf_count += 1
+
+        # Post-Reattachment Community Diagnostics
+        comm_stats = []
+        for c in communities:
+            c.nodes = sorted(c.nodes)
+            c_nodes = c.nodes
+            n_nodes = len(c_nodes)
+            # Internal edge density in directed graph
+            c_sub = dg.subgraph(c_nodes)
+            n_edges = c_sub.number_of_edges()
+            internal_density = round(n_edges / (n_nodes * (n_nodes - 1)), 4) if n_nodes > 1 else 1.0
+            comm_stats.append({
+                "community_id": c.community_id,
+                "node_count": n_nodes,
+                "internal_edge_count": n_edges,
+                "internal_density": internal_density,
+                "exemplar_nodes": c_nodes[:5]
+            })
+
+        path_diagnostics = {
+            "algorithm": "Leiden Modularity Optimization (Two-Pass Leaf Reattachment)",
+            "resolution": self.leiden_res,
+            "dense_core_nodes": len(cluster_ug),
+            "pendant_leaves_reattached": reattached_leaf_count,
+            "total_partitioned_nodes": sum(len(c.nodes) for c in communities),
+            "unattached_orphans": len(orphans),
+            "total_communities": len(communities),
+            "final_core_modularity_q": final_q,
+            "community_size_stats": _calc_distribution_stats([len(c.nodes) for c in communities]),
+            "communities": comm_stats
+        }
+        with open(path_out_dir / "community_path_diagnostics.json", "w") as f:
+            json.dump(path_diagnostics, f, indent=2)
+
+        # Inter-Community Highway Matrix
+        highways = defaultdict(lambda: {"edge_count": 0, "predicates": defaultdict(int)})
+        for u, v, data in dg.edges(data=True):
+            if u in comm_map and v in comm_map:
+                cu, cv = comm_map[u], comm_map[v]
+                if cu != cv:
+                    highways[(cu, cv)]["edge_count"] += 1
+                    pred = data.get("predicate", "related_to")
+                    highways[(cu, cv)]["predicates"][pred] += 1
+
+        highways_list = []
+        for (cu, cv), h_data in sorted(highways.items(), key=lambda x: x[1]["edge_count"], reverse=True):
+            top_preds = sorted(h_data["predicates"].items(), key=lambda x: x[1], reverse=True)[:3]
+            highways_list.append({
+                "source_community": cu,
+                "target_community": cv,
+                "directed_edge_count": h_data["edge_count"],
+                "top_predicates": [{"predicate": p, "count": cnt} for p, cnt in top_preds]
+            })
+        with open(path_out_dir / "community_highways.json", "w") as f:
+            json.dump({
+                "total_highways": len(highways_list),
+                "highways": highways_list
+            }, f, indent=2)
+
+        theme_inheritance = self._calculate_theme_inheritance(theme_sets)
+        result = TopologyResult(
+            global_hubs=global_hubs,
+            hub_partitions=hub_partitions,
+            communities=communities,
+            structural_clusters=[],
+            orphans=orphans,
+            node_metrics=node_metrics,
+            theme_inheritance=theme_inheritance
+        )
+
+        with open(path_out_dir / "topology_partitions.json", "w") as f:
+            json.dump(result.model_dump(), f, indent=2)
+
+        TargetResolver.export_resolved_targets_json(
+            topology=result.model_dump(),
+            path_type="community",
+            refined_triplets=refined_triplets,
+            config=self.full_config,
+            output_dir=path_out_dir
+        )
+
+        print(f"      -> Discovered {len(communities)} communities (Modularity Q={final_q:.4f})")
+        print(f"      -> Mapped {len(highways_list)} inter-community workflow highways")
+
+        return result
+
+
+    # =========================================================================
+    # CORE METRIC HELPERS
+    # =========================================================================
+    def _build_node_metrics(
+        self,
+        dg: nx.DiGraph,
+        ug: nx.Graph,
+        global_hubs: List[str],
+        pagerank: dict,
+        degree_cent: dict,
+        betweenness: dict,
+        participation: dict,
+        mod_vitality: dict,
+        orphans: Optional[List[str]] = None
+    ) -> Dict[str, NodeMetrics]:
+        if orphans is None:
+            orphans_set = set(node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs)
+        else:
+            orphans_set = set(orphans)
         node_metrics = {}
         for node in dg.nodes():
             in_edges_list = [{"node": u, "predicate": data.get("predicate", "")} for u, v, data in dg.in_edges(node, data=True)]
@@ -240,7 +930,7 @@ class TopologyPipeline:
                 participation_coefficient=participation.get(node, 0.0),
                 modularity_vitality=mod_vitality.get(node, 0.0),
                 is_hub=(node in global_hubs),
-                is_orphan=(node in orphans),
+                is_orphan=(node in orphans_set),
                 in_edges=in_edges_list,
                 out_edges=out_edges_list
             )
@@ -261,7 +951,7 @@ class TopologyPipeline:
                     ))
         return theme_inheritance
 
-    def _partition_hub_network(self, dg: nx.DiGraph, global_hubs: List[str], path_type: str = "community") -> List[HubPartition]:
+    def _partition_hub_network(self, dg: nx.DiGraph, global_hubs: List[str]) -> List[HubPartition]:
         if not global_hubs:
             return []
             
@@ -305,617 +995,15 @@ class TopologyPipeline:
         return hub_partitions
 
     # =========================================================================
-    # PATH 1: COMMUNITY PATH (Approach A)
+    # BACKWARD-COMPATIBLE VISUALIZATION DELEGATES
+    # Delegated directly to TopologyVisualizer in src.topology.visualizer
     # =========================================================================
-    def execute_community_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
-        betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.comm_betw_percentile)))
-        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0.02])
-        
-        global_hubs = []
-        for node in dg.nodes():
-            p_val = participation.get(node, 0.0)
-            is_chokepoint = node in top_betweenness_nodes
-            if p_val >= self.comm_p_thresh or is_chokepoint:
-                global_hubs.append(node)
-                
-        orphans = [node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs]
-        node_metrics = self._build_node_metrics(dg, ug, global_hubs, pagerank, degree_cent, betweenness, participation, mod_vitality)
 
-        sub_graph = ug.copy()
-        sub_graph.remove_nodes_from(global_hubs)
-        sub_graph.remove_nodes_from(orphans)
-        
-        communities = []
-        if algorithms and len(sub_graph.nodes()) > 0:
-            try:
-                node_list = list(sub_graph.nodes())
-                mapping = {n: idx for idx, n in enumerate(node_list)}
-                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
-                int_sub_graph = nx.relabel_nodes(sub_graph, mapping)
-                coms = algorithms.leiden(int_sub_graph)
-                for i, community_nodes in enumerate(coms.communities):
-                    orig_nodes = [rev_mapping[n] for n in community_nodes]
-                    communities.append(CommunityPartition(community_id=i, nodes=orig_nodes))
-            except Exception as e:
-                print(f"[Topology Community] Error in Leiden clustering: {e}. Falling back to connected components...")
-                for i, comp in enumerate(nx.connected_components(sub_graph)):
-                    communities.append(CommunityPartition(community_id=i, nodes=list(comp)))
-        else:
-            for i, comp in enumerate(nx.connected_components(sub_graph)):
-                communities.append(CommunityPartition(community_id=i, nodes=list(comp)))
+    def _generate_stage_3_1_overview_visuals(self, *args, **kwargs):
+        return self.visualizer.generate_stage_3_1_overview_visuals(*args, **kwargs)
 
-        theme_inheritance = self._calculate_theme_inheritance(theme_sets)
-        hub_partitions = self._partition_hub_network(dg, global_hubs, path_type="community")
-        
-        result = TopologyResult(
-            global_hubs=global_hubs,
-            hub_partitions=hub_partitions,
-            communities=communities,
-            structural_clusters=[],
-            orphans=orphans,
-            node_metrics=node_metrics,
-            theme_inheritance=theme_inheritance
-        )
+    def _generate_stage_3_2_reduced_core_visuals(self, *args, **kwargs):
+        return self.visualizer.generate_stage_3_2_reduced_core_visuals(*args, **kwargs)
 
-        out_dir = Path("outputs/03_topology/community")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with open(out_dir / "topology_partitions.json", "w") as f:
-            json.dump(result.model_dump(), f, indent=2)
-
-        # Visualizations (Filtered ONLY for HTML output)
-        vis_dir = Path("outputs/visuals/community")
-        self._generate_path_visuals(dg, result, theme_sets, refined_triplets, vis_dir=vis_dir, path_type="community", top_betweenness=top_betweenness_nodes)
-        
-        return result
-
-    # =========================================================================
-    # PATH 2: EMBEDDING PATH (Approach B)
-    # =========================================================================
-    def execute_embedding_path(self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict], theme_sets: dict, pagerank: dict, degree_cent: dict, betweenness: dict, participation: dict, mod_vitality: dict) -> TopologyResult:
-        mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1])
-        negative_mod_v_hubs = set([n for n, val in mod_v_sorted[:5] if val < -0.005 and dg.degree(n) >= 3])
-        
-        global_hubs = []
-        for node in dg.nodes():
-            p_val = participation.get(node, 0.0)
-            is_mod_pruned = self.enable_mod_vitality and (node in negative_mod_v_hubs)
-            if p_val >= self.emb_p_thresh or is_mod_pruned:
-                global_hubs.append(node)
-                
-        orphans = [node for node in ug.nodes() if ug.degree(node) <= 1 and node not in global_hubs]
-        node_metrics = self._build_node_metrics(dg, ug, global_hubs, pagerank, degree_cent, betweenness, participation, mod_vitality)
-
-        sub_graph = ug.copy()
-        sub_graph.remove_nodes_from(global_hubs)
-        sub_graph.remove_nodes_from(orphans)
-
-        structural_clusters = []
-        node_embeddings = {}
-        if Node2Vec and KMeans and len(sub_graph.nodes()) >= 3:
-            try:
-                node2vec_model = Node2Vec(sub_graph, dimensions=self.n2v_dim, walk_length=self.n2v_walk_len, num_walks=self.n2v_num_walks, workers=1, quiet=True)
-                model = node2vec_model.fit(window=5, min_count=1, batch_words=4)
-                
-                node_list = list(sub_graph.nodes())
-                embeddings = np.array([model.wv[node] for node in node_list])
-                for node in node_list:
-                    node_embeddings[node] = [float(x) for x in model.wv[node]]
-                
-                max_clusters = min(self.max_structural_clusters, len(node_list) - 1)
-                best_k = 2
-                best_score = -1.0
-                
-                if max_clusters > 2:
-                    for k in range(2, max_clusters + 1):
-                        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto')
-                        labels = kmeans.fit_predict(embeddings)
-                        score = silhouette_score(embeddings, labels)
-                        if score > best_score:
-                            best_score = score
-                            best_k = k
-                    print(f"      -> Path 2 Optimal K found: {best_k} (Silhouette Score: {best_score:.3f})")
-                else:
-                    best_k = max_clusters
-                    
-                final_kmeans = KMeans(n_clusters=best_k, random_state=42, n_init='auto')
-                final_labels = final_kmeans.fit_predict(embeddings)
-                
-                cluster_dict = defaultdict(list)
-                for node, label in zip(node_list, final_labels):
-                    cluster_dict[label].append(node)
-                    
-                for c_id, nodes in cluster_dict.items():
-                    structural_clusters.append(StructuralCluster(cluster_id=int(c_id), nodes=nodes))
-            except Exception as e:
-                print(f"[Topology Embedding] Error in Node2Vec clustering: {e}")
-
-        theme_inheritance = self._calculate_theme_inheritance(theme_sets)
-        hub_partitions = self._partition_hub_network(dg, global_hubs, path_type="embedding")
-
-        result = TopologyResult(
-            global_hubs=global_hubs,
-            hub_partitions=hub_partitions,
-            communities=[],
-            structural_clusters=structural_clusters,
-            orphans=orphans,
-            node_metrics=node_metrics,
-            theme_inheritance=theme_inheritance
-        )
-
-        out_dir = Path("outputs/03_topology/embedding")
-        out_dir.mkdir(parents=True, exist_ok=True)
-        with open(out_dir / "topology_partitions.json", "w") as f:
-            json.dump(result.model_dump(), f, indent=2)
-
-        # Visualizations (Filtered ONLY for HTML output)
-        vis_dir = Path("outputs/visuals/embedding")
-        self._generate_path_visuals(dg, result, theme_sets, refined_triplets, vis_dir=vis_dir, path_type="embedding", node_embeddings=node_embeddings)
-
-        return result
-
-    # =========================================================================
-    # VISUALIZATION ENGINE FOR BOTH PATHS (HTML OUTPUTS ONLY)
-    # =========================================================================
-    def _generate_path_visuals(self, dg: nx.DiGraph, result: TopologyResult, theme_sets: dict, refined_triplets: List[dict], vis_dir: Path, path_type: str, node_embeddings: dict = None, top_betweenness: set = None):
-        vis_dir.mkdir(parents=True, exist_ok=True)
-        
-        path_label = "Path 1: Community Workflow Path" if path_type == "community" else "Path 2: Embedding Categorical Path"
-        
-        colors = [
-            "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
-            "#d62728", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94",
-            "#e377c2", "#f7b6d2", "#7f7f7f", "#c7c7c7", "#bcbd22", "#dbdb8d",
-            "#17becf", "#9edae5"
-        ]
-
-        # Apply Visual Degree Pruning (HTML ONLY)
-        candidate_nodes = set()
-        for node in dg.nodes():
-            metrics = result.node_metrics.get(node)
-            if not metrics: continue
-            is_hub = metrics.is_hub
-            deg = dg.degree(node)
-            if is_hub or self.min_node_degree == 0 or deg >= self.min_node_degree:
-                candidate_nodes.add(node)
-
-        # Apply Max Visual Nodes Cap if configured (Supports fraction e.g. 0.25 = top 25%, or hard integer e.g. 200)
-        if self.max_total_visual_nodes > 0:
-            if isinstance(self.max_total_visual_nodes, float) and self.max_total_visual_nodes <= 1.0:
-                target_max = max(10, int(len(dg) * self.max_total_visual_nodes))
-            else:
-                target_max = int(self.max_total_visual_nodes)
-                
-            if len(candidate_nodes) > target_max:
-                hubs_in_cand = set(result.global_hubs)
-                non_hubs = candidate_nodes - hubs_in_cand
-                sorted_non_hubs = sorted(non_hubs, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)
-                candidate_nodes = hubs_in_cand.union(set(sorted_non_hubs[:max(0, target_max - len(hubs_in_cand))]))
-
-        options_json = json.dumps({
-            "physics": {
-                "enabled": True,
-                "forceAtlas2Based": {
-                    "gravitationalConstant": -80,
-                    "centralGravity": 0.005,
-                    "springLength": 200,
-                    "springConstant": 0.08
-                },
-                "solver": "forceAtlas2Based",
-                "stabilization": {
-                    "enabled": True,
-                    "iterations": 150,
-                    "fit": True
-                }
-            }
-        })
-
-        # 1. Standard Topology Graph
-        net = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Standard Topology Graph")
-        for node in candidate_nodes:
-            metrics = result.node_metrics.get(node)
-            if not metrics: continue
-            is_hub = metrics.is_hub
-            is_orphan = metrics.is_orphan
-            color = "red" if is_hub else "gray" if is_orphan else "#aec7e8"
-            shape = "star" if is_hub else "dot"
-            size = (metrics.degree_centrality * 200) + (35 if is_hub else 15)
-            title = f"[{path_label}]\nRole: {'Hub' if is_hub else 'Orphan' if is_orphan else 'Entity'}\nDegree Cent: {metrics.degree_centrality:.4f}\nP_i: {metrics.participation_coefficient:.3f}"
-            net.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=2, shadow=True)
-
-        for u, v, data in dg.edges(data=True):
-            if u in net.get_nodes() and v in net.get_nodes():
-                net.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
-                
-        net.set_options(options_json)
-        net.save_graph(str(vis_dir / "interactive_topology_graph.html"))
-
-        # 2. Hubs & Ego Networks Visual
-        net_hubs = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Global Hubs & Ego Networks")
-        hubs_set = set(result.global_hubs)
-        hub_connected_nodes = set(hubs_set)
-        for u, v, data in dg.edges(data=True):
-            if u in hubs_set or v in hubs_set:
-                if u in candidate_nodes and v in candidate_nodes:
-                    hub_connected_nodes.add(u); hub_connected_nodes.add(v)
-                
-        for node in hub_connected_nodes:
-            metrics = result.node_metrics.get(node)
-            is_hub = node in hubs_set
-            centrality = metrics.degree_centrality if metrics else 0.0
-            color = "red" if is_hub else "#aec7e8"
-            shape = "star" if is_hub else "dot"
-            size = (centrality * 200) + (35 if is_hub else 15)
-            title = f"[{path_label}]\nRole: {'Global Hub' if is_hub else 'Spoke Node'}\nCentrality: {centrality:.4f}"
-            net_hubs.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=2, shadow=True)
-
-        for u, v, data in dg.edges(data=True):
-            if u in net_hubs.get_nodes() and v in net_hubs.get_nodes():
-                if u in hubs_set or v in hubs_set:
-                    is_inter_hub = u in hubs_set and v in hubs_set
-                    net_hubs.add_edge(u, v, title=data.get("predicate", ""), color="rgba(255, 100, 100, 0.8)" if is_inter_hub else "rgba(200,200,200,0.4)", width=3 if is_inter_hub else 1)
-        net_hubs.set_options(options_json)
-        net_hubs.save_graph(str(vis_dir / "interactive_hubs_ego_network.html"))
-
-        # PATH 1 SPECIFIC VISUALIZATIONS
-        if path_type == "community":
-            comm_map = {}
-            for comm in result.communities:
-                nodes_in_c = [n for n in comm.nodes if n in candidate_nodes]
-                if self.max_nodes_per_cluster > 0 and len(nodes_in_c) > self.max_nodes_per_cluster:
-                    nodes_in_c = sorted(nodes_in_c, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)[:self.max_nodes_per_cluster]
-                for n in nodes_in_c: comm_map[n] = comm.community_id
-
-            net_comm = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Communities Topology (Intra-Community Edges Only)")
-            for node in candidate_nodes:
-                if node not in comm_map: continue
-                comm_id = comm_map[node]
-                color = colors[comm_id % len(colors)]
-                net_comm.add_node(node, label=node, color=color, shape="dot", size=25, title=f"[{path_label}]\nCommunity: {comm_id}", borderWidth=2, shadow=True)
-            for u, v, data in dg.edges(data=True):
-                if u in net_comm.get_nodes() and v in net_comm.get_nodes() and comm_map.get(u) == comm_map.get(v):
-                    net_comm.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
-            net_comm.set_options(options_json)
-            net_comm.save_graph(str(vis_dir / "interactive_communities_only.html"))
-
-            # Workflow Narratives (Betweenness Chokepoints)
-            net_flow = Network(height="1000px", width="100%", directed=True, bgcolor="#111122", font_color="white", heading=f"[{path_label}] Workflow Narratives & Betweenness Chokepoints")
-            for node in candidate_nodes:
-                metrics = result.node_metrics.get(node)
-                if not metrics: continue
-                betw = metrics.betweenness_centrality
-                is_choke = top_betweenness and (node in top_betweenness)
-                color = "#ff4444" if is_choke else "#44aaff"
-                shape = "diamond" if is_choke else "dot"
-                size = 15 + (betw * 300)
-                title = f"[{path_label}]\nNode: {node}\nBetweenness Centrality: {betw:.4f}\nIs Narrative Chokepoint: {is_choke}"
-                net_flow.add_node(node, label=node, color=color, shape=shape, size=size, title=title, borderWidth=3 if is_choke else 1, shadow=True)
-            for u, v, data in dg.edges(data=True):
-                if u in net_flow.get_nodes() and v in net_flow.get_nodes():
-                    net_flow.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,255,0.4)", width=1)
-            net_flow.set_options(options_json)
-            net_flow.save_graph(str(vis_dir / "interactive_workflow_narratives.html"))
-
-            # Participation Dispersion Map
-            net_part = Network(height="1000px", width="100%", directed=True, bgcolor="#1a1a1a", font_color="white", heading=f"[{path_label}] Participation Coefficient (P_i) Dispersion Map")
-            for node in candidate_nodes:
-                metrics = result.node_metrics.get(node)
-                if not metrics: continue
-                p_val = metrics.participation_coefficient
-                color = f"hsl({int((1.0 - p_val) * 200)}, 80%, 50%)"
-                size = 15 + (p_val * 40)
-                title = f"[{path_label}]\nNode: {node}\nParticipation Coefficient (P_i): {p_val:.4f}\nCross-Community Hub: {p_val >= self.comm_p_thresh}"
-                net_part.add_node(node, label=node, color=color, shape="star" if p_val >= self.comm_p_thresh else "dot", size=size, title=title, borderWidth=2)
-            for u, v, data in dg.edges(data=True):
-                if u in net_part.get_nodes() and v in net_part.get_nodes():
-                    net_part.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
-            net_part.set_options(options_json)
-            net_part.save_graph(str(vis_dir / "interactive_participation_dispersion.html"))
-
-        # PATH 2 SPECIFIC VISUALIZATIONS
-        if path_type == "embedding":
-            struct_map = {}
-            for sc in result.structural_clusters:
-                nodes_in_sc = [n for n in sc.nodes if n in candidate_nodes]
-                if self.max_nodes_per_cluster > 0 and len(nodes_in_sc) > self.max_nodes_per_cluster:
-                    nodes_in_sc = sorted(nodes_in_sc, key=lambda n: result.node_metrics[n].degree_centrality, reverse=True)[:self.max_nodes_per_cluster]
-                for n in nodes_in_sc: struct_map[n] = sc.cluster_id
-
-            net_struct = Network(height="1000px", width="100%", directed=True, bgcolor="#222222", font_color="white", heading=f"[{path_label}] Structural Clusters Topology (Intra-Cluster Edges Only)")
-            for node in candidate_nodes:
-                if node not in struct_map: continue
-                sc_id = struct_map[node]
-                color = colors[sc_id % len(colors)]
-                net_struct.add_node(node, label=node, color=color, shape="dot", size=25, title=f"[{path_label}]\nStructural Cluster: {sc_id}", borderWidth=2, shadow=True)
-            for u, v, data in dg.edges(data=True):
-                if u in net_struct.get_nodes() and v in net_struct.get_nodes() and struct_map.get(u) == struct_map.get(v):
-                    net_struct.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
-            net_struct.set_options(options_json)
-            net_struct.save_graph(str(vis_dir / "interactive_structural_clusters_only.html"))
-
-            # Modularity Vitality Landscape
-            net_vit = Network(height="1000px", width="100%", directed=True, bgcolor="#1e1e1e", font_color="white", heading=f"[{path_label}] Modularity Vitality (Delta Q) Landscape")
-            for node in candidate_nodes:
-                metrics = result.node_metrics.get(node)
-                if not metrics: continue
-                q_val = metrics.modularity_vitality
-                color = "#ff4444" if q_val < 0 else "#44ff44" if q_val > 0 else "#aaaaaa"
-                title = f"[{path_label}]\nNode: {node}\nModularity Vitality (Delta Q): {q_val:.4f}\nPruned as Hub: {q_val < 0}"
-                net_vit.add_node(node, label=node, color=color, shape="box" if q_val < 0 else "dot", size=25, title=title, borderWidth=2)
-            for u, v, data in dg.edges(data=True):
-                if u in net_vit.get_nodes() and v in net_vit.get_nodes():
-                    net_vit.add_edge(u, v, title=data.get("predicate", ""), color="rgba(200,200,200,0.3)", width=1)
-            net_vit.set_options(options_json)
-            net_vit.save_graph(str(vis_dir / "interactive_modularity_vitality_landscape.html"))
-
-            # Node2Vec 2D Embeddings Scatter Plot
-            if node_embeddings and len(node_embeddings) >= 2:
-                try:
-                    from sklearn.decomposition import PCA
-                    nodes_list = [n for n in node_embeddings.keys() if n in candidate_nodes]
-                    if len(nodes_list) >= 2:
-                        embeddings_matrix = np.array([node_embeddings[n] for n in nodes_list])
-                        pca = PCA(n_components=2)
-                        coords = pca.fit_transform(embeddings_matrix)
-                        
-                        node_clusters = {}
-                        for sc in result.structural_clusters:
-                            for n in sc.nodes: node_clusters[n] = sc.cluster_id
-                        
-                        plotly_data = []
-                        for idx, name in enumerate(nodes_list):
-                            c_id = node_clusters.get(name, -1)
-                            plotly_data.append({"name": name, "x": float(coords[idx, 0]), "y": float(coords[idx, 1]), "cluster": int(c_id)})
-                        
-                        plotly_json = json.dumps(plotly_data)
-                        html_content = f"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>[{path_label}] Node2Vec 2D Embedding Space</title><script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script><style>body {{ background-color: #222222; color: #ffffff; font-family: sans-serif; margin: 0; padding: 20px; }} #plot {{ width: 100%; height: 800px; }}</style></head><body><h1>[{path_label}] Node2Vec 2D Embedding Space</h1><div id="plot"></div><script>const data = {plotly_json}; const tracesMap = {{}}; data.forEach(item => {{ const c = item.cluster; if (!tracesMap[c]) {{ tracesMap[c] = {{ x: [], y: [], text: [], mode: 'markers+text', textposition: 'top center', name: 'Cluster ' + c, type: 'scatter', marker: {{ size: 14, opacity: 0.8 }} }}; }} tracesMap[c].x.push(item.x); tracesMap[c].y.push(item.y); tracesMap[c].text.push(item.name); }}); Plotly.newPlot('plot', Object.values(tracesMap), {{ paper_bgcolor: '#222222', plot_bgcolor: '#222222', xaxis: {{ gridcolor: '#444' }}, yaxis: {{ gridcolor: '#444' }} }});</script></body></html>"""
-                        with open(vis_dir / "interactive_node2vec_embeddings.html", "w") as f:
-                            f.write(html_content)
-                except Exception as e:
-                    print(f"Warning: Failed to generate Node2Vec Scatter Plot: {e}")
-
-        # NEW VISUALIZATIONS:
-        # A. Stage 4 LLM Payload Gallery (Isolated Cluster Cards)
-        self._generate_llm_payload_gallery(dg, result, refined_triplets, vis_dir, path_label, path_type)
-        
-        # B. Collapsed Module Architecture Diagram
-        self._generate_collapsed_modules_graph(dg, result, vis_dir, path_label, path_type)
-
-    def _generate_llm_payload_gallery(self, dg: nx.DiGraph, result: TopologyResult, refined_triplets: List[dict], vis_dir: Path, path_label: str, path_type: str):
-        agent_name = "leiden_schema_agent" if path_type == "community" else "node2vec_schema_agent"
-        
-        synth_cfg = self.full_config.get('synthesis', {})
-        min_cluster_size = synth_cfg.get('min_cluster_size', 32)
-        max_hub_targets = synth_cfg.get('max_hub_targets', 4)
-        max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1000)
-        
-        # Resolve targets via TargetResolver (resolver.py)
-        targets, _ = TargetResolver.qualify_and_resolve_targets(result.model_dump(), path_type, self.full_config)
-            
-        payload_data = []
-        for i, target in enumerate(targets, start=1):
-            target_type = target["type"]
-            c_id = target["id"]
-            target_nodes = set(target["nodes"])
-            
-            # Filter and cap triplets via TargetResolver (resolver.py)
-            capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, result.model_dump(), max_triplets_cap)
-            
-            associated_triplets = [
-                {
-                    "subject": str(t.get('subject', '')).lower().strip(),
-                    "predicate": t.get('predicate', ''),
-                    "object": str(t.get('object', '')).lower().strip()
-                }
-                for t in capped_triplets
-            ]
-            
-            # Connected hubs (for display / context)
-            if target_type == "hub":
-                connected_hubs = []
-            else:
-                connected_hubs = [h for h in result.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in target["nodes"])]
-                
-            # Define output schema filename matching synthesizer.py naming style
-            filename_suffix = f"{path_type}_{c_id}" if target_type != "hub" else f"hub_{c_id}"
-            filename = f"{i:02d}_{filename_suffix}.py"
-            
-            payload_data.append({
-                "id": c_id,
-                "type": target_type,
-                "module_name": filename,
-                "nodes": list(target_nodes),
-                "triplet_count": len(associated_triplets),
-                "triplets": associated_triplets,
-                "sample_triplets": associated_triplets[:15],
-                "connected_hubs": connected_hubs
-            })
-            
-        payload_json = json.dumps(payload_data)
-        hubs_json = json.dumps(result.global_hubs)
-        
-        html_content = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>[{path_label}] Stage 4 LLM Payload Gallery</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js"></script>
-    <style>
-        body {{ background-color: #121212; color: #ffffff; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; }}
-        h1 {{ margin-top: 0; color: #44aaff; font-size: 24px; }}
-        .subtitle {{ color: #aaaaaa; margin-bottom: 20px; font-size: 14px; }}
-        .container {{ display: flex; gap: 20px; height: 800px; }}
-        .sidebar {{ width: 350px; background-color: #1e1e1e; border: 1px solid #333; border-radius: 8px; padding: 15px; overflow-y: auto; }}
-        .canvas-container {{ flex: 1; background-color: #1e1e1e; border: 1px solid #333; border-radius: 8px; position: relative; }}
-        #network {{ width: 100%; height: 100%; }}
-        select {{ width: 100%; padding: 10px; background-color: #2a2a2a; color: white; border: 1px solid #444; border-radius: 4px; font-size: 15px; margin-bottom: 15px; cursor: pointer; }}
-        .badge {{ display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 5px; background: #333; color: #44aaff; }}
-        .card {{ background: #262626; padding: 12px; border-radius: 6px; margin-bottom: 10px; border-left: 4px solid #44aaff; }}
-        .triplet-item {{ font-size: 12px; color: #cccccc; padding: 4px 0; border-bottom: 1px solid #333; }}
-        code {{ color: #ff9933; font-family: monospace; }}
-    </style>
-</head>
-<body>
-    <h1>[{path_label}] Stage 4 LLM Payload Gallery</h1>
-    <div class="subtitle">
-        Visualizing data sent to LLM for Stage 4 Pydantic schema synthesis.
-        Current Configuration: <code>min_cluster_size: {min_cluster_size}</code> | <code>max_hub_targets: {max_hub_targets}</code> | <code>max_triplets_per_target: {max_triplets_cap}</code>.
-    </div>
-    
-    <div class="container">
-        <div class="sidebar">
-            <label for="clusterSelect"><b>Select Partition Payload:</b></label>
-            <select id="clusterSelect" onchange="loadCluster(this.value)"></select>
-            
-            <div id="payloadDetails"></div>
-        </div>
-        <div class="canvas-container">
-            <div id="network"></div>
-        </div>
-    </div>
-
-    <script>
-        const payloads = {payload_json};
-        const globalHubs = new Set({hubs_json});
-        const selectEl = document.getElementById('clusterSelect');
-        const detailsEl = document.getElementById('payloadDetails');
-        let network = null;
-
-        const defaultOpt = document.createElement('option');
-        defaultOpt.value = "";
-        defaultOpt.textContent = "-- Select a Partition Payload --";
-        defaultOpt.disabled = true;
-        defaultOpt.selected = true;
-        selectEl.appendChild(defaultOpt);
-
-        payloads.forEach((p, idx) => {{
-            const opt = document.createElement('option');
-            opt.value = idx;
-            const label = p.type === 'hub' ? `Global Hub Target: ${{p.id}}` : `${{p.type === 'community' ? 'Community' : 'Structural Cluster'}} ${{p.id}} (${{p.nodes.length}} entities)`;
-            opt.textContent = label;
-            selectEl.appendChild(opt);
-        }});
-
-        function loadCluster(idx) {{
-            if (idx === "" || idx === null || idx === undefined) return;
-            const payload = payloads[idx];
-            
-            // Render Details Panel
-            detailsEl.innerHTML = `
-                <div class="card" style="border-left: 4px solid ${{payload.type === 'hub' ? '#ff4444' : '#44aaff'}};">
-                    <span class="badge" style="background: ${{payload.type === 'hub' ? '#ff4444' : '#44aaff'}}; color: white;">Target Type</span> <b>${{payload.type.toUpperCase()}}</b><br>
-                    <span class="badge">LLM Agent</span> <code>{agent_name}</code><br>
-                    <span class="badge">Output Schema</span> <code>${{payload.module_name}}</code><br>
-                    <span class="badge">Primary Entities</span> <b>${{payload.nodes.length}}</b><br>
-                    <span class="badge">Total Triplets</span> <b>${{payload.triplet_count}} / {max_triplets_cap} (cap)</b>
-                </div>
-                ${{payload.type !== 'hub' && payload.connected_hubs.length > 0 ? `
-                <h4>Connected Hub Anchors:</h4>
-                <p>${{payload.connected_hubs.map(h => `<span class="badge" style="color:#ff5555; background: #2b1f1f; border: 1px solid #ff4444;">${{h}}</span>`).join(' ')}}</p>
-                ` : ''}}
-                <h4>Incident Triplets Sent to LLM:</h4>
-                <div style="max-height: 400px; overflow-y: auto; border: 1px solid #333; padding: 5px; border-radius: 4px; background: #161616;">
-                    ${{payload.triplets.length > 0 ? payload.sample_triplets.map(t => `<div class="triplet-item"><b>${{t.subject}}</b> <i>--[${{t.predicate}}]--></i> <b>${{t.object}}</b></div>`).join('') : '<i>No triplets found for this target.</i>'}}
-                    ${{payload.triplet_count > 15 ? `<div style="text-align: center; color: #888; font-size: 11px; padding-top: 5px;">... showing first 15 of ${{payload.triplet_count}} triplets ...</div>` : ''}}
-                </div>
-            `;
-
-            // Draw Subgraph
-            const nodes = [];
-            const edges = [];
-            const addedNodes = new Set();
-
-            // 1. Add all nodes involved in the triplets to guarantee everything is visualized
-            payload.triplets.forEach(t => {{
-                [t.subject, t.object].forEach(n => {{
-                    if (!addedNodes.has(n)) {{
-                        addedNodes.add(n);
-                        
-                        const isPrimary = payload.nodes.includes(n);
-                        const isHub = globalHubs.has(n);
-                        
-                        // Set colors and shapes based on roles
-                        let color = '#44aaff'; // default: target spoke node
-                        let shape = 'dot';
-                        let size = 25;
-                        let title = 'Entity';
-                        
-                        if (isHub) {{
-                            shape = 'star';
-                            size = 35;
-                            color = isPrimary ? '#ff4444' : '#cc3333'; // bright red if primary target, darker red if context hub
-                            title = isPrimary ? 'Primary Target Hub' : 'Context Hub Anchor';
-                        }} else if (!isPrimary) {{
-                            color = '#77ccff'; // lighter blue for context/neighbor nodes
-                            size = 20;
-                            title = 'Neighbor Entity (Context)';
-                        }} else {{
-                            title = 'Primary Target Entity';
-                        }}
-                        
-                        nodes.push({{ id: n, label: n, color: color, shape: shape, size: size, title: title }});
-                    }}
-                }});
-            }});
-
-            // 2. Fallback: Add primary target nodes if no triplets were returned
-            payload.nodes.forEach(n => {{
-                if (!addedNodes.has(n)) {{
-                    addedNodes.add(n);
-                    const isHub = globalHubs.has(n);
-                    const color = isHub ? '#ff4444' : '#44aaff';
-                    const shape = isHub ? 'star' : 'dot';
-                    const size = isHub ? 35 : 25;
-                    nodes.push({{ id: n, label: n, color: color, shape: shape, size: size, title: 'Primary Target Entity' }});
-                }}
-            }});
-
-            // 3. Add edges from triplets
-            payload.triplets.forEach(t => {{
-                edges.push({{ from: t.subject, to: t.object, title: t.predicate, arrows: 'to', color: 'rgba(200,200,200,0.5)' }});
-            }});
-
-            const container = document.getElementById('network');
-            const data = {{ nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }};
-            const options = {{ physics: {{ enabled: true, solver: 'forceAtlas2Based' }} }};
-            
-            if (network) network.destroy();
-            network = new vis.Network(container, data, options);
-        }}
-
-        detailsEl.innerHTML = '<div style="color: #888888; font-style: italic; padding: 20px 0;">Select a partition payload from the dropdown above to view its discrete subgraph and LLM metadata.</div>';
-    </script>
-</body>
-</html>"""
-        with open(vis_dir / "interactive_llm_payload_gallery.html", "w") as f:
-            f.write(html_content)
-
-    def _generate_collapsed_modules_graph(self, dg: nx.DiGraph, result: TopologyResult, vis_dir: Path, path_label: str, path_type: str):
-        clusters = result.communities if path_type == "community" else result.structural_clusters
-        cluster_label = "Community" if path_type == "community" else "Cluster"
-        
-        net = Network(height="1000px", width="100%", directed=True, bgcolor="#181824", font_color="white", heading=f"[{path_label}] Collapsed Module Architecture Diagram")
-        
-        # Add Global Hubs as Star Nodes
-        hubs_set = set(result.global_hubs)
-        for h in hubs_set:
-            metrics = result.node_metrics.get(h)
-            cent = metrics.degree_centrality if metrics else 0.0
-            net.add_node(h, label=f"HUB: {h}", color="#ff4444", shape="star", size=40, title=f"Global Hub\nCentrality: {cent:.4f}", borderWidth=2, shadow=True)
-            
-        # Add Clusters as Collapsed Box Nodes
-        for cluster in clusters:
-            c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
-            nodes = cluster.nodes
-            mod_id = f"Module_{c_id}"
-            label = f"{cluster_label} {c_id}\n({len(nodes)} entities)"
-            title = f"{cluster_label} {c_id} Members:\n" + "\n".join(nodes[:10]) + (f"\n... and {len(nodes)-10} more" if len(nodes) > 10 else "")
-            net.add_node(mod_id, label=label, color="#44aaff", shape="box", size=30, title=title, borderWidth=2, shadow=True)
-            
-            # Connect Hubs to Modules
-            for h in hubs_set:
-                if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes):
-                    net.add_edge(h, mod_id, color="rgba(255, 100, 100, 0.7)", width=2)
-                    
-        net.set_options("""{"physics": {"forceAtlas2Based": {"gravitationalConstant": -120, "centralGravity": 0.01, "springLength": 250}, "solver": "forceAtlas2Based"}}""")
-        net.save_graph(str(vis_dir / "interactive_collapsed_modules.html"))
+    def _generate_stage_3_3_community_visuals(self, *args, **kwargs):
+        return self.visualizer.generate_stage_3_3_community_visuals(*args, **kwargs)
