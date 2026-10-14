@@ -26,13 +26,11 @@ Features:
 """
 
 import json
-import math
-import sys
 import time
 import re
 from pathlib import Path
-from collections import defaultdict
-from typing import Dict, Any, List, Optional, Tuple
+from collections import defaultdict, Counter
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 from sklearn.decomposition import PCA
@@ -85,11 +83,28 @@ class Galaxy3DVisualizer:
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / "galaxy_3d_data.json"
 
+        g_cfg = self.config.get("topology", {}).get("galaxy_3d", {}) if "topology" in self.config else self.config.get("galaxy_3d", {})
+        desired_debiased = bool(g_cfg.get("debias_embeddings", True))
+        desired_weighting = str(g_cfg.get("centroid_weighting", "core_tiers"))
+        desired_hull = int(g_cfg.get("density_hull_percentile", 75))
+
         if not force_recompute and cache_file.exists():
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                if "concepts" in data and len(data["concepts"]) > 100:
+                cached_meta = data.get("meta", {})
+                cached_debiased = cached_meta.get("debiased")
+                cached_weighting = cached_meta.get("centroid_weighting")
+                cached_hull = cached_meta.get("density_hull_percentile")
+                has_themes = any("top_themes" in c for c in data.get("communities", []))
+                if (
+                    "concepts" in data
+                    and len(data["concepts"]) > 100
+                    and cached_debiased == desired_debiased
+                    and cached_weighting == desired_weighting
+                    and cached_hull == desired_hull
+                    and has_themes
+                ):
                     print(f"   -> [3D Galaxy] Loaded cached 3D projections from: {cache_file.name}")
                     return data
             except Exception as e:
@@ -176,6 +191,49 @@ class Galaxy3DVisualizer:
             except Exception:
                 pass
 
+        # Load theme associations per community from resolved targets or refined triplets
+        community_theme_counts: Dict[int, Counter] = defaultdict(Counter)
+        resolved_targets_json = comm_dir / "resolved_community_targets.json"
+        refined_triplets_json = refinement_dir / "refined_triplets.json"
+
+        if resolved_targets_json.exists():
+            try:
+                with open(resolved_targets_json, "r", encoding="utf-8") as rf:
+                    res_data = json.load(rf)
+                for tgt in res_data.get("targets", []):
+                    t_cid = int(tgt.get("target_id", 0))
+                    for tr in tgt.get("triplets", []):
+                        th = tr.get("theme_association")
+                        if th:
+                            community_theme_counts[t_cid][th] += 1
+            except Exception as e:
+                print(f"   -> [Warning] Failed to extract themes from resolved targets: {e}")
+
+        if not community_theme_counts and refined_triplets_json.exists():
+            try:
+                with open(refined_triplets_json, "r", encoding="utf-8") as rf:
+                    r_triplets = json.load(rf)
+                node_to_cid = {}
+                for c_info in tiers_data:
+                    actual_cid = int(c_info.get("community_id", 0))
+                    for tier_k in ["tier_1_nucleus", "tier_2_mechanics", "tier_3_modifiers"]:
+                        for item in c_info.get(tier_k, []):
+                            ent = str(item.get("entity", "")).lower().strip()
+                            if ent:
+                                node_to_cid[ent] = actual_cid
+                for tr in r_triplets:
+                    th = tr.get("theme_association")
+                    if not th:
+                        continue
+                    s = str(tr.get("subject", "")).lower().strip()
+                    o = str(tr.get("object", "")).lower().strip()
+                    if s in node_to_cid:
+                        community_theme_counts[node_to_cid[s]][th] += 1
+                    elif o in node_to_cid:
+                        community_theme_counts[node_to_cid[o]][th] += 1
+            except Exception as e:
+                pass
+
         # 3. Collect Concepts and Vectors
         concepts_payload: List[Dict[str, Any]] = []
         concept_vectors_list: List[np.ndarray] = []
@@ -237,10 +295,31 @@ class Galaxy3DVisualizer:
         all_vecs = np.array(concept_vectors_list)
         print(f"   -> [3D Galaxy] Processing {total_nodes} nodes across {len(community_meta)} communities.")
 
+        # 3.5 In-Memory Concept Vector De-biasing (Background Subtraction)
+        # Strips out anisotropic background components (corpus mean and dominant principal component)
+        # to maximize inter-cluster geometric separation in PCA and UMAP manifolds.
+        g_cfg = self.config.get("topology", {}).get("galaxy_3d", {}) if "topology" in self.config else self.config.get("galaxy_3d", {})
+        debias_enabled = g_cfg.get("debias_embeddings", True)
+        hull_percentile = g_cfg.get("density_hull_percentile", 75)
+
+        if debias_enabled:
+            t0 = time.time()
+            mean_vec = np.mean(all_vecs, axis=0)
+            centered_vecs = all_vecs - mean_vec
+            pca_bg = PCA(n_components=2, random_state=42)
+            pca_bg.fit(centered_vecs)
+            u_bg = pca_bg.components_[:1]
+            clean_vecs = centered_vecs - (centered_vecs @ u_bg.T) @ u_bg
+            norm_clean = np.linalg.norm(clean_vecs, axis=1, keepdims=True)
+            proj_vecs = clean_vecs / np.maximum(norm_clean, 1e-9)
+            print(f"   -> [3D Galaxy] Applied All-but-the-Top vector de-biasing in {time.time() - t0:.2f}s")
+        else:
+            proj_vecs = all_vecs
+
         # 4. Dimensionality Reduction: PCA 3D
         t0 = time.time()
         pca_3d = PCA(n_components=3, random_state=42)
-        coords_pca_raw = pca_3d.fit_transform(all_vecs)
+        coords_pca_raw = pca_3d.fit_transform(proj_vecs)
         pca_var = float(np.sum(pca_3d.explained_variance_ratio_))
         scale_pca = 100.0 / max(float(np.max(np.abs(coords_pca_raw))), 1e-6)
         coords_pca = coords_pca_raw * scale_pca
@@ -258,7 +337,7 @@ class Galaxy3DVisualizer:
                 random_state=42,
                 verbose=False
             )
-            coords_umap_raw = umap_3d.fit_transform(all_vecs)
+            coords_umap_raw = umap_3d.fit_transform(proj_vecs)
             coords_umap_centered = coords_umap_raw - np.mean(coords_umap_raw, axis=0)
             scale_umap = 100.0 / max(float(np.max(np.abs(coords_umap_centered))), 1e-6)
             coords_umap = coords_umap_centered * scale_umap
@@ -280,27 +359,58 @@ class Galaxy3DVisualizer:
                 round(float(coords_umap[idx, 2]), 2)
             ]
 
-        # 6. Compute 3D Centroids and Bounding Radii
+        # 6. Compute 3D Centroids (Tier-Weighted) and Bounding Radii
         centroids_dict: Dict[int, Dict[str, Any]] = {}
         for cid, indices in community_concept_indices.items():
             if not indices:
                 continue
-            sub_pca = coords_pca[indices]
-            sub_umap = coords_umap[indices]
 
-            c_pca = np.mean(sub_pca, axis=0)
-            c_umap = np.mean(sub_umap, axis=0)
+            weighting_mode = g_cfg.get("centroid_weighting", "core_tiers")
+            if weighting_mode == "tier_1_only":
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
+                if not core_indices:
+                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+            elif weighting_mode == "uniform":
+                core_indices = indices
+                core_weights = np.ones(len(core_indices)) / len(core_indices)
+            else:  # "core_tiers" (default)
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
 
-            # Radii (85th percentile distance to center to form tight cohesive shells)
-            dists_pca = np.linalg.norm(sub_pca - c_pca, axis=1)
-            dists_umap = np.linalg.norm(sub_umap - c_umap, axis=1)
+            core_sub_pca = coords_pca[core_indices]
+            core_sub_umap = coords_umap[core_indices]
 
-            rad_pca = float(np.percentile(dists_pca, 85)) if len(dists_pca) > 0 else 10.0
-            rad_umap = float(np.percentile(dists_umap, 85)) if len(dists_umap) > 0 else 10.0
+            c_pca = np.average(core_sub_pca, axis=0, weights=core_weights)
+            c_umap = np.average(core_sub_umap, axis=0, weights=core_weights)
+
+            # Radii: Tight cohesive shells calculated on core community members
+            dists_pca = np.linalg.norm(core_sub_pca - c_pca, axis=1)
+            dists_umap = np.linalg.norm(core_sub_umap - c_umap, axis=1)
+
+            rad_pca = float(np.percentile(dists_pca, hull_percentile)) if len(dists_pca) > 0 else 10.0
+            rad_umap = float(np.percentile(dists_umap, hull_percentile)) if len(dists_umap) > 0 else 10.0
 
             meta = community_meta[cid]
             # Form clean thematic headline from top T1
             t1_theme = ", ".join(meta["top_t1"][:3]) if meta["top_t1"] else meta["label"]
+
+            theme_counter = community_theme_counts.get(cid, Counter())
+            total_triplets = sum(theme_counter.values())
+            top_themes = [
+                {
+                    "theme": name,
+                    "count": count,
+                    "percentage": round((count / total_triplets * 100.0), 1) if total_triplets > 0 else 0.0
+                }
+                for name, count in theme_counter.most_common(6)
+            ]
 
             centroids_dict[cid] = {
                 "community_id": cid,
@@ -308,7 +418,9 @@ class Galaxy3DVisualizer:
                 "headline_theme": t1_theme,
                 "color": meta["color"],
                 "total_concepts": len(indices),
+                "total_triplets": total_triplets,
                 "tier_counts": meta["tier_counts"],
+                "top_themes": top_themes,
                 "pca_3d": [round(float(c_pca[0]), 2), round(float(c_pca[1]), 2), round(float(c_pca[2]), 2)],
                 "umap_3d": [round(float(c_umap[0]), 2), round(float(c_umap[1]), 2), round(float(c_umap[2]), 2)],
                 "radius_pca": round(max(4.0, rad_pca), 2),
@@ -316,11 +428,29 @@ class Galaxy3DVisualizer:
                 "exemplar_concepts": meta["top_t1"]
             }
 
-        # 7. Detect Cross-Border "Semantic Refugees" in 3D Embedding Space
-        # Compute Fréchet normalized vectors for each community to detect true high-d refugees
+        # 7. Detect Cross-Border "Semantic Refugees" in De-Biased Embedding Space
+        # Compute Fréchet normalized vectors for each community using de-biased core vectors
         high_d_centroids = {}
         for cid, indices in community_concept_indices.items():
-            c_vec = np.mean(all_vecs[indices], axis=0)
+            if weighting_mode == "tier_1_only":
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
+                if not core_indices:
+                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+            elif weighting_mode == "uniform":
+                core_indices = indices
+                core_weights = np.ones(len(core_indices)) / len(core_indices)
+            else:  # "core_tiers" (default)
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+
+            c_vec = np.average(proj_vecs[core_indices], axis=0, weights=core_weights)
             c_vec /= max(1e-9, np.linalg.norm(c_vec))
             high_d_centroids[cid] = c_vec
 
@@ -334,8 +464,8 @@ class Galaxy3DVisualizer:
             if not indices:
                 continue
             curr_c_idx = cids_list.index(cid)
-            sub_vecs = all_vecs[indices]
-            # Distances to all centroids: 1 - cosine
+            sub_vecs = proj_vecs[indices]
+            # Distances to all centroids: 1 - cosine in de-biased space
             dists = 1.0 - np.clip(sub_vecs @ centroid_matrix.T, -1.0, 1.0)
             own_dists = dists[:, curr_c_idx]
             min_other_indices = np.argmin(dists, axis=1)
@@ -343,7 +473,7 @@ class Galaxy3DVisualizer:
             for local_i, global_idx in enumerate(indices):
                 best_c_idx = min_other_indices[local_i]
                 target_cid = cids_list[best_c_idx]
-                if target_cid != cid and dists[local_i, best_c_idx] < own_dists[local_i] - 0.04:
+                if target_cid != cid and dists[local_i, best_c_idx] < own_dists[local_i] - 0.05:
                     pull_delta = float(own_dists[local_i] - dists[local_i, best_c_idx])
                     concepts_payload[global_idx]["is_refugee"] = True
                     concepts_payload[global_idx]["refugee_target_id"] = target_cid
@@ -380,6 +510,9 @@ class Galaxy3DVisualizer:
                 "total_highways": len(highways_payload),
                 "total_refugees": total_refugees,
                 "pca_explained_variance_pct": round(pca_var * 100.0, 2),
+                "debiased": debias_enabled,
+                "centroid_weighting": weighting_mode,
+                "density_hull_percentile": hull_percentile,
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
             },
             "communities": list(centroids_dict.values()),
@@ -402,13 +535,14 @@ class Galaxy3DVisualizer:
         self,
         base_dir: Path = Path("outputs/03_topology"),
         refinement_dir: Path = Path("outputs/02_refinement"),
-        output_path: Optional[Path] = None
+        output_path: Optional[Path] = None,
+        force_recompute: bool = False
     ) -> Path:
         """
         Computes 3D projections and generates a standalone, high-performance
         Three.js WebGL 3D Galaxy visualization HTML file.
         """
-        galaxy_data = self.compute_3d_galaxy_data(base_dir=base_dir, refinement_dir=refinement_dir)
+        galaxy_data = self.compute_3d_galaxy_data(base_dir=base_dir, refinement_dir=refinement_dir, force_recompute=force_recompute)
 
         if output_path is None:
             output_path = base_dir / "03_paths" / "community" / "cluster_3d_galaxy_visualization.html"
@@ -952,6 +1086,63 @@ class Galaxy3DVisualizer:
       gap: 4px;
     }}
 
+    /* Cluster Extracted Theme Breakdown */
+    .theme-breakdown-card {{
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--bg-card-border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      max-height: 190px;
+      overflow-y: auto;
+    }}
+
+    .theme-item {{
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }}
+
+    .theme-item-header {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 11px;
+    }}
+
+    .theme-name {{
+      color: #e2e8f0;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 175px;
+    }}
+
+    .theme-stat {{
+      color: var(--accent-cyan);
+      font-weight: 700;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      white-space: nowrap;
+    }}
+
+    .theme-bar-bg {{
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 2px;
+      overflow: hidden;
+    }}
+
+    .theme-bar-fill {{
+      height: 100%;
+      border-radius: 2px;
+      transition: width 0.4s ease;
+    }}
+
     /* Floating Tooltip */
     #hover-tooltip {{
       position: absolute;
@@ -1110,6 +1301,17 @@ class Galaxy3DVisualizer:
     <div>
       <span style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted); display:block; margin-bottom:6px;">Exemplar Source Grounding</span>
       <div id="inspector-quote" class="quote-box">Hover or click a node in the 3D space to inspect its empirical evidence quote.</div>
+    </div>
+
+    <!-- Cluster Original Extracted Themes -->
+    <div id="themes-section">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+        <span style="font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-muted);">Cluster Extracted Themes</span>
+        <span id="themes-total-count" style="font-size:10px; color:var(--accent-cyan); font-weight:700; font-family:'JetBrains Mono',monospace;">--</span>
+      </div>
+      <div id="inspector-themes" class="theme-breakdown-card">
+        <span style="font-size:11px; color:var(--text-muted); font-style:italic;">Select a cluster to inspect its original theme distribution.</span>
+      </div>
     </div>
   </aside>
 
@@ -1594,6 +1796,33 @@ class Galaxy3DVisualizer:
         }} else {{
           refAlert.style.display = 'none';
         }}
+      }}
+
+      // Populate Original Extracted Themes
+      const themesEl = document.getElementById('inspector-themes');
+      const themesCountEl = document.getElementById('themes-total-count');
+      const targetCid = (data.community_id !== undefined && data.community_id !== null) ? data.community_id : selectedCommunityId;
+      const cMeta = (targetCid !== null && targetCid !== undefined) ? communityMap[targetCid] : null;
+
+      if (cMeta && cMeta.top_themes && cMeta.top_themes.length > 0) {{
+        if (themesCountEl) {{
+          themesCountEl.innerText = `${{cMeta.total_triplets || 0}} Triplets`;
+        }}
+        const clusterColor = cMeta.color || 'var(--accent-cyan)';
+        themesEl.innerHTML = cMeta.top_themes.map(th => `
+          <div class="theme-item" title="${{th.theme}}: ${{th.count}} triplets (${{th.percentage}}%)">
+            <div class="theme-item-header">
+              <span class="theme-name">${{th.theme}}</span>
+              <span class="theme-stat">${{th.count}} <span style="color:var(--text-muted); font-weight:400; font-size:9px;">(${{th.percentage}}%)</span></span>
+            </div>
+            <div class="theme-bar-bg">
+              <div class="theme-bar-fill" style="width: ${{Math.min(100, th.percentage)}}%; background: ${{clusterColor}};"></div>
+            </div>
+          </div>
+        `).join('');
+      }} else {{
+        if (themesCountEl) themesCountEl.innerText = '--';
+        themesEl.innerHTML = `<span style="font-size:11px; color:var(--text-muted); font-style:italic;">No extracted themes available for this cluster.</span>`;
       }}
     }}
 

@@ -2301,7 +2301,8 @@ class ClusterEmbeddingVisualizer:
         return visualizer.generate_3d_galaxy_dashboard(
             base_dir=base_dir,
             refinement_dir=refinement_dir,
-            output_path=output_path
+            output_path=output_path,
+            force_recompute=force_recompute
         )
 
 

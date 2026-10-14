@@ -77,3 +77,36 @@ topology:
     # Human Evaluation & Reporting Exports
     export_tier_csv: true        # Exports human-readable spreadsheet (community_architectural_tiers.csv)
     export_diagnostics: true     # Exports summary stats (tier_partitioning_diagnostics.json)
+
+  # =========================================================================
+  # 3D GALAXY VISUALIZATION & EMBEDDING DE-BIASING
+  # =========================================================================
+  # Governs the 3D hyper-space galaxy projection (UMAP-3D & PCA-3D), cluster centroid
+  # positioning, density hull boundaries, and cross-border refugee detection.
+  galaxy_3d:
+    # Vector de-biasing pre-processor (All-but-the-Top representation post-processing).
+    # - true (default): Removes the global anisotropic background component (corpus mean vector μ
+    #   and dominant principal components), centering the representation space and maximizing
+    #   inter-cluster geometric separation across manifolds.
+    # - false: Uses raw SentenceTransformer embeddings directly without de-biasing
+    #   (preserves the standard raw vector cone where clusters share a global baseline direction).
+    debias_embeddings: true
+
+    # Weighting strategy for calculating 3D community centroid positions:
+    # - "core_tiers" (default): Computes centroids using only Tier 1 (Nuclei) and Tier 2 (Mechanics)
+    #   weighted by their composite architectural score. Prevents peripheral modifiers and
+    #   generic low-degree concepts from pulling the cluster centroid back to the global center of mass.
+    # - "tier_1_only": Anchors centroids strictly to Tier 1 Thematic Nuclei (falls back to Tier 2
+    #   if no Tier 1 concepts exist in small communities).
+    # - "uniform": Standard arithmetic mean across all community concepts (unweighted, equal
+    #   weight across Tier 1, Tier 2, and Tier 3 modifiers).
+    centroid_weighting: "core_tiers"
+
+    # Percentile cutoff (integer from 50 to 95) for community density hull radii (R_p):
+    # - 75 (default): Tight cohesive shells enclosing the core 75% of core community members;
+    #   outlying modifiers orbit outside the hull as peripheral contextual nuance.
+    # - 85: Standard statistical boundary enclosing the majority of community members.
+    # - 95: Expansive boundary enclosing nearly all concepts including distant edge modifiers.
+    density_hull_percentile: 75
+
+

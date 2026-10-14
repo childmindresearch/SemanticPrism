@@ -4,7 +4,6 @@ import shutil
 import networkx as nx
 import numpy as np
 from scipy import stats
-from pyvis.network import Network
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from collections import defaultdict
@@ -85,7 +84,7 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
 
 
 def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -> Dict[str, float]:
-    """
+    r"""
     Computes Delta Q(v) = Q(G) - Q(G \ v) for each node v in ug relative to primary theme partition.
     Negative value means removing node v INCREASES modularity Q (node blurs primary theme boundaries).
     """
@@ -543,7 +542,7 @@ class TopologyPipeline:
     # =========================================================================
     def _stage_3_2_core_separation(
         self, dg: nx.DiGraph, ug: nx.Graph, global_hubs: List[str], raw_diagnostics: Dict[str, Any]
-    ) -> Tuple[nx.DiGraph, nx.Graph, nx.Graph, List[str], List[HubPartition], Dict[str, Any], Dict[str, Any]]:
+    ) -> Tuple[nx.DiGraph, nx.Graph, nx.Graph, List[str], List[HubPartition], Dict[str, Any], Dict[str, Any], Dict[str, str]]:
         print("   ==> [Stage 3.2] Removing Hubs & Quantifying Modular Separation Enhancement...")
         out_dir = Path("outputs/03_topology/02_core_separation")
         out_dir.mkdir(parents=True, exist_ok=True)
