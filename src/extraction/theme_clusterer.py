@@ -122,6 +122,13 @@ class ThemeClusteringEngine:
 
         self._model = None
 
+        # State cache for multi-phase orchestration
+        self.raw_themes: List[Dict[str, Any]] = []
+        self.embeddings: Optional[np.ndarray] = None
+        self.partitions: Dict[str, Any] = {}
+        self.coords_dict: Optional[Dict[str, np.ndarray]] = None
+        self.active_exemplars: List[Dict[str, Any]] = []
+
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -425,7 +432,12 @@ class ThemeClusteringEngine:
             "pca": normalize_coords(p_coords)
         }
 
-    def export_clustering_summary(self, partitions: Dict[str, Any], raw_themes: List[Dict[str, Any]]) -> Path:
+    def export_clustering_summary(
+        self,
+        partitions: Dict[str, Any],
+        raw_themes: List[Dict[str, Any]],
+        master_domain: Optional[str] = None
+    ) -> Path:
         summary_path = self.output_dir / "clustering_summary.json"
         print(f"-> Exporting FULL theme groupings JSON to: {summary_path}")
 
@@ -434,6 +446,7 @@ class ThemeClusteringEngine:
             "embedding_model": self.embedding_model_name,
             "theme_clustering_mode": self.clustering_mode,
             "theme_exemplars_per_cluster": self.exemplar_count,
+            "master_domain": master_domain,
             "partitions": {}
         }
 
@@ -465,7 +478,8 @@ class ThemeClusteringEngine:
         self,
         raw_themes: List[Dict[str, Any]],
         partitions: Dict[str, Any],
-        coords_dict: Dict[str, np.ndarray]
+        coords_dict: Dict[str, np.ndarray],
+        master_domain: Optional[str] = None
     ) -> Path:
         html_path = self.output_dir / "theme_cluster_galaxy_3d.html"
         print(f"-> Building Standalone Three.js 3D Dashboard: {html_path}")
@@ -527,22 +541,39 @@ class ThemeClusteringEngine:
                 "clusters": clusters_meta
             }
 
-        html_template = self._render_html_template(client_themes, client_partitions)
+        html_template = self._render_html_template(client_themes, client_partitions, master_domain=master_domain)
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_template)
 
         print(f"   Successfully generated 3D visualizer at: {html_path.resolve()}")
         return html_path
 
-    def _render_html_template(self, themes_data: List[Dict[str, Any]], partitions_data: Dict[str, Any]) -> str:
+    def _render_html_template(
+        self,
+        themes_data: List[Dict[str, Any]],
+        partitions_data: Dict[str, Any],
+        master_domain: Optional[str] = None
+    ) -> str:
         themes_json_str = json.dumps(themes_data)
         partitions_json_str = json.dumps(partitions_data)
+        active_partition_key = self.get_active_partition_key()
+        if active_partition_key not in partitions_data:
+            active_partition_key = list(partitions_data.keys())[0]
 
         # Options for dropdown
         dropdown_options_html = "\n".join([
-            f'        <option value="{pk}">{p["name"]}</option>'
+            f'        <option value="{pk}"{" selected" if pk == active_partition_key else ""}>{p["name"]}</option>'
             for pk, p in partitions_data.items()
         ])
+
+        active_part_name = partitions_data.get(active_partition_key, {}).get("name", "Active Partition")
+        total_themes_count = f"{len(themes_data):,}"
+
+        domain_badge_html = ""
+        if master_domain:
+            domain_badge_html = f'''    <div class="badge" style="color: #10b981; border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.12);">
+      Domain: {master_domain}
+    </div>'''
 
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -906,15 +937,16 @@ class ThemeClusteringEngine:
     </div>
     <div class="badge">Research Explorer</div>
     <div class="badge" style="color: #a855f7; border-color: rgba(168, 85, 247, 0.3); background: rgba(168, 85, 247, 0.1);">
-      2,108 Themes
+      {total_themes_count} Themes
     </div>
+{domain_badge_html}
   </div>
 
   <!-- Control Bar -->
   <div class="controls-bar">
     <!-- Search Bar -->
     <div class="search-box">
-      <input type="text" id="searchInput" class="search-input" placeholder="Search 2,108 themes..." autocomplete="off">
+      <input type="text" id="searchInput" class="search-input" placeholder="Search {total_themes_count} themes..." autocomplete="off">
       <div id="searchResults" class="search-results"></div>
     </div>
 
@@ -959,9 +991,9 @@ class ThemeClusteringEngine:
 
   <!-- Bottom Status Bar -->
   <div class="status-bar">
-    <div class="status-item">Themes: <strong>2,108</strong></div>
+    <div class="status-item">Themes: <strong>{total_themes_count}</strong></div>
     <div class="status-item">Projection: <strong id="statusProj">UMAP-3D</strong></div>
-    <div class="status-item">Partition: <strong id="statusPart">Dynamic Topological Leiden</strong></div>
+    <div class="status-item">Partition: <strong id="statusPart">{active_part_name}</strong></div>
     <div class="status-item">Controls: <strong>Drag to rotate | Scroll to zoom | Right-click to pan</strong></div>
   </div>
 
@@ -970,7 +1002,7 @@ class ThemeClusteringEngine:
     const THEMES = {themes_json_str};
     const PARTITIONS = {partitions_json_str};
 
-    let activePartitionKey = "dynamic_leiden";
+    let activePartitionKey = "{active_partition_key}";
     let activeEngine = "umap";
     let showHulls = true;
     let mutedClusters = new Set();
@@ -1465,30 +1497,119 @@ class ThemeClusteringEngine:
             })
         return exemplar_groups
 
-    def run(self) -> Dict[str, Any]:
+    def cluster_themes(self) -> Dict[str, Any]:
+        """
+        Executes vector embeddings, graph community detection / hierarchical clustering,
+        3D spatial projections, and extracts centroid exemplars for LLM synthesis.
+        Does NOT build the visualizer yet, allowing the LLM to synthesize master theme names first.
+        """
         print("=" * 65)
-        print("🚀 SemanticPrism: Dynamic Theme Clustering & Spatial Visualizer")
+        print("🚀 SemanticPrism: Dynamic Theme Clustering Engine")
         print("=" * 65)
-        raw_themes = self.load_data()
-        embeddings = self.get_or_compute_embeddings(raw_themes)
-        partitions = self.compute_partitions(raw_themes, embeddings)
-        coords_dict = self.compute_3d_projections(embeddings)
-        summary_path = self.export_clustering_summary(partitions, raw_themes)
-        html_path = self.generate_3d_html(raw_themes, partitions, coords_dict)
-        active_exemplars = self.get_active_exemplars_payload(partitions)
+        self.raw_themes = self.load_data()
+        self.embeddings = self.get_or_compute_embeddings(self.raw_themes)
+        self.partitions = self.compute_partitions(self.raw_themes, self.embeddings)
+        self.coords_dict = self.compute_3d_projections(self.embeddings)
+        self.active_exemplars = self.get_active_exemplars_payload(self.partitions)
+
+        return {
+            "partitions": self.partitions,
+            "active_exemplars": self.active_exemplars,
+            "coords_dict": self.coords_dict,
+            "raw_themes": self.raw_themes
+        }
+
+    def build_visualizations(
+        self,
+        master_themes: Optional[List[str]] = None,
+        master_domain: Optional[str] = None
+    ) -> Dict[str, Path]:
+        """
+        Builds the standalone 3D WebGL visualizer and clustering summary.
+        If master_themes are provided (or exist in master_themes.json), applies them
+        to the active partition selected in the config so the visualizer displays the
+        authoritative LLM-synthesized ontology.
+        """
+        if not self.partitions or self.coords_dict is None or not self.raw_themes:
+            self.cluster_themes()
+
+        # Check if master themes can be auto-loaded from disk if not explicitly passed
+        if master_themes is None and self.master_themes_path.exists():
+            try:
+                with open(self.master_themes_path, "r", encoding="utf-8") as f:
+                    mt_data = json.load(f)
+                master_themes = mt_data.get("master_themes", [])
+                if not master_domain:
+                    master_domain = mt_data.get("master_domain")
+                print(f"-> Auto-loaded {len(master_themes)} master themes from: {self.master_themes_path}")
+            except Exception as e:
+                print(f"   [Warning] Could not load existing master themes from {self.master_themes_path}: {e}")
+
+        active_key = self.get_active_partition_key()
+        active_part = self.partitions.get(active_key)
+
+        if active_part and master_themes:
+            print(f"-> Applying {len(master_themes)} LLM Master Theme names to active partition '{active_key}'...")
+            domain_label = f" — Domain: {master_domain}" if master_domain else ""
+            if active_key == "dynamic_leiden":
+                active_part["name"] = f"Dynamic Topological Leiden (Discovered {len(active_part['clusters'])} Master Themes{domain_label})"
+            else:
+                active_part["name"] = f"Fixed Variance-Minimized (Ward K={self.fixed_k}{domain_label})"
+
+            if master_domain:
+                active_part["master_domain"] = master_domain
+
+            import re
+            cluster_id_to_master = {}
+            for idx, (c_id, c_data) in enumerate(active_part["clusters"].items()):
+                if idx < len(master_themes):
+                    raw_val = master_themes[idx]
+                    cleaned = re.sub(r"^(?:Cluster\s*\d+[\s:.-]*|\d+[\s:.-]+)", "", str(raw_val)).strip()
+                    master_name = cleaned if cleaned else str(raw_val).strip()
+
+                    new_label = f"Master Theme #{idx + 1}: {master_name}"
+                    c_data["label"] = new_label
+                    c_data["master_theme_name"] = master_name
+                    cluster_id_to_master[c_id] = new_label
+                else:
+                    cluster_id_to_master[c_id] = c_data.get("label", f"Cluster #{c_id + 1}")
+
+            # Update assignment records for all themes in active partition
+            for assign in active_part["assignments"]:
+                cid = assign.get("cluster_id")
+                if cid in cluster_id_to_master:
+                    assign["cluster_label"] = cluster_id_to_master[cid]
+
+        # Annotate inactive partition for clear UI differentiation
+        for p_key, p_val in self.partitions.items():
+            if p_key != active_key and "[Empirical Baseline]" not in p_val["name"]:
+                p_val["name"] = f"{p_val['name']} [Empirical Baseline]"
+
+        summary_path = self.export_clustering_summary(self.partitions, self.raw_themes, master_domain=master_domain)
+        html_path = self.generate_3d_html(self.raw_themes, self.partitions, self.coords_dict, master_domain=master_domain)
 
         print("\n" + "=" * 65)
-        print("🎉 DYNAMIC & FIXED CLUSTERING PIPELINE COMPLETE!")
+        print("🎉 THEME CLUSTERING & 3D VISUALIZATION ARTIFACTS BUILT!")
         print("=" * 65)
         print(f"1. Interactive 3D Visualizer: file://{html_path.resolve()}")
         print(f"2. Full Groupings JSON:       file://{summary_path.resolve()}")
         print("=" * 65)
 
         return {
-            "partitions": partitions,
             "summary_path": summary_path,
-            "html_path": html_path,
-            "active_exemplars": active_exemplars
+            "html_path": html_path
+        }
+
+    def run(
+        self,
+        master_themes: Optional[List[str]] = None,
+        master_domain: Optional[str] = None
+    ) -> Dict[str, Any]:
+        cluster_res = self.cluster_themes()
+        vis_res = self.build_visualizations(master_themes=master_themes, master_domain=master_domain)
+        return {
+            **cluster_res,
+            **vis_res
         }
 
 

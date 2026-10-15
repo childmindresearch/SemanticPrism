@@ -439,17 +439,26 @@ class ExtractionPipeline:
         if not force and resume_mode == 'skip' and master_path.exists() and mapping_path.exists():
             print("-> Skipping master theme synthesis (already exists on disk). Loading existing master themes...")
             self.load_master_themes()
+            # Ensure 3D visualizer exists on disk with existing master themes
+            html_path = self.out_dir / "theme_cluster_galaxy_3d.html"
+            if not html_path.exists():
+                print("-> 3D visualizer missing from disk. Generating with existing master themes...")
+                cluster_engine = ThemeClusteringEngine(
+                    themes_path=self.out_dir / "all_themes.json",
+                    output_dir=self.out_dir
+                )
+                cluster_engine.run()
             return
 
         # -------------------------------------------------------------
-        # Phase 1.8: Run Empirical Vector Theme Clustering
+        # Phase 1.8: Run Empirical Vector Theme Clustering (Math Only)
         # -------------------------------------------------------------
         print("-> Running Empirical Vector Theme Clustering Engine...")
         cluster_engine = ThemeClusteringEngine(
             themes_path=self.out_dir / "all_themes.json",
             output_dir=self.out_dir
         )
-        cluster_results = cluster_engine.run()
+        cluster_results = cluster_engine.cluster_themes()
         partitions = cluster_results["partitions"]
         exemplar_groups = cluster_results["active_exemplars"]
         active_partition = cluster_engine.get_active_partition(partitions)
@@ -495,6 +504,15 @@ class ExtractionPipeline:
                 
                 print(f"-> Synthesized {len(master_result.output.master_themes)} Master Themes across domain: '{master_result.output.master_domain}'")
                 
+                # -------------------------------------------------------------
+                # Phase 2.5: Build 3D Visualizer & Theme Mappings Together
+                # -------------------------------------------------------------
+                print("-> Building 3D Visualizer Dashboard with Synthesized Master Themes...")
+                cluster_engine.build_visualizations(
+                    master_themes=master_result.output.master_themes,
+                    master_domain=master_result.output.master_domain
+                )
+
                 # Directly export theme consolidation mapping from the cluster partitions
                 self._export_cluster_theme_mapping(active_partition, master_result.output.master_themes)
                 break
