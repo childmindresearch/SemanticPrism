@@ -5,9 +5,8 @@ This module orchestrates the Pydantic AI agents to process raw text, extract the
 
 import json
 import asyncio
-
-from typing import List, Optional, Tuple
 from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 
 from . import schemas
 from . import prompts
