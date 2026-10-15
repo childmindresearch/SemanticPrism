@@ -9,12 +9,31 @@ Instead of generating schemas in a single LLM prompt—which often leads to hall
 ## Pipeline Overview
 
 ```mermaid
-graph TD
-    Inputs["Source Documents<br/>(Text / Parquet)"] --> S1["Stage 1: Extraction<br/><i>Theme Discovery & Triplet Extraction</i>"]
-    S1 -->|"Semantic Triplets"| S2["Stage 2: Refinement<br/><i>Vector Clustering & Taxonomic Lifting</i>"]
-    S2 -->|"Refined Triplets"| S3["Stage 3: Graph Topology<br/><i>Core-Separation & Community Discovery</i>"]
-    S3 -->|"Graph Partitions"| S4["Stage 4: Synthesis<br/><i>Pydantic Schema & Enum Generation</i>"]
-    S4 --> Outputs["Python Ontologies<br/>(Pydantic Models)"]
+flowchart TD
+    subgraph Row1 ["Phase 1: Discovery & Refinement"]
+        direction LR
+        In(["📄 <b>Source Documents</b><br/><i>Text • Reports • Parquet</i>"])
+        --> |Raw Text| S1["🔍 <b>Stage 1: Extraction</b><br/>Theme Discovery • SVO Triplets"]
+        --> |Semantic Triplets| S2["🎯 <b>Stage 2: Refinement</b><br/>Vector Embeddings • Taxonomic Lifting"]
+    end
+
+    subgraph Row2 ["Phase 2: Architecture & Synthesis"]
+        direction LR
+        S3["🌐 <b>Stage 3: Graph Architecture</b><br/>Hub Backbone • Leiden Modularity"]
+        --> |Architectural Partitions| S4["⚙️ <b>Stage 4: Synthesis</b><br/>Pydantic Models • Enum Resolution"]
+        --> |Python Code| Out(["📦 <b>Deployable Ontologies</b><br/><i>comprehensive_ontology.py</i>"])
+    end
+
+    Row1 --> |Standardized Knowledge Graph| Row2
+
+    style Row1 stroke:#3b82f6,stroke-width:1.5px,stroke-dasharray: 4 4,fill:none
+    style Row2 stroke:#8b5cf6,stroke-width:1.5px,stroke-dasharray: 4 4,fill:none
+    style In stroke:#3b82f6,stroke-width:2px
+    style S1 stroke:#06b6d4,stroke-width:2px
+    style S2 stroke:#10b981,stroke-width:2px
+    style S3 stroke:#8b5cf6,stroke-width:2px
+    style S4 stroke:#f59e0b,stroke-width:2px
+    style Out stroke:#ec4899,stroke-width:2px
 ```
 
 ---
@@ -42,7 +61,7 @@ python3 run_pipeline.py
 Or run individual stages independently:
 - **Stage 1 (Extraction)**: `python3 run_stage_1_extraction.py`
 - **Stage 2 (Refinement)**: `python3 run_stage_2_refinement.py`
-- **Stage 3 (Topology)**: `python3 run_stage_3_topology.py`
+- **Stage 3 (Graph Architecture)**: `python3 run_stage_3_topology.py`
 - **Stage 4 (Synthesis)**: `python3 run_stage_4_synthesis.py`
 
 ---
@@ -55,7 +74,7 @@ Ingests plain text files or Parquet datasets, identifies overarching domain them
 ### Stage 2: Refinement
 Encodes extracted entities and relations into vector embeddings, groups them into semantic clusters, and optionally maps terms into standardized taxonomic concepts using LLM hypernym resolution.
 
-### Stage 3: Graph Topology
+### Stage 3: Graph Architecture
 Builds a directed network graph from refined triplets, executes a 3-stage core-separation pipeline, and derives fine-grained thematic partitions:
 - **Stage 3.1: Raw Graph Evaluation & Hub Identification**: Computes baseline metrics, degree distributions, and isolates systemic routers via participation coefficients and betweenness centrality.
 - **Stage 3.2: Core-Periphery Separation**: Extracts the Hub Backbone Network to eliminate cross-domain modularity blur, doubling modularity $Q$ on the dense clustering substrate.
@@ -87,7 +106,7 @@ Pipeline behavior is configured via modular YAML files:
 outputs/
 ├── 01_extraction/          # Raw triplets, discovered themes, and master theme mappings
 ├── 02_refinement/          # Refined triplets, vector cluster mappings, taxonomic maps & fidelity diagnostics
-├── 03_topology/            # Stage 3 Topology: 3-stage modular architecture, interactive HTML visuals & diagnostics
+├── 03_topology/            # Stage 3 (Graph Architecture): 3-stage modular architecture, interactive HTML visuals & diagnostics
 │   ├── 01_raw_graph_evaluation/   # Raw graph metrics, hub registry & global topology visuals
 │   ├── 02_core_separation/        # Reduced core metrics, hub backbone & pruning breakdown
 │   ├── 03_paths/
