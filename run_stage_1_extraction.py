@@ -43,6 +43,8 @@ def main():
     print(f"Total Stage 1 Time: {total_duration:.2f} seconds")
     print("Outputs saved in 'outputs/01_extraction':")
     print(" - all_themes.json")
+    print(" - clustering_summary.json")
+    print(" - theme_cluster_galaxy_3d.html")
     print(" - master_themes.json")
     print(" - theme_mapping_clusters.json")
     print(" - original_triplets.json")

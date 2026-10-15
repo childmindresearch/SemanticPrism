@@ -23,6 +23,8 @@ async def main_async():
     # Initialize the core pipeline state tracker
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
+    pipeline.clear_stage_logs("themes")
+    pipeline.clear_stage_logs("master")
     
     # Load documents based on ingestion settings
     try:
@@ -89,6 +91,8 @@ async def main_async():
     out_dir = Path(settings.get('directories', {}).get('outputs', 'outputs')) / "01_extraction"
     print(f"Outputs saved to '{out_dir}':")
     print(" - all_themes.json")
+    print(" - clustering_summary.json")
+    print(" - theme_cluster_galaxy_3d.html")
     print(" - master_themes.json")
     print(" - theme_mapping_clusters.json")
 

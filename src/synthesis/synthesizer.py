@@ -279,16 +279,12 @@ class SynthesisPipeline:
                     }
                     for item in tiers_data.get("tier_1_nucleus", [])
                 ]
-                tier_2_items = [item["entity"] for item in tiers_data.get("tier_2_mechanics", [])]
-                tier_3_items = [item["entity"] for item in tiers_data.get("tier_3_modifiers", [])]
 
                 payload_dict = {
                     "community_id": tiers_data.get("community_id"),
                     "community_label": tiers_data.get("community_label", f"Community #{tiers_data.get('community_id', 'unknown')}"),
                     "architectural_tiers": {
-                        "tier_1_thematic_nucleus (core_root_entities)": tier_1_items,
-                        "tier_2_relational_mechanics (spoke_attributes_and_sub_models)": tier_2_items,
-                        "tier_3_contextual_modifiers (optional_nuances_and_leaves)": tier_3_items
+                        "tier_1_thematic_nucleus (core_root_entities)": tier_1_items
                     },
                     "thematic_triplets": formatted_items
                 }

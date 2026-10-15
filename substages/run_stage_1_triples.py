@@ -23,9 +23,7 @@ async def main_async():
     # Initialize the core pipeline state tracker
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
-    
-    if not pipeline.context.master_themes:
-        pipeline.load_master_themes()
+    pipeline.clear_stage_logs("triples")
     
     if pipeline.context.master_themes and pipeline.context.master_themes.master_themes:
         print(f"Loaded {len(pipeline.context.master_themes.master_themes)} Master Themes into context for triple extraction:")

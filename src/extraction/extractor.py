@@ -11,6 +11,7 @@ from pathlib import Path
 
 from . import schemas
 from . import prompts
+from .theme_clusterer import ThemeClusteringEngine
 from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
 from src.config import settings
 
@@ -87,9 +88,10 @@ class ExtractionPipeline:
     def __init__(self, context: PipelineRunContext):
         self.context = context
         
-        # Load chunk size constraints from config
-        self.theme_chunk_size = settings['extraction']['theme_chunk_max_words']
-        self.triple_chunk_size = settings['extraction']['triple_chunk_max_words']
+        # Load chunk size constraints from config defensively
+        ext_cfg = settings.get('extraction', {})
+        self.theme_chunk_size = ext_cfg.get('theme_chunk_max_words', 3200)
+        self.triple_chunk_size = ext_cfg.get('triple_chunk_max_words', 800)
         
         # Setup Output Directories
         base_out_dir = settings.get('directories', {}).get('outputs', 'outputs')
@@ -104,16 +106,6 @@ class ExtractionPipeline:
         
         self.log_dir = Path(base_out_dir) / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Clear previous run logs to prevent continuous expansion across isolated runs
-        for log_file in [
-            "stage_01_theme_discovery_errors.json", 
-            "stage_01_master_theme_errors.json", 
-            "stage_01_triple_extraction_errors.json"
-        ]:
-            log_path = self.log_dir / log_file
-            if log_path.exists():
-                log_path.unlink()
 
         # Concurrency settings
         self.use_async = settings.get('pipeline', {}).get('use_async', False)
@@ -123,6 +115,32 @@ class ExtractionPipeline:
         # Automatically load master themes if available on disk and not already set
         if self.context.master_themes is None:
             self.load_master_themes()
+
+    def clear_stage_logs(self, phase: Optional[str] = None):
+        """
+        Clears specific stage error logs without wiping logs from other substages.
+        phase: 'themes', 'master', 'triples', or None (to clear all).
+        """
+        log_map = {
+            "themes": ["stage_01_theme_discovery_errors.json"],
+            "master": ["stage_01_master_theme_errors.json"],
+            "triples": ["stage_01_triple_extraction_errors.json"],
+        }
+        if phase and phase in log_map:
+            targets = log_map[phase]
+        else:
+            targets = [
+                "stage_01_theme_discovery_errors.json", 
+                "stage_01_master_theme_errors.json", 
+                "stage_01_triple_extraction_errors.json"
+            ]
+        for log_file in targets:
+            log_path = self.log_dir / log_file
+            if log_path.exists():
+                try:
+                    log_path.unlink()
+                except Exception:
+                    pass
 
     def load_master_themes(self) -> Optional[schemas.MasterThemeSynthesisResult]:
         """Loads master_themes.json from disk into the context if it exists."""
@@ -310,7 +328,6 @@ class ExtractionPipeline:
                 self.context.all_discovered_themes.append(theme)
                 
         # Save individual themes file for this document
-        safe_name = self.sanitize_filename(source_doc)
         with open(self.themes_dir / f"{safe_name}_themes.json", "w") as f:
             json.dump([t.model_dump() for t in doc_themes], f, indent=2)
 
@@ -343,10 +360,72 @@ class ExtractionPipeline:
             
         return self.context.all_discovered_themes
 
-    async def synthesize_master_themes_async(self):
+    def _export_cluster_theme_mapping(self, active_partition: dict, synthesized_master_names: List[str]):
         """
-        Phase 2: Synthesizes the global aggregated themes into a consolidated Master Ontology asynchronously.
-        Checkpoints to disk as 'master_themes.json'.
+        Maps the active partition's clusters to the synthesized master theme titles and outputs
+        'outputs/01_extraction/theme_mapping_clusters.json' with exact centroid distances and confidence tags.
+        """
+        import re
+        from collections import defaultdict
+        ref_cfg = settings.get('refinement', {})
+        ext_cfg = settings.get('extraction', {})
+        high_thresh = ext_cfg.get('theme_confidence_high_threshold') or ref_cfg.get('theme_confidence_high_threshold', 0.40)
+        med_thresh = ext_cfg.get('theme_confidence_medium_threshold') or ref_cfg.get('theme_confidence_medium_threshold', 0.25)
+        low_thresh = ext_cfg.get('theme_confidence_low_threshold') or ref_cfg.get('theme_confidence_low_threshold', 0.15)
+
+        theme_mapping = defaultdict(list)
+        clusters = active_partition.get("clusters", {})
+        if isinstance(clusters, dict):
+            cluster_items = [(c_id, c_data) for c_id, c_data in sorted(clusters.items())]
+        else:
+            cluster_items = [(c_data.get("cluster_id", idx), c_data) for idx, c_data in enumerate(clusters)]
+
+        for idx, (c_id, c_data) in enumerate(cluster_items):
+            # Use synthesized master theme name corresponding to this cluster if available
+            if idx < len(synthesized_master_names):
+                raw_val = synthesized_master_names[idx]
+                if isinstance(raw_val, str):
+                    name_str = raw_val.strip()
+                elif hasattr(raw_val, "title") and not callable(getattr(raw_val, "title")):
+                    name_str = str(raw_val.title).strip()
+                elif hasattr(raw_val, "name") and not callable(getattr(raw_val, "name")):
+                    name_str = str(raw_val.name).strip()
+                else:
+                    name_str = str(raw_val).strip()
+                cleaned = re.sub(r"^(?:Cluster\s*\d+[\s:.-]*|\d+[\s:.-]+)", "", name_str).strip()
+                master_name = cleaned if cleaned else name_str
+            else:
+                master_name = c_data.get("label", f"Cluster_{c_id}")
+            
+            for t_item in c_data.get("all_themes", []):
+                sim = t_item.get("similarity_to_centroid", 0.0)
+                if sim >= high_thresh:
+                    conf = "high"
+                elif sim >= med_thresh:
+                    conf = "medium"
+                elif sim >= low_thresh:
+                    conf = "low"
+                else:
+                    conf = "unassigned"
+
+                record = {
+                    "raw_theme": t_item["title"],
+                    "confidence": conf,
+                    "similarity_score": round(sim, 4)
+                }
+                theme_mapping[master_name].append(record)
+
+        mapping_path = self.out_dir / "theme_mapping_clusters.json"
+        with open(mapping_path, "w", encoding="utf-8") as f:
+            json.dump(theme_mapping, f, indent=2)
+        print(f"-> Exported theme consolidation mapping directly to: {mapping_path}")
+
+    async def synthesize_master_themes_async(self, force: bool = False):
+        """
+        Phase 2: Clusters the global aggregated themes using ThemeClusteringEngine
+        (adaptive Leiden dynamic or Ward fixed per config) and synthesizes an authoritative
+        Master Ontology using cluster exemplars.
+        Checkpoints to disk as 'master_themes.json' and 'theme_mapping_clusters.json'.
         """
         self.aggregate_themes()
         if not self.context.all_discovered_themes:
@@ -355,38 +434,69 @@ class ExtractionPipeline:
             
         resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
         master_path = self.out_dir / "master_themes.json"
+        mapping_path = self.out_dir / "theme_mapping_clusters.json"
 
-        if resume_mode == 'skip' and master_path.exists():
+        if not force and resume_mode == 'skip' and master_path.exists() and mapping_path.exists():
             print("-> Skipping master theme synthesis (already exists on disk). Loading existing master themes...")
             self.load_master_themes()
-            self.map_theme_clusters()
             return
 
-        target_count = settings.get('refinement', {}).get('target_master_theme_count')
-        if target_count and target_count > 0:
-            target_directive = f"Target approximately {target_count} master themes to cover the corpus cleanly."
-        else:
-            target_directive = ""
-
-        themes_str = "\n".join([f"- {t.title}: {t.description}" for t in self.context.all_discovered_themes])
-        master_user_prompt = prompts.MASTER_THEME_USER_PROMPT.format(
-            target_count_directive=target_directive,
-            all_extracted_themes=themes_str
+        # -------------------------------------------------------------
+        # Phase 1.8: Run Empirical Vector Theme Clustering
+        # -------------------------------------------------------------
+        print("-> Running Empirical Vector Theme Clustering Engine...")
+        cluster_engine = ThemeClusteringEngine(
+            themes_path=self.out_dir / "all_themes.json",
+            output_dir=self.out_dir
         )
-        
-        full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{master_user_prompt}"
+        cluster_results = cluster_engine.run()
+        partitions = cluster_results["partitions"]
+        exemplar_groups = cluster_results["active_exemplars"]
+        active_partition = cluster_engine.get_active_partition(partitions)
+
+        # -------------------------------------------------------------
+        # Phase 2: Formulate LLM Prompt from Cluster Exemplars
+        # -------------------------------------------------------------
+        cluster_blocks = []
+        for grp in exemplar_groups:
+            c_id = grp["cluster_id"]
+            t_count = grp["theme_count"]
+            pct = grp["percentage"]
+            lines = [f"   - {ex['title']}: {ex['description']}" for ex in grp["exemplars"]]
+            cluster_blocks.append(
+                f"### Cluster #{c_id + 1} ({t_count} themes, {pct}% of corpus)\n"
+                f"Top Prototypical Themes (Ranked by Centroid Proximity):\n" + "\n".join(lines)
+            )
+        cluster_exemplars_block = "\n\n".join(cluster_blocks)
+
+        user_prompt = prompts.MASTER_THEME_CLUSTERED_USER_PROMPT.format(
+            cluster_count=len(exemplar_groups),
+            cluster_exemplars_block=cluster_exemplars_block
+        )
+        full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
         self._save_payload_text("stage_01_master_theme_synthesis.txt", full_prompt)
         
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                master_result = await master_theme_agent.run(master_user_prompt)
+                master_result = await master_theme_agent.run(user_prompt)
+                
+                # Sanitize master theme titles (strip redundant "Cluster X: " prefixes if any)
+                import re
+                cleaned_themes = []
+                for t in master_result.output.master_themes:
+                    c_str = re.sub(r"^(?:Cluster\s*\d+[\s:.-]*|\d+[\s:.-]+)", "", t).strip()
+                    cleaned_themes.append(c_str if c_str else t)
+                master_result.output.master_themes = cleaned_themes
                 self.context.master_themes = master_result.output
                 
-                with open(self.out_dir / "master_themes.json", "w") as f:
+                with open(master_path, "w", encoding="utf-8") as f:
                     f.write(master_result.output.model_dump_json(indent=2))
                 
-                self.map_theme_clusters()
+                print(f"-> Synthesized {len(master_result.output.master_themes)} Master Themes across domain: '{master_result.output.master_domain}'")
+                
+                # Directly export theme consolidation mapping from the cluster partitions
+                self._export_cluster_theme_mapping(active_partition, master_result.output.master_themes)
                 break
                 
             except Exception as e:
@@ -404,7 +514,7 @@ class ExtractionPipeline:
                 else:
                     print(f"Master theme synthesis attempt {attempt + 1} failed, retrying...")
 
-    def synthesize_master_themes(self):
+    def synthesize_master_themes(self, force: bool = False):
         """Synchronous wrapper for synthesize_master_themes_async."""
         try:
             loop = asyncio.get_running_loop()
@@ -414,9 +524,9 @@ class ExtractionPipeline:
         if loop and loop.is_running():
             import nest_asyncio
             nest_asyncio.apply()
-            return loop.run_until_complete(self.synthesize_master_themes_async())
+            return loop.run_until_complete(self.synthesize_master_themes_async(force=force))
         else:
-            return asyncio.run(self.synthesize_master_themes_async())
+            return asyncio.run(self.synthesize_master_themes_async(force=force))
 
     def map_theme_clusters(self):
         """

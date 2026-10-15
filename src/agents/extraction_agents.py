@@ -56,7 +56,7 @@ theme_agent = Agent(
 master_theme_agent = Agent(
     model=theme_model,
     output_type=schemas.MasterThemeSynthesisResult,
-    system_prompt=prompts.MASTER_THEME_SYSTEM_PROMPT,
+    system_prompt=prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT,
     model_settings=theme_settings,
     retries=3
 )

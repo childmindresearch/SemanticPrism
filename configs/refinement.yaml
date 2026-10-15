@@ -18,14 +18,37 @@ refinement:
   lift_objects: true
 
   embedding_model: "all-MiniLM-L6-v2"  # "BAAI/bge-large-en-v1.5" // SentenceTransformers vector embedding model for triplet hypernym lifting
-  theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector embedding model for theme consolidation mapping
-  target_master_theme_count: 6              # Target number of synthesized master themes for LLM guidance
-  
+
+  # =========================================================================
+  # MASTER THEME CLUSTERING & SYNTHESIS SPECIFICATION
+  # =========================================================================
+  # Governs how raw extracted themes (all_themes.json) are partitioned into 
+  # master domains prior to LLM synthesis.
+  #
+  # Clustering Mode Options:
+  #   - "dynamic": Primary self-calibrating approach (Adaptive k-NN + Leiden community detection).
+  #                Automatically determines the optimal number of natural master domains 
+  #                based on corpus graph modularity without forcing an arbitrary count.
+  #   - "fixed":   Variance-minimizing Ward Hierarchical clustering.
+  #                Strictly partitions all themes into exactly 'target_master_theme_count' clusters.
+  theme_clustering_mode: "dynamic"          # Selection: "dynamic" (Recommended) or "fixed"
+
+  # Target cluster count K (used exclusively when theme_clustering_mode is set to "fixed")
+  target_master_theme_count: 8              # Target number of master clusters for the 'fixed' option (Ward K)
+
+  # Dynamic number of centroid-prototypical themes passed to the LLM per cluster.
+  # The LLM will inspect these top N themes (ranked by highest cosine similarity to centroid)
+  # to synthesize each master theme's title, scope, description, and boundary rules.
+  theme_exemplars_per_cluster: 10           # Number of top exemplar themes per cluster sent to LLM prompt
+
+  # Theme embedding model & payload format
+  theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector model for theme clustering
+  theme_embedding_payload: "title_desc_reasoning" # Payload format: "title_desc_reasoning", "title_desc", or "title"
+
   # Theme Consolidation Multi-Tier Confidence Thresholds
   theme_confidence_high_threshold: 0.40     # Cosine score >= 0.40 -> High Confidence
   theme_confidence_medium_threshold: 0.25   # 0.25 <= Cosine score < 0.40 -> Medium Confidence
   theme_confidence_low_threshold: 0.15      # 0.15 <= Cosine score < 0.25 -> Low Confidence
-  theme_embedding_payload: "title_desc_reasoning" # Payload format: "title_desc_reasoning", "title_desc", or "title"
   
   # =========================================================================
   # TWO-TIER VECTOR CLUSTERING & CACHING

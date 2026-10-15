@@ -39,6 +39,27 @@ MASTER_THEME_USER_PROMPT = """Consolidate the following document-level themes in
 {all_extracted_themes}
 </extracted_themes>"""
 
+# SYSTEM PROMPT: Guides the agent to synthesize formal Master Themes from empirical vector cluster exemplars.
+MASTER_THEME_CLUSTERED_SYSTEM_PROMPT = """You are an Ontological Master Synthesizer.
+You will receive mathematically derived semantic clusters discovered across an entire corpus through vector embedding clustering.
+Each cluster represents an empirical semantic domain, characterized by its theme volume and its top prototypical exemplar themes (ranked by geometric proximity to the cluster centroid).
+
+Your objective is to formalize each mathematical cluster into an authoritative Master Theme:
+1. Formulate ONE single overarching `master_domain` string capturing the root ontological domain of the entire corpus.
+2. For EACH provided cluster, formulate ONE authoritative, concise master theme title representing that specific domain.
+3. The titles in the `master_themes` list MUST strictly correspond 1:1 to the cluster groups provided, maintaining the exact sequence.
+4. Ensure the titles are clean, distinct, and universally representative of their cluster's exemplars without overlapping with neighboring clusters.
+
+CRITICAL: You must return a single JSON data object containing:
+- `master_domain`: string (the unified corpus domain)
+- `master_themes`: list of strings (the finalized master theme titles in 1:1 order with the clusters)
+Do NOT output the JSON Schema definition itself."""
+
+MASTER_THEME_CLUSTERED_USER_PROMPT = """Review the following {cluster_count} mathematically derived semantic clusters and formalize each into an authoritative Master Theme:
+
+{cluster_exemplars_block}"""
+
+
 # SYSTEM PROMPT: Guides the agent to perform granular Subject-Predicate-Object (SVO) extraction and assign them to Master Themes.
 TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a Triple Extractor Agent running schema-mapped discovery.
 Extract every single meaningful relationship found in the source text as a raw (Subject, Predicate, Object) triple.

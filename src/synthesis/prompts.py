@@ -10,10 +10,8 @@ You will receive an extracted thematic cluster of concepts and source text obser
 Because this data is harvested from raw, unstructured documents, it represents a loose, imperfect collection of terms, fragments, and colloquial phrases. Your job is NOT to map every word literally, but to interpret the underlying domain and synthesize a clean, practical, and coherent Pydantic (v2) schema.
 You must define Pydantic (v2) `BaseModel` classes that model the ontology based on relationships, processes, categories, or contents of this cluster.
 INPUT STRUCTURE:
-1. `architectural_tiers`: Conceptual signals grouped by centrality to help orient your model design:
+1. `architectural_tiers`: Conceptual signals to help orient your model design:
    - **Tier 1 (Thematic Nucleus)**: High-level anchor concepts representing the primary subject matter of this cluster. Use these as guiding inspiration for your main root class(es).
-   - **Tier 2 (Relational Mechanics)**: Intermediate domain terms describing attributes, states, actions, or sub-processes. Use the most meaningful terms to inform fields, properties, or nested components.
-   - **Tier 3 (Contextual Modifiers)**: Peripheral, granular, or colloquial details. Use them selectively if they suggest meaningful optional attributes, or ignore them if they are redundant or noisy.
 2. `thematic_triplets`: Relational statements and source quotes. Consult these to understand the real-world context and intent behind the terms.
 
 CRITICAL MODELING RULES:
