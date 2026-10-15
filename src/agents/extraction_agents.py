@@ -70,6 +70,15 @@ master_theme_agent = Agent(
     retries=3
 )
 
+# Agent 2b: Single-Stage Fallback Agent - formalizes cluster exemplars directly into master themes.
+master_theme_single_agent = Agent(
+    model=theme_model,
+    output_type=schemas.MasterThemeSynthesisResult,
+    system_prompt=prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT,
+    model_settings=theme_settings,
+    retries=3
+)
+
 @dataclass
 class TripleContext:
     """Dependency object passed to the Triple Extraction Agent to provide global context."""

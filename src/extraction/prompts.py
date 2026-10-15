@@ -60,14 +60,14 @@ CLUSTER_MAP_USER_PROMPT = """Synthesize the conceptual identity for Cluster #{cl
 {theme_lines}
 </cluster_themes>"""
 
-# SYSTEM PROMPT: Reduce stage - global reconciliation of all cluster candidates with top-5 empirical anchor themes.
+# SYSTEM PROMPT: Reduce stage - global reconciliation of all cluster candidates with empirical anchor themes.
 CLUSTER_REDUCE_SYSTEM_PROMPT = """You are the Chief Ontological Synthesizer.
 You will receive candidate theme syntheses produced from the Map stage across all clusters discovered in the corpus.
-For each cluster, you also receive the Top 5 Closest Themes to the mathematical centroid as empirical ground-truth anchors.
+For each cluster, you also receive the Top Exemplar Themes closest to the mathematical centroid as empirical ground-truth anchors.
 
 Your objective is to harmonize all candidate themes into a unified, authoritative Master Ontology:
 1. Formulate ONE single overarching `master_domain` string capturing the root ontological domain of the entire corpus.
-2. Disambiguate and sharpen boundaries between any overlapping candidate titles. Use the Top 5 empirical anchor themes to ensure each title faithfully reflects its cluster's centroid reality.
+2. Disambiguate and sharpen boundaries between any overlapping candidate titles. Use the empirical anchor themes to ensure each title faithfully reflects its cluster's centroid reality.
 3. Ensure all titles are mutually distinct, non-overlapping, and follow a consistent grammatical convention (e.g. Title Case noun phrases).
 4. The titles in the `master_themes` list MUST strictly correspond 1:1 to the cluster groups provided, maintaining the exact sequence (Cluster #1, Cluster #2, etc.).
 

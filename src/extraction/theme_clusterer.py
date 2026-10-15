@@ -81,7 +81,11 @@ class ThemeClusteringEngine:
         embedding_model_name: Optional[str] = None,
         fixed_k: Optional[int] = None,
         exemplar_count: Optional[int] = None,
-        clustering_mode: Optional[str] = None
+        clustering_mode: Optional[str] = None,
+        synthesis_strategy: Optional[str] = None,
+        map_max_themes: Optional[int] = None,
+        map_payload_format: Optional[str] = None,
+        reduce_anchor_count: Optional[int] = None
     ):
         self.themes_path = Path(themes_path)
         self.master_themes_path = Path(master_themes_path)
@@ -121,10 +125,25 @@ class ThemeClusteringEngine:
         self.low_thresh = float(ref_cfg.get('theme_confidence_low_threshold', 0.15))
 
         # Resolve Map-Reduce synthesis parameters
-        self.synthesis_strategy = str(ref_cfg.get('master_synthesis_strategy', 'map_reduce'))
-        self.map_max_themes = int(ref_cfg.get('theme_map_max_themes_per_cluster', ref_cfg.get('map_max_themes_per_cluster', 150)))
-        self.map_payload_format = str(ref_cfg.get('theme_map_payload_format', ref_cfg.get('theme_embedding_payload', 'title_desc')))
-        self.reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
+        if synthesis_strategy is not None:
+            self.synthesis_strategy = synthesis_strategy
+        else:
+            self.synthesis_strategy = str(ref_cfg.get('master_synthesis_strategy', 'map_reduce'))
+
+        if map_max_themes is not None:
+            self.map_max_themes = map_max_themes
+        else:
+            self.map_max_themes = int(ref_cfg.get('theme_map_max_themes_per_cluster', 150))
+
+        if map_payload_format is not None:
+            self.map_payload_format = map_payload_format
+        else:
+            self.map_payload_format = str(ref_cfg.get('theme_map_payload_format', 'title_desc'))
+
+        if reduce_anchor_count is not None:
+            self.reduce_anchor_count = reduce_anchor_count
+        else:
+            self.reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
 
         self._model = None
 
@@ -1535,13 +1554,13 @@ class ThemeClusteringEngine:
                 reason = str(t.get("reasoning", "")).strip()
 
                 if p_format == "title":
-                    line = f"  {rank}. [Sim: {sim:.2f}] {title}"
+                    line = f"  {rank}. {title}"
                 elif p_format == "title_desc_reasoning":
-                    line = f"  {rank}. [Sim: {sim:.2f}] {title}: {desc}"
+                    line = f"  {rank}. {title}: {desc}"
                     if reason:
                         line += f" (Reasoning: {reason})"
                 else:  # default "title_desc"
-                    line = f"  {rank}. [Sim: {sim:.2f}] {title}: {desc}"
+                    line = f"  {rank}. {title}: {desc}"
 
                 formatted_lines.append(line)
 
@@ -1581,8 +1600,7 @@ class ThemeClusteringEngine:
                 {
                     "rank": t.get("rank_in_cluster", r_idx + 1),
                     "title": t.get("title", ""),
-                    "description": t.get("description", ""),
-                    "similarity": round(float(t.get("similarity_to_centroid", 0.0)), 4)
+                    "description": t.get("description", "")
                 }
                 for r_idx, t in enumerate(top_themes)
             ]

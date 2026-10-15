@@ -11,7 +11,16 @@ from typing import List, Dict, Any, Optional, Tuple
 from . import schemas
 from . import prompts
 from .theme_clusterer import ThemeClusteringEngine
-from src.agents.extraction_agents import theme_agent, cluster_map_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
+from src.agents.extraction_agents import (
+    theme_agent,
+    cluster_map_agent,
+    master_theme_agent,
+    master_theme_single_agent,
+    triple_agent,
+    TripleContext,
+    triple_reformat_agent,
+    triple_model
+)
 from src.config import settings
 
 def load_input_documents() -> List[dict]:
@@ -453,9 +462,17 @@ class ExtractionPipeline:
         # Phase 1.8: Run Empirical Vector Theme Clustering (Math Only)
         # -------------------------------------------------------------
         print("-> Running Empirical Vector Theme Clustering Engine...")
+        ref_cfg = settings.get('refinement', {})
+        map_max_themes = int(ref_cfg.get('theme_map_max_themes_per_cluster', 150))
+        map_payload_format = str(ref_cfg.get('theme_map_payload_format', 'title_desc'))
+        reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
+
         cluster_engine = ThemeClusteringEngine(
             themes_path=self.out_dir / "all_themes.json",
-            output_dir=self.out_dir
+            output_dir=self.out_dir,
+            map_max_themes=map_max_themes,
+            map_payload_format=map_payload_format,
+            reduce_anchor_count=reduce_anchor_count
         )
         cluster_results = cluster_engine.cluster_themes()
         partitions = cluster_results["partitions"]
@@ -469,8 +486,11 @@ class ExtractionPipeline:
             # =============================================================
             # Phase 2A: MAP STAGE (Per-Cluster Specialist Deep Dives)
             # =============================================================
-            map_payloads = cluster_engine.get_map_payload()
-            print(f"-> Initiating Map Stage across {len(map_payloads)} clusters (cap: {cluster_engine.map_max_themes} themes/cluster, format: '{cluster_engine.map_payload_format}')...")
+            map_payloads = cluster_engine.get_map_payload(
+                max_themes_per_cluster=map_max_themes,
+                payload_format=map_payload_format
+            )
+            print(f"-> Initiating Map Stage across {len(map_payloads)} clusters (cap: {map_max_themes} themes/cluster, format: '{map_payload_format}')...")
 
             max_concurrency = settings.get('extraction', {}).get('max_async_calls', 2)
             sem = asyncio.Semaphore(max_concurrency)
@@ -491,37 +511,51 @@ class ExtractionPipeline:
                 self._save_payload_text("stage_01_master_theme_map.txt", full_map_prompt)
 
                 async with sem:
-                    print(f"   [Map] Analyzing Cluster #{c_id + 1} ({theme_count} themes, evaluating {displayed_count})...")
-                    res = await cluster_map_agent.run(map_user_prompt)
-                    cand = res.output
-                    cand.cluster_id = c_id
-                    print(f"   [Map] Cluster #{c_id + 1} Candidate: '{cand.candidate_title}'")
-                    return cand
+                    try:
+                        print(f"   [Map] Analyzing Cluster #{c_id + 1} ({theme_count} themes, evaluating {displayed_count})...")
+                        res = await cluster_map_agent.run(map_user_prompt)
+                        cand = res.output
+                        cand.cluster_id = c_id
+                        print(f"   [Map] Cluster #{c_id + 1} Candidate: '{cand.candidate_title}'")
+                        return cand
+                    except Exception as e:
+                        print(f"   [Map] Warning: Analysis failed for Cluster #{c_id + 1} ({e}). Creating fallback candidate from centroid.")
+                        first_theme = theme_lines.split("\n")[0] if theme_lines else f"Cluster #{c_id + 1}"
+                        clean_title = first_theme.split(".", 1)[-1].split(":", 1)[0].strip() if first_theme else f"Theme Domain {c_id + 1}"
+                        return schemas.ClusterCandidateSynthesis(
+                            cluster_id=c_id,
+                            candidate_title=clean_title,
+                            scope_definition=f"Domain encompassing core conceptual themes centered on {clean_title}.",
+                            key_inclusions=[clean_title],
+                            key_exclusions=[],
+                            confidence="low"
+                        )
 
             map_candidates = await asyncio.gather(*[_synthesize_cluster_map(p) for p in map_payloads])
 
             # =============================================================
             # Phase 2B: REDUCE STAGE (Global Harmonization + Empirical Anchors)
             # =============================================================
-            reduce_anchors = cluster_engine.get_reduce_anchors()
-            print(f"-> Initiating Reduce Stage with {len(map_candidates)} candidates + Top {cluster_engine.reduce_anchor_count} Empirical Anchors per cluster...")
+            reduce_anchors = cluster_engine.get_reduce_anchors(top_n=reduce_anchor_count)
+            print(f"-> Initiating Reduce Stage with {len(map_candidates)} candidates + Top {reduce_anchor_count} Empirical Anchors per cluster...")
 
             cluster_blocks = []
             for cand in map_candidates:
                 c_id = cand.cluster_id
                 anchors = reduce_anchors.get(c_id, [])
-                anchor_lines = [f"     - [Sim: {a['similarity']:.2f}] {a['title']}: {a['description']}" for a in anchors]
+                anchor_lines = [f"     - {a['title']}: {a['description']}" for a in anchors]
 
                 inclusions_str = ", ".join(cand.key_inclusions) if cand.key_inclusions else "None specified"
                 exclusions_str = ", ".join(cand.key_exclusions) if cand.key_exclusions else "None specified"
 
                 cluster_blocks.append(
                     f"### Cluster #{c_id + 1}:\n"
-                    f"- Proposed Candidate Title: {cand.candidate_title}\n"
-                    f"- Proposed Scope Definition: {cand.scope_definition}\n"
+                    f"- Proposed Master Theme Title: {cand.candidate_title}\n"
+                    f"- Scope Definition: {cand.scope_definition}\n"
                     f"- Key Inclusions: {inclusions_str}\n"
                     f"- Key Exclusions: {exclusions_str}\n"
-                    f"- Empirical Centroid Anchors (Top {len(anchors)} Closest Themes):\n" + "\n".join(anchor_lines)
+                    f"- Cohesion Confidence: {cand.confidence or 'high'}\n"
+                    f"- Top {len(anchors)} Exemplar Themes (Empirical Anchors):\n" + "\n".join(anchor_lines)
                 )
 
             reduce_user_prompt = prompts.CLUSTER_REDUCE_USER_PROMPT.format(
@@ -556,10 +590,11 @@ class ExtractionPipeline:
             full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
             self._save_payload_text("stage_01_master_theme_synthesis.txt", full_prompt)
         
+        agent_to_run = master_theme_agent if strategy == "map_reduce" else master_theme_single_agent
         max_retries = 2
         for attempt in range(max_retries):
             try:
-                master_result = await master_theme_agent.run(user_prompt)
+                master_result = await agent_to_run.run(user_prompt)
                 
                 # Sanitize master theme titles (strip redundant "Cluster X: " prefixes if any)
                 import re
