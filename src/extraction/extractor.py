@@ -85,6 +85,7 @@ class PipelineRunContext:
     """
     def __init__(self):
         self.all_discovered_themes: List[schemas.Theme] = []
+        self.cluster_candidates: List[schemas.ClusterCandidateSynthesis] = []
         self.master_themes: Optional[schemas.MasterThemeSynthesisResult] = None
         self.raw_triples: List[dict] = []
         self.processed_documents = set()
@@ -158,10 +159,19 @@ class ExtractionPipeline:
                 with open(master_path, "r", encoding="utf-8") as f:
                     master_data = json.load(f)
                     self.context.master_themes = schemas.MasterThemeSynthesisResult(**master_data)
-                    return self.context.master_themes
             except Exception as e:
                 print(f"Warning: Failed to load master themes from {master_path}: {e}")
-        return None
+
+        candidates_path = self.out_dir / "cluster_candidates.json"
+        if candidates_path.exists():
+            try:
+                with open(candidates_path, "r", encoding="utf-8") as f:
+                    cands = json.load(f)
+                    self.context.cluster_candidates = [schemas.ClusterCandidateSynthesis.model_validate(c) for c in cands]
+            except Exception:
+                pass
+
+        return self.context.master_themes
 
     def sanitize_filename(self, name: str) -> str:
         """Sanitizes document identifiers to be filesystem-safe."""
@@ -532,6 +542,14 @@ class ExtractionPipeline:
                         )
 
             map_candidates = await asyncio.gather(*[_synthesize_cluster_map(p) for p in map_payloads])
+            self.context.cluster_candidates = map_candidates
+
+            # Export structured Map stage candidate syntheses to disk
+            candidates_path = self.out_dir / "cluster_candidates.json"
+            candidates_data = [cand.model_dump() for cand in map_candidates]
+            with open(candidates_path, "w", encoding="utf-8") as f:
+                json.dump(candidates_data, f, indent=2)
+            print(f"-> Exported {len(map_candidates)} Map Stage cluster candidate syntheses to: {candidates_path}")
 
             # =============================================================
             # Phase 2B: REDUCE STAGE (Global Harmonization + Empirical Anchors)

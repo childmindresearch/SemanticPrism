@@ -93,6 +93,7 @@ async def main_async():
     print(" - all_themes.json")
     print(" - clustering_summary.json")
     print(" - theme_cluster_galaxy_3d.html")
+    print(" - cluster_candidates.json")
     print(" - master_themes.json")
     print(" - theme_mapping_clusters.json")
 
