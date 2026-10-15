@@ -10,7 +10,7 @@ from typing import List, Dict, Any, Optional, Tuple
 
 from . import schemas
 from . import prompts
-from .theme_clusterer import ThemeClusteringEngine
+from .theme_clusterer import ThemeClusteringEngine, format_theme_embedding_text
 from src.agents.extraction_agents import (
     theme_agent,
     cluster_map_agent,
@@ -461,9 +461,11 @@ class ExtractionPipeline:
             html_path = self.out_dir / "theme_cluster_galaxy_3d.html"
             if not html_path.exists():
                 print("-> 3D visualizer missing from disk. Generating with existing master themes...")
+                ref_cfg = settings.get('refinement', {})
                 cluster_engine = ThemeClusteringEngine(
                     themes_path=self.out_dir / "all_themes.json",
-                    output_dir=self.out_dir
+                    output_dir=self.out_dir,
+                    theme_embedding_payload=str(ref_cfg.get('theme_embedding_payload', 'title_desc_reasoning'))
                 )
                 cluster_engine.run()
             return
@@ -476,13 +478,15 @@ class ExtractionPipeline:
         map_max_themes = int(ref_cfg.get('theme_map_max_themes_per_cluster', 150))
         map_payload_format = str(ref_cfg.get('theme_map_payload_format', 'title_desc'))
         reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
+        theme_emb_payload = str(ref_cfg.get('theme_embedding_payload', 'title_desc_reasoning'))
 
         cluster_engine = ThemeClusteringEngine(
             themes_path=self.out_dir / "all_themes.json",
             output_dir=self.out_dir,
             map_max_themes=map_max_themes,
             map_payload_format=map_payload_format,
-            reduce_anchor_count=reduce_anchor_count
+            reduce_anchor_count=reduce_anchor_count,
+            theme_embedding_payload=theme_emb_payload
         )
         cluster_results = cluster_engine.cluster_themes()
         partitions = cluster_results["partitions"]
@@ -711,21 +715,11 @@ class ExtractionPipeline:
             med_thresh = ext_cfg.get('theme_confidence_medium_threshold') or ref_cfg.get('theme_confidence_medium_threshold', 0.25)
             low_thresh = ext_cfg.get('theme_confidence_low_threshold') or ref_cfg.get('theme_confidence_low_threshold', 0.15)
 
-            orig_theme_texts = []
             original_themes = self.context.all_discovered_themes
-            for theme in original_themes:
-                title = theme.title if hasattr(theme, 'title') else theme.get('title', '')
-                desc = theme.description if hasattr(theme, 'description') else theme.get('description', '')
-                reasoning = theme.reasoning if hasattr(theme, 'reasoning') else theme.get('reasoning', '')
-                
-                if payload_mode == 'title':
-                    text_payload = title
-                elif payload_mode == 'title_desc':
-                    text_payload = f"{title} {desc}".strip()
-                else:
-                    text_payload = f"{title} {desc} {reasoning}".strip()
-                    
-                orig_theme_texts.append(text_payload if text_payload else title)
+            orig_theme_texts = [
+                format_theme_embedding_text(theme, mode=payload_mode)
+                for theme in original_themes
+            ]
 
             master_themes = self.context.master_themes.master_themes
             master_domain = self.context.master_themes.master_domain

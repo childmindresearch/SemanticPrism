@@ -65,6 +65,38 @@ CLUSTER_COLORS = [
 ]
 
 
+def format_theme_embedding_text(theme: Any, mode: str = "title_desc_reasoning") -> str:
+    """Formats a Theme model or dictionary into text for vector embedding.
+
+    Supports:
+      - 'title': 'Theme Title'
+      - 'title_desc': 'Theme Title: Description'
+      - 'title_desc_reasoning': 'Theme Title: Description (Reasoning: Extracted rationale)'
+    """
+    if hasattr(theme, "title"):
+        title = str(theme.title or "").strip()
+        desc = str(getattr(theme, "description", "") or "").strip()
+        reason = str(getattr(theme, "reasoning", "") or "").strip()
+    elif isinstance(theme, dict):
+        title = str(theme.get("title", "") or "").strip()
+        desc = str(theme.get("description", "") or "").strip()
+        reason = str(theme.get("reasoning", "") or "").strip()
+    else:
+        return str(theme).strip()
+
+    if mode == "title":
+        return title
+    elif mode == "title_desc":
+        return f"{title}: {desc}" if desc else title
+    else:  # "title_desc_reasoning"
+        if desc and reason:
+            return f"{title}: {desc} (Reasoning: {reason})"
+        elif desc:
+            return f"{title}: {desc}"
+        else:
+            return title
+
+
 class ThemeClusteringEngine:
     """
     Stage 1 Empirical Theme Clustering Engine.
@@ -85,7 +117,8 @@ class ThemeClusteringEngine:
         synthesis_strategy: Optional[str] = None,
         map_max_themes: Optional[int] = None,
         map_payload_format: Optional[str] = None,
-        reduce_anchor_count: Optional[int] = None
+        reduce_anchor_count: Optional[int] = None,
+        theme_embedding_payload: Optional[str] = None
     ):
         self.themes_path = Path(themes_path)
         self.master_themes_path = Path(master_themes_path)
@@ -94,6 +127,7 @@ class ThemeClusteringEngine:
 
         # Resolve refinement settings
         ref_cfg = settings.get('refinement', {}) if hasattr(settings, 'get') else {}
+        ext_cfg = settings.get('extraction', {}) if hasattr(settings, 'get') else {}
         self.embedding_model_name = (
             embedding_model_name 
             or ref_cfg.get('theme_embedding_model') 
@@ -145,6 +179,16 @@ class ThemeClusteringEngine:
         else:
             self.reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
 
+        # Resolve theme embedding payload format (for vector space construction)
+        if theme_embedding_payload is not None:
+            self.theme_embedding_payload = theme_embedding_payload
+        else:
+            self.theme_embedding_payload = str(
+                ref_cfg.get('theme_embedding_payload')
+                or ext_cfg.get('theme_embedding_payload')
+                or 'title_desc_reasoning'
+            )
+
         self._model = None
 
         # State cache for multi-phase orchestration
@@ -195,30 +239,26 @@ class ThemeClusteringEngine:
                     cache_meta = alt_meta
                     break
 
-        content_hash = hashlib.md5(
-            "".join(f"{t.get('title','')}_{t.get('description','')}" for t in raw_themes).encode("utf-8")
-        ).hexdigest()
+        texts = [format_theme_embedding_text(t, mode=self.theme_embedding_payload) for t in raw_themes]
+        hash_seed = f"{self.theme_embedding_payload}__" + "__".join(texts)
+        content_hash = hashlib.md5(hash_seed.encode("utf-8")).hexdigest()
 
         if cache_npy.exists() and cache_meta.exists():
             try:
                 with open(cache_meta, "r", encoding="utf-8") as mf:
                     meta = json.load(mf)
-                if meta.get("content_hash") == content_hash and meta.get("count") == len(raw_themes):
-                    print(f"-> Loading cached theme embeddings from: {cache_npy}")
+                if (
+                    meta.get("content_hash") == content_hash 
+                    and meta.get("count") == len(raw_themes)
+                    and meta.get("payload_mode") == self.theme_embedding_payload
+                ):
+                    print(f"-> Loading cached theme embeddings ({self.theme_embedding_payload}) from: {cache_npy}")
                     return np.load(cache_npy)
             except Exception as e:
                 print(f"   [Warning] Cache read failed ({e}). Recomputing embeddings...")
 
-        print(f"-> Encoding {len(raw_themes)} themes with '{self.embedding_model_name}'...")
+        print(f"-> Encoding {len(raw_themes)} themes with '{self.embedding_model_name}' (payload format: '{self.theme_embedding_payload}')...")
         model = self._get_model()
-
-        texts = []
-        for t in raw_themes:
-            title = str(t.get("title", "")).strip()
-            desc = str(t.get("description", "")).strip()
-            reason = str(t.get("reasoning", "")).strip()
-            payload = f"{title}: {desc} (Reasoning: {reason})" if reason else f"{title}: {desc}"
-            texts.append(payload)
 
         embeddings = model.encode(texts, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
         embeddings = np.array(embeddings, dtype=np.float32)
@@ -227,6 +267,7 @@ class ThemeClusteringEngine:
         with open(cache_meta, "w", encoding="utf-8") as mf:
             json.dump({
                 "model": self.embedding_model_name,
+                "payload_mode": self.theme_embedding_payload,
                 "count": len(raw_themes),
                 "dim": int(embeddings.shape[1]),
                 "content_hash": content_hash

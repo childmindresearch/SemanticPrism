@@ -11,7 +11,7 @@ from .schemas import (
     RawTriple,
     TripleExtractionResult,
 )
-from .theme_clusterer import ThemeClusteringEngine
+from .theme_clusterer import ThemeClusteringEngine, format_theme_embedding_text
 from .extractor import ExtractionPipeline, PipelineRunContext
 
 __all__ = [
@@ -22,6 +22,7 @@ __all__ = [
     "RawTriple",
     "TripleExtractionResult",
     "ThemeClusteringEngine",
+    "format_theme_embedding_text",
     "ExtractionPipeline",
     "PipelineRunContext",
 ]
