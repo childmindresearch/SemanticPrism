@@ -16,6 +16,15 @@ class ThemeDiscoveryResult(BaseModel):
     """The aggregate output of the Theme Discovery phase."""
     themes: List[Theme] = Field(description="List of themes discovered in the text.")
 
+class ClusterCandidateSynthesis(BaseModel):
+    """Intermediate candidate synthesis for an individual cluster produced during the Map phase."""
+    cluster_id: int = Field(description="The numeric ID of the cluster.")
+    candidate_title: str = Field(description="A concise, authoritative candidate title (3 to 6 words).")
+    scope_definition: str = Field(description="1-2 sentences defining what this cluster strictly covers.")
+    key_inclusions: List[str] = Field(description="Key concepts or mechanisms that strictly belong to this theme.")
+    key_exclusions: List[str] = Field(description="Concepts or mechanisms that might seem related but belong elsewhere.")
+    confidence: Optional[str] = Field(default="high", description="Assessment of cluster coherence: high, medium, or low.")
+
 class MasterThemeSynthesisResult(BaseModel):
     """The normalized global output consolidating multiple document themes."""
     master_domain: str = Field(description="The singular, overarching domain describing the entire corpus.")

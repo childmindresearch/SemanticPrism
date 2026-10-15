@@ -120,6 +120,12 @@ class ThemeClusteringEngine:
         self.med_thresh = float(ref_cfg.get('theme_confidence_medium_threshold', 0.25))
         self.low_thresh = float(ref_cfg.get('theme_confidence_low_threshold', 0.15))
 
+        # Resolve Map-Reduce synthesis parameters
+        self.synthesis_strategy = str(ref_cfg.get('master_synthesis_strategy', 'map_reduce'))
+        self.map_max_themes = int(ref_cfg.get('theme_map_max_themes_per_cluster', ref_cfg.get('map_max_themes_per_cluster', 150)))
+        self.map_payload_format = str(ref_cfg.get('theme_map_payload_format', ref_cfg.get('theme_embedding_payload', 'title_desc')))
+        self.reduce_anchor_count = int(ref_cfg.get('reduce_anchor_theme_count', 5))
+
         self._model = None
 
         # State cache for multi-phase orchestration
@@ -445,7 +451,6 @@ class ThemeClusteringEngine:
             "total_themes": len(raw_themes),
             "embedding_model": self.embedding_model_name,
             "theme_clustering_mode": self.clustering_mode,
-            "theme_exemplars_per_cluster": self.exemplar_count,
             "master_domain": master_domain,
             "partitions": {}
         }
@@ -530,8 +535,7 @@ class ThemeClusteringEngine:
                     "size": c_data["size"],
                     "percentage": c_data["percentage"],
                     "u_center": u_center,
-                    "p_center": p_center,
-                    "top_exemplars": c_data["top_exemplars"]
+                    "p_center": p_center
                 }
             client_partitions[p_key] = {
                 "key": p_key,
@@ -1496,6 +1500,94 @@ class ThemeClusteringEngine:
                 ]
             })
         return exemplar_groups
+
+    def get_map_payload(
+        self,
+        max_themes_per_cluster: Optional[int] = None,
+        payload_format: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Extracts member themes for each cluster in the active partition formatted for
+        the Stage 1 Map phase, sorted in descending order of geometric proximity to centroid.
+        Respects max_themes_per_cluster cap and payload_format field length options.
+        """
+        active_part = self.get_active_partition(self.partitions)
+        clusters = active_part.get("clusters", {})
+        if isinstance(clusters, dict):
+            cluster_items = [(c_id, c_data) for c_id, c_data in sorted(clusters.items())]
+        else:
+            cluster_items = [(c_data.get("cluster_id", idx), c_data) for idx, c_data in enumerate(clusters)]
+
+        max_cap = max_themes_per_cluster or self.map_max_themes
+        p_format = payload_format or self.map_payload_format
+
+        map_payload = []
+        for c_id, c_data in cluster_items:
+            all_th = c_data.get("all_themes", [])
+            selected_th = all_th[:max_cap]
+
+            formatted_lines = []
+            for r_idx, t in enumerate(selected_th):
+                rank = t.get("rank_in_cluster", r_idx + 1)
+                sim = t.get("similarity_to_centroid", 0.0)
+                title = str(t.get("title", "")).strip()
+                desc = str(t.get("description", "")).strip()
+                reason = str(t.get("reasoning", "")).strip()
+
+                if p_format == "title":
+                    line = f"  {rank}. [Sim: {sim:.2f}] {title}"
+                elif p_format == "title_desc_reasoning":
+                    line = f"  {rank}. [Sim: {sim:.2f}] {title}: {desc}"
+                    if reason:
+                        line += f" (Reasoning: {reason})"
+                else:  # default "title_desc"
+                    line = f"  {rank}. [Sim: {sim:.2f}] {title}: {desc}"
+
+                formatted_lines.append(line)
+
+            map_payload.append({
+                "cluster_id": c_id,
+                "cluster_label": c_data.get("label", f"Cluster #{c_id + 1}"),
+                "theme_count": len(all_th),
+                "displayed_count": len(selected_th),
+                "percentage": c_data.get("percentage", 0.0),
+                "theme_lines": "\n".join(formatted_lines)
+            })
+
+        return map_payload
+
+    def get_reduce_anchors(
+        self,
+        top_n: Optional[int] = None
+    ) -> Dict[int, List[Dict[str, Any]]]:
+        """
+        Extracts the Top N closest themes to each cluster centroid to serve as
+        empirical ground-truth context in the Stage 2 Reduce prompt.
+        """
+        active_part = self.get_active_partition(self.partitions)
+        clusters = active_part.get("clusters", {})
+        if isinstance(clusters, dict):
+            cluster_items = [(c_id, c_data) for c_id, c_data in sorted(clusters.items())]
+        else:
+            cluster_items = [(c_data.get("cluster_id", idx), c_data) for idx, c_data in enumerate(clusters)]
+
+        n_anchors = top_n or self.reduce_anchor_count
+        anchors = {}
+
+        for c_id, c_data in cluster_items:
+            all_th = c_data.get("all_themes", [])
+            top_themes = all_th[:n_anchors]
+            anchors[c_id] = [
+                {
+                    "rank": t.get("rank_in_cluster", r_idx + 1),
+                    "title": t.get("title", ""),
+                    "description": t.get("description", ""),
+                    "similarity": round(float(t.get("similarity_to_centroid", 0.0)), 4)
+                }
+                for r_idx, t in enumerate(top_themes)
+            ]
+
+        return anchors
 
     def cluster_themes(self) -> Dict[str, Any]:
         """

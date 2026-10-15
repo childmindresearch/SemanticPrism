@@ -6,6 +6,7 @@ Contains tools for raw theme discovery, empirical theme clustering, master theme
 from .schemas import (
     Theme,
     ThemeDiscoveryResult,
+    ClusterCandidateSynthesis,
     MasterThemeSynthesisResult,
     RawTriple,
     TripleExtractionResult,
@@ -16,6 +17,7 @@ from .extractor import ExtractionPipeline, PipelineRunContext
 __all__ = [
     "Theme",
     "ThemeDiscoveryResult",
+    "ClusterCandidateSynthesis",
     "MasterThemeSynthesisResult",
     "RawTriple",
     "TripleExtractionResult",

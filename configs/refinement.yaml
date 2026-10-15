@@ -36,10 +36,21 @@ refinement:
   # Target cluster count K (used exclusively when theme_clustering_mode is set to "fixed")
   target_master_theme_count: 8              # Target number of master clusters for the 'fixed' option (Ward K)
 
-  # Dynamic number of centroid-prototypical themes passed to the LLM per cluster.
-  # The LLM will inspect these top N themes (ranked by highest cosine similarity to centroid)
-  # to synthesize each master theme's title, scope, description, and boundary rules.
-  theme_exemplars_per_cluster: 10           # Number of top exemplar themes per cluster sent to LLM prompt
+  # Master Theme Synthesis Strategy
+  #   - "map_reduce":   Two-Stage Map-Reduce (Recommended for large corpora). Deep per-cluster analysis 
+  #                     followed by global contrastive harmonization with empirical anchor themes.
+  #   - "single_stage": Traditional single-prompt synthesis using top N centroid exemplars.
+  master_synthesis_strategy: "map_reduce"       # Selection: "map_reduce" (Recommended) or "single_stage"
+
+  # Map Stage Parameters (Per-Cluster Specialist LLM — used when master_synthesis_strategy is 'map_reduce')
+  theme_map_max_themes_per_cluster: 150         # Maximum cap of member themes passed per cluster in map stage
+  theme_map_payload_format: "title_desc"        # Field length control: "title_desc" (recommended), "title", or "title_desc_reasoning"
+
+  # Reduce Stage Parameters (Global Harmonization LLM — used when master_synthesis_strategy is 'map_reduce')
+  reduce_anchor_theme_count: 5                  # Top N closest centroid themes passed as grounding context in reduce prompt
+
+  # Legacy Single-Stage Fallback Parameters (used exclusively when master_synthesis_strategy is 'single_stage')
+  theme_exemplars_per_cluster: 10               # Number of top exemplar themes per cluster sent to single-stage LLM prompt
 
   # Theme embedding model & payload format
   theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector model for theme clustering

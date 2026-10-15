@@ -12,7 +12,7 @@ from pathlib import Path
 from . import schemas
 from . import prompts
 from .theme_clusterer import ThemeClusteringEngine
-from src.agents.extraction_agents import theme_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
+from src.agents.extraction_agents import theme_agent, cluster_map_agent, master_theme_agent, triple_agent, TripleContext, triple_reformat_agent, triple_model
 from src.config import settings
 
 def load_input_documents() -> List[dict]:
@@ -463,27 +463,99 @@ class ExtractionPipeline:
         exemplar_groups = cluster_results["active_exemplars"]
         active_partition = cluster_engine.get_active_partition(partitions)
 
-        # -------------------------------------------------------------
-        # Phase 2: Formulate LLM Prompt from Cluster Exemplars
-        # -------------------------------------------------------------
-        cluster_blocks = []
-        for grp in exemplar_groups:
-            c_id = grp["cluster_id"]
-            t_count = grp["theme_count"]
-            pct = grp["percentage"]
-            lines = [f"   - {ex['title']}: {ex['description']}" for ex in grp["exemplars"]]
-            cluster_blocks.append(
-                f"### Cluster #{c_id + 1} ({t_count} themes, {pct}% of corpus)\n"
-                f"Top Prototypical Themes (Ranked by Centroid Proximity):\n" + "\n".join(lines)
-            )
-        cluster_exemplars_block = "\n\n".join(cluster_blocks)
+        strategy = cluster_engine.synthesis_strategy
+        print(f"-> Master Theme Synthesis Strategy: '{strategy.upper()}'")
 
-        user_prompt = prompts.MASTER_THEME_CLUSTERED_USER_PROMPT.format(
-            cluster_count=len(exemplar_groups),
-            cluster_exemplars_block=cluster_exemplars_block
-        )
-        full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
-        self._save_payload_text("stage_01_master_theme_synthesis.txt", full_prompt)
+        if strategy == "map_reduce":
+            # =============================================================
+            # Phase 2A: MAP STAGE (Per-Cluster Specialist Deep Dives)
+            # =============================================================
+            map_payloads = cluster_engine.get_map_payload()
+            print(f"-> Initiating Map Stage across {len(map_payloads)} clusters (cap: {cluster_engine.map_max_themes} themes/cluster, format: '{cluster_engine.map_payload_format}')...")
+
+            max_concurrency = settings.get('extraction', {}).get('max_async_calls', 2)
+            sem = asyncio.Semaphore(max_concurrency)
+
+            async def _synthesize_cluster_map(c_info: Dict[str, Any]) -> schemas.ClusterCandidateSynthesis:
+                c_id = c_info["cluster_id"]
+                theme_count = c_info["theme_count"]
+                displayed_count = c_info["displayed_count"]
+                theme_lines = c_info["theme_lines"]
+
+                map_user_prompt = prompts.CLUSTER_MAP_USER_PROMPT.format(
+                    cluster_id=c_id + 1,
+                    theme_count=theme_count,
+                    displayed_count=displayed_count,
+                    theme_lines=theme_lines
+                )
+                full_map_prompt = f"=== SYSTEM PROMPT ===\n{prompts.CLUSTER_MAP_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{map_user_prompt}"
+                self._save_payload_text("stage_01_master_theme_map.txt", full_map_prompt)
+
+                async with sem:
+                    print(f"   [Map] Analyzing Cluster #{c_id + 1} ({theme_count} themes, evaluating {displayed_count})...")
+                    res = await cluster_map_agent.run(map_user_prompt)
+                    cand = res.output
+                    cand.cluster_id = c_id
+                    print(f"   [Map] Cluster #{c_id + 1} Candidate: '{cand.candidate_title}'")
+                    return cand
+
+            map_candidates = await asyncio.gather(*[_synthesize_cluster_map(p) for p in map_payloads])
+
+            # =============================================================
+            # Phase 2B: REDUCE STAGE (Global Harmonization + Empirical Anchors)
+            # =============================================================
+            reduce_anchors = cluster_engine.get_reduce_anchors()
+            print(f"-> Initiating Reduce Stage with {len(map_candidates)} candidates + Top {cluster_engine.reduce_anchor_count} Empirical Anchors per cluster...")
+
+            cluster_blocks = []
+            for cand in map_candidates:
+                c_id = cand.cluster_id
+                anchors = reduce_anchors.get(c_id, [])
+                anchor_lines = [f"     - [Sim: {a['similarity']:.2f}] {a['title']}: {a['description']}" for a in anchors]
+
+                inclusions_str = ", ".join(cand.key_inclusions) if cand.key_inclusions else "None specified"
+                exclusions_str = ", ".join(cand.key_exclusions) if cand.key_exclusions else "None specified"
+
+                cluster_blocks.append(
+                    f"### Cluster #{c_id + 1}:\n"
+                    f"- Proposed Candidate Title: {cand.candidate_title}\n"
+                    f"- Proposed Scope Definition: {cand.scope_definition}\n"
+                    f"- Key Inclusions: {inclusions_str}\n"
+                    f"- Key Exclusions: {exclusions_str}\n"
+                    f"- Empirical Centroid Anchors (Top {len(anchors)} Closest Themes):\n" + "\n".join(anchor_lines)
+                )
+
+            reduce_user_prompt = prompts.CLUSTER_REDUCE_USER_PROMPT.format(
+                cluster_count=len(map_candidates),
+                cluster_blocks="\n\n".join(cluster_blocks)
+            )
+            full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.CLUSTER_REDUCE_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{reduce_user_prompt}"
+            self._save_payload_text("stage_01_master_theme_reduce.txt", full_prompt)
+            user_prompt = reduce_user_prompt
+
+        else:
+            # -------------------------------------------------------------
+            # Traditional Single-Stage Fallback
+            # -------------------------------------------------------------
+            print(f"-> Formulating Single-Stage LLM Prompt across {len(exemplar_groups)} cluster exemplar groups...")
+            cluster_blocks = []
+            for grp in exemplar_groups:
+                c_id = grp["cluster_id"]
+                t_count = grp["theme_count"]
+                pct = grp["percentage"]
+                lines = [f"   - {ex['title']}: {ex['description']}" for ex in grp["exemplars"]]
+                cluster_blocks.append(
+                    f"### Cluster #{c_id + 1} ({t_count} themes, {pct}% of corpus)\n"
+                    f"Top Prototypical Themes (Ranked by Centroid Proximity):\n" + "\n".join(lines)
+                )
+            cluster_exemplars_block = "\n\n".join(cluster_blocks)
+
+            user_prompt = prompts.MASTER_THEME_CLUSTERED_USER_PROMPT.format(
+                cluster_count=len(exemplar_groups),
+                cluster_exemplars_block=cluster_exemplars_block
+            )
+            full_prompt = f"=== SYSTEM PROMPT ===\n{prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT}\n\n=== USER PROMPT ===\n{user_prompt}"
+            self._save_payload_text("stage_01_master_theme_synthesis.txt", full_prompt)
         
         max_retries = 2
         for attempt in range(max_retries):

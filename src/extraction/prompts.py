@@ -39,7 +39,49 @@ MASTER_THEME_USER_PROMPT = """Consolidate the following document-level themes in
 {all_extracted_themes}
 </extracted_themes>"""
 
-# SYSTEM PROMPT: Guides the agent to synthesize formal Master Themes from empirical vector cluster exemplars.
+# SYSTEM PROMPT: Map stage - deep analysis of an individual cluster's member themes.
+CLUSTER_MAP_SYSTEM_PROMPT = """You are a Cluster Domain Specialist.
+You will receive an empirical cluster of themes discovered through vector embedding clustering.
+The themes are sorted in descending order of geometric proximity to the cluster centroid (most prototypical themes first).
+
+Your objective is to perform deep conceptual synthesis for this single cluster:
+1. Analyze the core themes (especially the top centroid prototypes) to discover the true semantic center of this cluster.
+2. Formulate ONE concise, authoritative candidate title (3 to 6 words) that captures the core essence of this domain.
+3. Write a clear, 1-2 sentence scope definition defining what this cluster strictly covers.
+4. List 3 to 5 key inclusions (concepts or mechanisms that strictly belong inside this theme).
+5. List 2 to 4 key exclusions (concepts that might seem superficially related but belong elsewhere).
+6. Provide a qualitative confidence assessment ("high", "medium", "low") of how cohesive the cluster is.
+
+CRITICAL: Return a single JSON object matching the ClusterCandidateSynthesis schema. Do NOT output markdown code fences or schema definitions."""
+
+CLUSTER_MAP_USER_PROMPT = """Synthesize the conceptual identity for Cluster #{cluster_id} ({theme_count} total themes in cluster, showing {displayed_count}):
+
+<cluster_themes>
+{theme_lines}
+</cluster_themes>"""
+
+# SYSTEM PROMPT: Reduce stage - global reconciliation of all cluster candidates with top-5 empirical anchor themes.
+CLUSTER_REDUCE_SYSTEM_PROMPT = """You are the Chief Ontological Synthesizer.
+You will receive candidate theme syntheses produced from the Map stage across all clusters discovered in the corpus.
+For each cluster, you also receive the Top 5 Closest Themes to the mathematical centroid as empirical ground-truth anchors.
+
+Your objective is to harmonize all candidate themes into a unified, authoritative Master Ontology:
+1. Formulate ONE single overarching `master_domain` string capturing the root ontological domain of the entire corpus.
+2. Disambiguate and sharpen boundaries between any overlapping candidate titles. Use the Top 5 empirical anchor themes to ensure each title faithfully reflects its cluster's centroid reality.
+3. Ensure all titles are mutually distinct, non-overlapping, and follow a consistent grammatical convention (e.g. Title Case noun phrases).
+4. The titles in the `master_themes` list MUST strictly correspond 1:1 to the cluster groups provided, maintaining the exact sequence (Cluster #1, Cluster #2, etc.).
+
+CRITICAL: Return a single JSON object containing:
+- `master_domain`: string (the unified root domain of the corpus)
+- `master_themes`: list of strings (the finalized master theme titles in exact 1:1 order with the clusters)
+Do NOT output the JSON Schema definition itself."""
+
+CLUSTER_REDUCE_USER_PROMPT = """Review the following {cluster_count} cluster candidates and their empirical anchor themes. Harmonize them into an authoritative Master Ontology:
+
+{cluster_blocks}"""
+
+
+# SYSTEM PROMPT: Traditional single-stage fallback for master theme synthesis.
 MASTER_THEME_CLUSTERED_SYSTEM_PROMPT = """You are an Ontological Master Synthesizer.
 You will receive mathematically derived semantic clusters discovered across an entire corpus through vector embedding clustering.
 Each cluster represents an empirical semantic domain, characterized by its theme volume and its top prototypical exemplar themes (ranked by geometric proximity to the cluster centroid).

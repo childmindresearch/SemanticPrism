@@ -52,11 +52,20 @@ theme_agent = Agent(
     retries=3
 )
 
-# Agent 2: Synthesizes all localized themes into a global master list.
+# Agent 1.9: Map Agent - analyzes an individual cluster's member themes to produce candidate synthesis
+cluster_map_agent = Agent(
+    model=theme_model,
+    output_type=schemas.ClusterCandidateSynthesis,
+    system_prompt=prompts.CLUSTER_MAP_SYSTEM_PROMPT,
+    model_settings=theme_settings,
+    retries=2
+)
+
+# Agent 2: Reduce / Global Agent - harmonizes cluster candidates into a global master ontology.
 master_theme_agent = Agent(
     model=theme_model,
     output_type=schemas.MasterThemeSynthesisResult,
-    system_prompt=prompts.MASTER_THEME_CLUSTERED_SYSTEM_PROMPT,
+    system_prompt=prompts.CLUSTER_REDUCE_SYSTEM_PROMPT,
     model_settings=theme_settings,
     retries=3
 )
