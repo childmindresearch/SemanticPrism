@@ -841,6 +841,58 @@ class Galaxy3DVisualizer:
       box-shadow: 0 0 12px rgba(0, 240, 255, 0.2);
     }}
 
+    .comm-item.comm-hidden {{
+      opacity: 0.35;
+      filter: grayscale(60%);
+    }}
+
+    .comm-item.comm-hidden:hover {{
+      opacity: 0.70;
+      filter: grayscale(10%);
+    }}
+
+    .comm-counter-badge {{
+      font-size: 10.5px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-cyan);
+      background: rgba(0, 240, 255, 0.12);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      border-radius: 4px;
+      padding: 2px 7px;
+    }}
+
+    .comm-actions-toolbar {{
+      display: flex;
+      gap: 6px;
+      padding: 6px 14px 10px 14px;
+      border-bottom: 1px solid var(--bg-card-border);
+      background: rgba(0, 0, 0, 0.15);
+    }}
+
+    .comm-tool-btn {{
+      flex: 1;
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 5px 6px;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+    }}
+
+    .comm-tool-btn:hover {{
+      background: rgba(51, 65, 85, 0.9);
+      color: #fff;
+      border-color: var(--accent-cyan);
+    }}
+
     .comm-item-top {{
       display: flex;
       justify-content: space-between;
@@ -854,6 +906,10 @@ class Galaxy3DVisualizer:
       display: flex;
       align-items: center;
       gap: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
     }}
 
     .color-dot {{
@@ -864,10 +920,45 @@ class Galaxy3DVisualizer:
       box-shadow: 0 0 6px currentColor;
     }}
 
+    .comm-item-actions {{
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      flex-shrink: 0;
+    }}
+
     .comm-count {{
       font-family: 'JetBrains Mono', monospace;
       font-size: 11px;
       color: var(--text-muted);
+      margin-right: 2px;
+    }}
+
+    .comm-btn-icon {{
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      cursor: pointer;
+      font-size: 12px;
+      padding: 3px 5px;
+      border-radius: 5px;
+      transition: all 0.15s ease;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }}
+
+    .comm-btn-icon:hover {{
+      background: rgba(0, 240, 255, 0.2);
+      border-color: var(--accent-cyan);
+      transform: scale(1.15);
+    }}
+
+    .comm-btn-icon.off {{
+      opacity: 0.45;
+      filter: grayscale(100%);
+      background: rgba(0, 0, 0, 0.2);
     }}
 
     .comm-theme {{
@@ -1223,11 +1314,18 @@ class Galaxy3DVisualizer:
   <!-- Left Drawer: Celestial Communities -->
   <aside class="left-drawer">
     <div class="drawer-header">
-      <h3><span>🪐</span> Community Galaxies</h3>
-      <span style="font-size:10px; color:var(--text-muted);">Click to Fly-To</span>
+      <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
+        <h3><span>🪐</span> Community Galaxies</h3>
+        <span id="visible-comm-counter" class="comm-counter-badge">{len(comms)} / {len(comms)} Visible</span>
+      </div>
     </div>
     <div class="search-box">
       <input type="text" id="filter-input" placeholder="Search concepts or clusters...">
+    </div>
+    <div class="comm-actions-toolbar">
+      <button id="btn-show-all-comms" class="comm-tool-btn" title="Show all communities">👁️ All</button>
+      <button id="btn-hide-all-comms" class="comm-tool-btn" title="Hide all communities">🚫 None</button>
+      <button id="btn-invert-comms" class="comm-tool-btn" title="Invert visible communities">🔄 Invert</button>
     </div>
     <div class="community-list" id="community-list">
       <!-- Injected dynamically -->
@@ -1671,6 +1769,7 @@ class Galaxy3DVisualizer:
         isTransitioning = false;
         rebuildHighways(currentEngine);
         rebuildRefugees(currentEngine);
+        if (typeof updateVisibility === 'function') updateVisibility();
       }}
     }}
 
@@ -1829,7 +1928,10 @@ class Galaxy3DVisualizer:
     // =========================================================================
     // UI POPULATION & EVENT CONTROLS
     // =========================================================================
-    // 1. Populate Community List
+    // Track visible communities (all visible by default)
+    const visibleCommunityIds = new Set(GALAXY_DATA.communities.map(c => c.community_id));
+
+    // 1. Populate Community List with Visibility Toggles and Solo Focus
     const commListEl = document.getElementById('community-list');
     GALAXY_DATA.communities.forEach(c => {{
       const item = document.createElement('div');
@@ -1841,16 +1943,87 @@ class Galaxy3DVisualizer:
             <span class="color-dot" style="background:${{c.color}};"></span>
             ${{c.label}}
           </span>
-          <span class="comm-count">${{c.total_concepts}}</span>
+          <div class="comm-item-actions">
+            <span class="comm-count">${{c.total_concepts}}</span>
+            <button class="comm-btn-icon comm-solo-btn" title="Solo / Isolate only this community" data-cid="${{c.community_id}}">🎯</button>
+            <button class="comm-btn-icon comm-eye-btn" title="Toggle visibility of this community" data-cid="${{c.community_id}}">👁️</button>
+          </div>
         </div>
         <div class="comm-theme">${{c.headline_theme}}</div>
       `;
 
-      item.addEventListener('click', () => {{
-        flyToCommunity(c.community_id);
+      // Eye button: Toggle visibility of this specific community
+      const eyeBtn = item.querySelector('.comm-eye-btn');
+      eyeBtn.addEventListener('click', (e) => {{
+        e.stopPropagation();
+        if (visibleCommunityIds.has(c.community_id)) {{
+          visibleCommunityIds.delete(c.community_id);
+        }} else {{
+          visibleCommunityIds.add(c.community_id);
+        }}
+        updateVisibility();
       }});
+
+      // Solo button: Isolate only this community and fly to it
+      const soloBtn = item.querySelector('.comm-solo-btn');
+      soloBtn.addEventListener('click', (e) => {{
+        e.stopPropagation();
+        visibleCommunityIds.clear();
+        visibleCommunityIds.add(c.community_id);
+        flyToCommunity(c.community_id);
+        updateVisibility();
+      }});
+
+      // Card click: If multi-select modifier (Shift/Ctrl/Cmd), toggle; else ensure visible & fly to it
+      item.addEventListener('click', (e) => {{
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {{
+          if (visibleCommunityIds.has(c.community_id)) {{
+            visibleCommunityIds.delete(c.community_id);
+          }} else {{
+            visibleCommunityIds.add(c.community_id);
+          }}
+        }} else {{
+          if (!visibleCommunityIds.has(c.community_id)) {{
+            visibleCommunityIds.add(c.community_id);
+          }}
+          flyToCommunity(c.community_id);
+        }}
+        updateVisibility();
+      }});
+
       commListEl.appendChild(item);
     }});
+
+    // Toolbar buttons for batch visibility operations
+    const btnShowAll = document.getElementById('btn-show-all-comms');
+    if (btnShowAll) {{
+      btnShowAll.addEventListener('click', () => {{
+        GALAXY_DATA.communities.forEach(c => visibleCommunityIds.add(c.community_id));
+        updateVisibility();
+      }});
+    }}
+
+    const btnHideAll = document.getElementById('btn-hide-all-comms');
+    if (btnHideAll) {{
+      btnHideAll.addEventListener('click', () => {{
+        visibleCommunityIds.clear();
+        updateVisibility();
+      }});
+    }}
+
+    const btnInvert = document.getElementById('btn-invert-comms');
+    if (btnInvert) {{
+      btnInvert.addEventListener('click', () => {{
+        GALAXY_DATA.communities.forEach(c => {{
+          if (visibleCommunityIds.has(c.community_id)) {{
+            visibleCommunityIds.delete(c.community_id);
+          }} else {{
+            visibleCommunityIds.add(c.community_id);
+          }}
+        }});
+        updateVisibility();
+      }});
+    }}
 
     // 2. Cinematic Camera Fly-To Animation
     function flyToCommunity(cid) {{
@@ -1897,18 +2070,42 @@ class Galaxy3DVisualizer:
         document.querySelectorAll('.mode-pill').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         currentFilterMode = btn.dataset.mode;
-        applyFilterMode();
+        updateVisibility();
       }});
     }});
 
-    function applyFilterMode() {{
+    // 4. Centralized Multi-Level Visibility Engine
+    function updateVisibility() {{
       const mode = currentFilterMode;
-      centroidGroup.visible = (mode === 'all' || mode === 'centroids' || mode === 'tier1');
-      highwayGroup.visible = (mode === 'all' || mode === 'centroids');
-      hullGroup.visible = (mode === 'all' || mode === 'hulls');
-      refugeeGroup.visible = (mode === 'all' || mode === 'refugees');
+      const filterInputEl = document.getElementById('filter-input');
+      const q = filterInputEl ? filterInputEl.value.toLowerCase().trim() : '';
 
+      // Ensure parent groups remain active containers
+      centroidGroup.visible = true;
+      highwayGroup.visible = true;
+      hullGroup.visible = true;
+      refugeeGroup.visible = true;
+      conceptGroup.visible = true;
+
+      // 1. Concept Meshes
       conceptMeshes.forEach(mesh => {{
+        const cid = mesh.userData.community_id;
+        const isCommVis = visibleCommunityIds.has(cid);
+
+        if (!isCommVis) {{
+          mesh.visible = false;
+          return;
+        }}
+
+        if (q) {{
+          const match = mesh.userData.entity.toLowerCase().includes(q) ||
+                        mesh.userData.community_label.toLowerCase().includes(q);
+          if (!match) {{
+            mesh.visible = false;
+            return;
+          }}
+        }}
+
         if (mode === 'all') {{
           mesh.visible = true;
         }} else if (mode === 'centroids') {{
@@ -1916,33 +2113,78 @@ class Galaxy3DVisualizer:
         }} else if (mode === 'hulls') {{
           mesh.visible = true;
         }} else if (mode === 'refugees') {{
-          mesh.visible = mesh.userData.is_refugee;
+          mesh.visible = Boolean(mesh.userData.is_refugee);
         }} else if (mode === 'tier1') {{
           mesh.visible = (mesh.userData.tier_key === 'tier_1_nucleus');
         }}
       }});
-    }}
 
-    // 4. Search Filter
-    const filterInput = document.getElementById('filter-input');
-    filterInput.addEventListener('input', (e) => {{
-      const q = e.target.value.toLowerCase().trim();
-      conceptMeshes.forEach(m => {{
-        if (!q) {{
-          m.visible = true;
-        }} else {{
-          const match = m.userData.entity.toLowerCase().includes(q) || m.userData.community_label.toLowerCase().includes(q);
-          m.visible = match;
+      // 2. Centroid Meshes
+      centroidMeshes.forEach(mesh => {{
+        const cid = mesh.userData.community_id;
+        const isCommVis = visibleCommunityIds.has(cid);
+        const modeAllows = (mode === 'all' || mode === 'centroids' || mode === 'tier1');
+        mesh.visible = isCommVis && modeAllows;
+      }});
+
+      // 3. Density Hull Meshes
+      hullMeshes.forEach(mesh => {{
+        const cid = mesh.userData.community_id;
+        const isCommVis = visibleCommunityIds.has(cid);
+        const modeAllows = (mode === 'all' || mode === 'hulls');
+        mesh.visible = isCommVis && modeAllows;
+      }});
+
+      // 4. Highway Conduits (visible if both connected communities are active)
+      highwayLines.forEach(line => {{
+        const sVis = visibleCommunityIds.has(line.userData.source);
+        const tVis = visibleCommunityIds.has(line.userData.target);
+        const modeAllows = (mode === 'all' || mode === 'centroids');
+        line.visible = (sVis && tVis) && modeAllows;
+      }});
+
+      // 5. Refugee Rays (visible if either source or target community is active)
+      refugeeLines.forEach(line => {{
+        const sVis = visibleCommunityIds.has(line.userData.source_community);
+        const tVis = visibleCommunityIds.has(line.userData.target_community);
+        const modeAllows = (mode === 'all' || mode === 'refugees');
+        line.visible = (sVis || tVis) && modeAllows;
+      }});
+
+      // 6. Update Community List Cards & Eye Button State
+      document.querySelectorAll('.comm-item').forEach(el => {{
+        const cid = parseInt(el.dataset.cid);
+        const isVis = visibleCommunityIds.has(cid);
+        el.classList.toggle('comm-hidden', !isVis);
+        const eyeBtn = el.querySelector('.comm-eye-btn');
+        if (eyeBtn) {{
+          eyeBtn.innerHTML = isVis ? '👁️' : '🚫';
+          eyeBtn.title = isVis ? 'Click to hide this community' : 'Click to show this community';
+          eyeBtn.classList.toggle('off', !isVis);
         }}
       }});
-    }});
 
-    // 5. Camera Control Buttons
+      // 7. Update Visible Communities Counter Badge
+      const counterEl = document.getElementById('visible-comm-counter');
+      if (counterEl) {{
+        counterEl.innerText = `${{visibleCommunityIds.size}} / ${{GALAXY_DATA.communities.length}} Visible`;
+      }}
+    }}
+
+    // 5. Search Filter
+    const filterInput = document.getElementById('filter-input');
+    if (filterInput) {{
+      filterInput.addEventListener('input', () => updateVisibility());
+    }}
+
+    // 6. Camera Control Buttons
     document.getElementById('btn-reset-cam').addEventListener('click', () => {{
       camera.position.set(0, 45, 175);
       controls.target.set(0, 0, 0);
       selectedCommunityId = null;
       document.querySelectorAll('.comm-item').forEach(el => el.classList.remove('active'));
+      GALAXY_DATA.communities.forEach(c => visibleCommunityIds.add(c.community_id));
+      updateVisibility();
     }});
 
     document.getElementById('btn-top-view').addEventListener('click', () => {{

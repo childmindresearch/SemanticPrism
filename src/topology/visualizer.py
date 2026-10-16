@@ -3722,7 +3722,7 @@ class TopologyVisualizer:
             target_nodes = set(target["nodes"])
             
             # Filter and cap triplets via TargetResolver (resolver.py)
-            capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, result.model_dump(), max_triplets_cap)
+            capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, result.model_dump(), max_triplets_cap, config=self.full_config)
 
             # Per-entity tier lookup: normalized name -> {tier, scores}
             tier_map = {}

@@ -163,6 +163,27 @@ class TopologyPipeline:
         self.leiden_res = self.comm_cfg.get('leiden_resolution', 1.0)
         self.enable_mod_vitality = self.config.get('enable_modularity_vitality_pruning', False)
 
+        # Semantic Community Enhancement Config (Stage 3 Topology Refinement Integration)
+        self.semantic_cfg = self.config.get('semantic_clustering', {})
+        self.quarantine_global_hubs = self.semantic_cfg.get('quarantine_global_hubs', True)
+        self.quarantine_true_isolates = self.semantic_cfg.get('quarantine_true_isolates', True)
+        self.enable_weighted_leiden = self.semantic_cfg.get('enable_weighted_leiden', True)
+        self.edge_weighting_mode = self.semantic_cfg.get('edge_weighting_mode', 'hybrid')
+        self.hybrid_semantic_alpha = float(self.semantic_cfg.get('hybrid_semantic_alpha', 0.35))
+        self.enable_micro_cluster_absorption = self.semantic_cfg.get('enable_micro_cluster_absorption', True)
+        self.min_absorption_similarity = float(self.semantic_cfg.get('min_absorption_similarity', 0.28))
+        self.absorption_contrast_margin = float(self.semantic_cfg.get('absorption_contrast_margin', 0.05))
+        self.absorption_size_threshold = int(self.semantic_cfg.get('absorption_size_threshold', 12))
+        self.freeze_centroids_pre_absorption = self.semantic_cfg.get('freeze_centroids_pre_absorption', True)
+        self.enable_singleton_harvesting = self.semantic_cfg.get('enable_singleton_harvesting', True)
+        self.singleton_harvesting_threshold = float(self.semantic_cfg.get('singleton_harvesting_threshold', 0.40))
+        self.singleton_contrast_margin = float(self.semantic_cfg.get('singleton_contrast_margin', 0.05))
+        self.enable_refugee_realignment = self.semantic_cfg.get('enable_refugee_realignment', True)
+        self.refugee_margin_delta = float(self.semantic_cfg.get('refugee_margin_delta', 0.20))
+        self.require_structural_neighbor = self.semantic_cfg.get('require_structural_neighbor', True)
+        self.triplet_payload_mode = self.semantic_cfg.get('triplet_payload_mode', 'strictly_intra_only')
+        self.exclude_hub_triplets = self.semantic_cfg.get('exclude_hub_triplets_from_communities', True)
+
         # Dedicated Visualization Engine
         self.visualizer = TopologyVisualizer(config=config)
 
@@ -364,9 +385,8 @@ class TopologyPipeline:
             try:
                 node_list = list(ug.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
-                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
-                g_int = nx.relabel_nodes(ug, mapping)
-                raw_coms = algorithms.leiden(g_int)
+                weights_param = "weight" if self.enable_weighted_leiden else None
+                raw_coms = algorithms.leiden(g_int, weights=weights_param)
                 leiden_raw_comms = [[rev_mapping[x] for x in c] for c in raw_coms.communities]
                 leiden_raw_q = round(float(nx.community.modularity(ug, leiden_raw_comms)), 4)
                 leiden_raw_comms_count = len(leiden_raw_comms)
@@ -608,6 +628,27 @@ class TopologyPipeline:
         # 4. Target graph for cluster/community detection (G_cluster = dense core with degree > 1)
         cluster_ug = core_ug.subgraph(dense_core_nodes).copy()
 
+        # Hybrid Edge Weighting: Combine statement frequency with semantic cosine similarity
+        if self.enable_weighted_leiden and self.edge_weighting_mode == "hybrid" and len(cluster_ug) > 0:
+            try:
+                ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+                m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+                c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+                concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(cluster_ug.nodes()), cache_dir=c_dir, model_name=m_name)
+                for u, v in cluster_ug.edges():
+                    freq = float(cluster_ug[u][v].get('weight', 1.0))
+                    vu = concept_vecs.get(str(u).lower().strip())
+                    vv = concept_vecs.get(str(v).lower().strip())
+                    if vu is not None and vv is not None:
+                        cos_sim = float(np.dot(vu, vv))
+                        mod = max(0.1, cos_sim)
+                        w = freq * ((1.0 - self.hybrid_semantic_alpha) + self.hybrid_semantic_alpha * mod)
+                    else:
+                        w = freq
+                    cluster_ug[u][v]['weight'] = round(float(w), 4)
+            except Exception as e:
+                print(f"[Topology] Warning in hybrid edge weighting: {e}")
+
         # 4b. Write Unified Removed Nodes Manifest
         removed_manifest = {
             "summary": {
@@ -672,9 +713,8 @@ class TopologyPipeline:
             try:
                 node_list = list(cluster_ug.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
-                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
-                g_int = nx.relabel_nodes(cluster_ug, mapping)
-                coms = algorithms.leiden(g_int)
+                weights_param = "weight" if self.enable_weighted_leiden else None
+                coms = algorithms.leiden(g_int, weights=weights_param)
                 comms_list = [[rev_mapping[x] for x in c] for c in coms.communities]
                 core_modularity_q = round(float(nx.community.modularity(cluster_ug, comms_list)), 4)
                 core_comm_count = len(comms_list)
@@ -788,7 +828,8 @@ class TopologyPipeline:
                 mapping = {n: idx for idx, n in enumerate(node_list)}
                 rev_mapping = {idx: n for idx, n in enumerate(node_list)}
                 g_int = nx.relabel_nodes(cluster_ug, mapping)
-                coms = algorithms.leiden(g_int)
+                weights_param = "weight" if self.enable_weighted_leiden else None
+                coms = algorithms.leiden(g_int, weights=weights_param)
                 for i, c_nodes in enumerate(coms.communities):
                     orig_nodes = [rev_mapping[n] for n in c_nodes]
                     communities.append(CommunityPartition(community_id=i, nodes=orig_nodes))
@@ -824,6 +865,317 @@ class TopologyPipeline:
                 comm_map[u] = target_cid
                 reattached_leaf_count += 1
 
+        # -------------------------------------------------------------
+        # Pass 3: Gated Micro-Cluster Absorption with Frozen Centroids
+        # -------------------------------------------------------------
+        absorption_records = []
+        if self.enable_micro_cluster_absorption and len(communities) > 1:
+            # 1. Enforce Immutable Quarantine Blocklist
+            immutable_quarantine = set(global_hubs)
+            if self.quarantine_true_isolates:
+                immutable_quarantine.update(orphans)
+            immutable_quarantine_norm = {str(h).lower().strip() for h in immutable_quarantine}
+
+            # 2. Partition into Major vs Minor Communities
+            min_size = self.absorption_size_threshold
+            major_comms = [c for c in communities if len(c.nodes) >= min_size]
+            minor_comms = [c for c in communities if len(c.nodes) < min_size]
+
+            # Fallback if no community meets the threshold: take top 2 largest
+            if not major_comms and communities:
+                sorted_by_size = sorted(communities, key=lambda x: len(x.nodes), reverse=True)
+                major_comms = sorted_by_size[:max(1, min(2, len(sorted_by_size)))]
+                minor_comms = [c for c in communities if c not in major_comms]
+
+            if major_comms and minor_comms:
+                # Load concept embeddings for all active nodes
+                all_active_nodes = set()
+                for c in communities:
+                    all_active_nodes.update(c.nodes)
+                ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+                m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+                c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+                concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
+
+                # 3. Compute and Freeze Major Fréchet Centroids
+                major_centroids = {}
+                for mc in major_comms:
+                    vecs = [concept_vecs[n.lower().strip()] for n in mc.nodes if n.lower().strip() in concept_vecs]
+                    if vecs:
+                        c_sum = np.sum(vecs, axis=0)
+                        c_norm = np.linalg.norm(c_sum)
+                        major_centroids[mc.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+
+                # 4. Gated Absorption of Minor Community Nodes
+                absorbed_count = 0
+                for min_c in minor_comms:
+                    nodes_to_keep = []
+                    for u in min_c.nodes:
+                        u_norm = str(u).lower().strip()
+                        # Absolute Quarantine Check: Never absorb pruned global hubs or true isolates
+                        if u in immutable_quarantine or u_norm in immutable_quarantine_norm:
+                            nodes_to_keep.append(u)
+                            continue
+
+                        u_vec = concept_vecs.get(u_norm)
+                        if u_vec is None or not major_centroids:
+                            nodes_to_keep.append(u)
+                            continue
+
+                        # Compute cosine similarity to all frozen major centroids
+                        sims = sorted(
+                            [(mc_id, float(np.dot(u_vec, m_vec))) for mc_id, m_vec in major_centroids.items()],
+                            key=lambda x: x[1], reverse=True
+                        )
+                        best_cid, best_sim = sims[0]
+                        second_cid, second_sim = sims[1] if len(sims) > 1 else (None, -1.0)
+                        contrast_margin = (best_sim - second_sim) if second_cid is not None else 1.0
+
+                        # Gating Guardrail: Absolute similarity AND contrast margin (Enhancement 1)
+                        if (
+                            best_cid is not None
+                            and best_sim >= self.min_absorption_similarity
+                            and contrast_margin >= self.absorption_contrast_margin
+                        ):
+                            # Absorb into best major community
+                            comm_lookup[best_cid].nodes.append(u)
+                            comm_map[u] = best_cid
+                            absorbed_count += 1
+                            absorption_records.append({
+                                "node": u,
+                                "source_community": min_c.community_id,
+                                "target_community": best_cid,
+                                "similarity_to_centroid": round(best_sim, 4),
+                                "second_community": second_cid,
+                                "second_similarity": round(second_sim, 4) if second_cid is not None else None,
+                                "contrast_margin": round(contrast_margin, 4),
+                                "status": "absorbed"
+                            })
+                        else:
+                            nodes_to_keep.append(u)
+                    min_c.nodes = nodes_to_keep
+
+                # Prune completely absorbed minor communities
+                communities = [c for c in communities if len(c.nodes) > 0]
+                comm_lookup = {c.community_id: c for c in communities}
+                if absorbed_count > 0:
+                    print(f"      -> Micro-Cluster Absorption: {absorbed_count} nodes absorbed into dominant centroids (tau >= {self.min_absorption_similarity}, margin >= {self.absorption_contrast_margin})")
+
+        # -------------------------------------------------------------
+        # Pass 3.5: Semantic Singleton Harvesting (Enhancement 2)
+        # -------------------------------------------------------------
+        singleton_harvest_records = []
+        if self.enable_singleton_harvesting and len(communities) > 0 and orphans:
+            immutable_quarantine = set(global_hubs)
+            immutable_quarantine_norm = {str(h).lower().strip() for h in immutable_quarantine}
+
+            # Harvest centroids: use frozen major_centroids if available, or compute on current communities
+            harvest_centroids = {}
+            if 'major_centroids' in locals() and major_centroids:
+                harvest_centroids = major_centroids
+            else:
+                for c in communities:
+                    vecs = [concept_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs]
+                    if vecs:
+                        c_sum = np.sum(vecs, axis=0)
+                        c_norm = np.linalg.norm(c_sum)
+                        harvest_centroids[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+
+            if harvest_centroids:
+                ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+                m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+                c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+                orphan_vecs = TargetResolver._get_or_load_concept_embeddings(orphans, cache_dir=c_dir, model_name=m_name)
+
+                remaining_orphans = []
+                harvested_count = 0
+                for u in orphans:
+                    u_norm = str(u).lower().strip()
+                    # Strict Quarantine: NEVER harvest global hubs
+                    if u in immutable_quarantine or u_norm in immutable_quarantine_norm:
+                        remaining_orphans.append(u)
+                        continue
+
+                    u_vec = orphan_vecs.get(u_norm)
+                    if u_vec is None:
+                        remaining_orphans.append(u)
+                        continue
+
+                    sims = sorted(
+                        [(mc_id, float(np.dot(u_vec, m_vec))) for mc_id, m_vec in harvest_centroids.items()],
+                        key=lambda x: x[1], reverse=True
+                    )
+                    best_cid, best_sim = sims[0]
+                    second_cid, second_sim = sims[1] if len(sims) > 1 else (None, -1.0)
+                    contrast_margin = (best_sim - second_sim) if second_cid is not None else 1.0
+
+                    if (
+                        best_cid is not None
+                        and best_sim >= self.singleton_harvesting_threshold
+                        and contrast_margin >= self.singleton_contrast_margin
+                    ):
+                        comm_lookup[best_cid].nodes.append(u)
+                        comm_map[u] = best_cid
+                        harvested_count += 1
+                        singleton_harvest_records.append({
+                            "node": u,
+                            "target_community": best_cid,
+                            "similarity_to_centroid": round(best_sim, 4),
+                            "second_community": second_cid,
+                            "second_similarity": round(second_sim, 4) if second_cid is not None else None,
+                            "contrast_margin": round(contrast_margin, 4),
+                            "status": "harvested"
+                        })
+                    else:
+                        remaining_orphans.append(u)
+
+                orphans = remaining_orphans
+                if harvested_count > 0:
+                    print(f"      -> Semantic Singleton Harvesting: {harvested_count} high-confidence singletons harvested into dominant centroids (tau >= {self.singleton_harvesting_threshold}, margin >= {self.singleton_contrast_margin})")
+
+                with open(path_out_dir / "singleton_harvesting_report.json", "w") as f:
+                    json.dump({
+                        "enabled": self.enable_singleton_harvesting,
+                        "singleton_harvesting_threshold": self.singleton_harvesting_threshold,
+                        "singleton_contrast_margin": self.singleton_contrast_margin,
+                        "total_singletons_harvested": len(singleton_harvest_records),
+                        "remaining_orphans_count": len(orphans),
+                        "harvest_records": singleton_harvest_records
+                    }, f, indent=2)
+
+        # -------------------------------------------------------------
+        # Pass 4: Guarded Semantic Refugee Realignment
+        # -------------------------------------------------------------
+        refugee_records = []
+        if self.enable_refugee_realignment and len(communities) > 1:
+            immutable_quarantine = set(global_hubs)
+            if self.quarantine_true_isolates:
+                immutable_quarantine.update(orphans)
+            immutable_quarantine_norm = {str(x).lower().strip() for x in immutable_quarantine}
+
+            all_active_nodes = set()
+            for c in communities:
+                all_active_nodes.update(c.nodes)
+            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
+
+            active_centroids = {}
+            for c in communities:
+                vecs = [concept_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs]
+                if vecs:
+                    c_sum = np.sum(vecs, axis=0)
+                    c_norm = np.linalg.norm(c_sum)
+                    active_centroids[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+
+            realigned_count = 0
+            for c in list(communities):
+                c_nodes_current = list(c.nodes)
+                if len(c_nodes_current) <= 5:
+                    continue
+                for u in c_nodes_current:
+                    u_norm = str(u).lower().strip()
+                    if u in immutable_quarantine or u_norm in immutable_quarantine_norm:
+                        continue
+                    u_vec = concept_vecs.get(u_norm)
+                    if u_vec is None:
+                        continue
+
+                    home_cid = c.community_id
+                    home_sim = float(np.dot(u_vec, active_centroids[home_cid])) if home_cid in active_centroids else 0.0
+
+                    best_foreign_cid = None
+                    best_foreign_sim = -1.0
+
+                    for foreign_c in communities:
+                        if foreign_c.community_id == home_cid:
+                            continue
+                        fc_id = foreign_c.community_id
+                        if fc_id not in active_centroids:
+                            continue
+
+                        # Structural Adjacency Requirement: Must share an edge in cluster_ug or dg
+                        if self.require_structural_neighbor:
+                            has_edge = any(
+                                cluster_ug.has_edge(u, v) or dg.has_edge(u, v) or dg.has_edge(v, u)
+                                for v in foreign_c.nodes
+                            )
+                            if not has_edge:
+                                continue
+
+                        f_sim = float(np.dot(u_vec, active_centroids[fc_id]))
+                        if f_sim > best_foreign_sim:
+                            best_foreign_sim = f_sim
+                            best_foreign_cid = fc_id
+
+                    # Margin Delta Check
+                    if (
+                        best_foreign_cid is not None
+                        and (best_foreign_sim - home_sim) > self.refugee_margin_delta
+                        and len(c.nodes) > 5
+                    ):
+                        c.nodes.remove(u)
+                        comm_lookup[best_foreign_cid].nodes.append(u)
+                        comm_map[u] = best_foreign_cid
+                        realigned_count += 1
+                        refugee_records.append({
+                            "node": u,
+                            "source_community": home_cid,
+                            "target_community": best_foreign_cid,
+                            "home_similarity": round(home_sim, 4),
+                            "foreign_similarity": round(best_foreign_sim, 4),
+                            "delta": round(best_foreign_sim - home_sim, 4)
+                        })
+
+            if realigned_count > 0:
+                print(f"      -> Refugee Realignment: {realigned_count} nodes realigned to structurally adjacent centroids (delta > {self.refugee_margin_delta})")
+
+        # -------------------------------------------------------------
+        # Re-index & Normalize Communities by Size Descending
+        # -------------------------------------------------------------
+        communities.sort(key=lambda x: len(x.nodes), reverse=True)
+        old_to_new_cid = {}
+        for new_idx, c in enumerate(communities):
+            old_to_new_cid[c.community_id] = new_idx
+            c.community_id = new_idx
+            c.nodes = sorted(list(set(c.nodes)))
+
+        # Update comm_map with normalized community IDs
+        comm_map = {}
+        for c in communities:
+            for n in c.nodes:
+                comm_map[n] = c.community_id
+
+        # Recalculate Final Core Modularity Q on finalized partitions
+        if len(communities) >= 2:
+            try:
+                final_q = round(float(nx.community.modularity(cluster_ug, [c.nodes for c in communities if set(c.nodes).issubset(set(cluster_ug.nodes()))])), 4)
+            except Exception:
+                pass
+
+        # Write Semantic Absorption & Refugee Audit Reports
+        with open(path_out_dir / "semantic_absorption_report.json", "w") as f:
+            json.dump({
+                "enabled": self.enable_micro_cluster_absorption,
+                "min_absorption_similarity": self.min_absorption_similarity,
+                "absorption_contrast_margin": self.absorption_contrast_margin,
+                "absorption_size_threshold": self.absorption_size_threshold,
+                "total_nodes_absorbed": len(absorption_records),
+                "quarantined_hubs_count": len(global_hubs),
+                "hubs_absorbed": 0,
+                "absorption_records": absorption_records
+            }, f, indent=2)
+
+        with open(path_out_dir / "refugee_realignment_audit.json", "w") as f:
+            json.dump({
+                "enabled": self.enable_refugee_realignment,
+                "refugee_margin_delta": self.refugee_margin_delta,
+                "require_structural_neighbor": self.require_structural_neighbor,
+                "total_nodes_realigned": len(refugee_records),
+                "realignment_records": refugee_records
+            }, f, indent=2)
+
         # Post-Reattachment Community Diagnostics
         comm_stats = []
         for c in communities:
@@ -843,8 +1195,14 @@ class TopologyPipeline:
             })
 
         path_diagnostics = {
-            "algorithm": "Leiden Modularity Optimization (Two-Pass Leaf Reattachment)",
+            "algorithm": "Leiden Modularity Optimization (Hybrid Weighted + Centroid Absorption)",
             "resolution": self.leiden_res,
+            "weighted_leiden": self.enable_weighted_leiden,
+            "micro_cluster_absorption_enabled": self.enable_micro_cluster_absorption,
+            "micro_clusters_absorbed_nodes": len(absorption_records),
+            "singleton_harvesting_enabled": self.enable_singleton_harvesting,
+            "singletons_harvested_nodes": len(singleton_harvest_records),
+            "refugees_realigned_nodes": len(refugee_records),
             "dense_core_nodes": len(cluster_ug),
             "pendant_leaves_reattached": reattached_leaf_count,
             "total_partitioned_nodes": sum(len(c.nodes) for c in communities),
@@ -992,8 +1350,8 @@ class TopologyPipeline:
                 node_list = list(ug_hubs.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
                 rev_mapping = {idx: n for idx, n in enumerate(node_list)}
-                int_ug_hubs = nx.relabel_nodes(ug_hubs, mapping)
-                coms = algorithms.leiden(int_ug_hubs)
+                weights_param = "weight" if self.enable_weighted_leiden else None
+                coms = algorithms.leiden(int_ug_hubs, weights=weights_param)
                 for i, c_nodes in enumerate(coms.communities):
                     orig_nodes = [rev_mapping[n] for n in c_nodes]
                     hub_partitions.append(HubPartition(hub_cluster_id=i, nodes=orig_nodes))

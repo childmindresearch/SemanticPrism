@@ -42,13 +42,23 @@ class TargetResolver:
         
         # 3. Consolidate Qualified Community Targets (>= min_cluster_size)
         targets = []
+        raw_hubs_set = set(raw_hubs)
         for comm in topology.get("communities", []):
             nodes_in_comm = comm.get("nodes", [])
-            if len(nodes_in_comm) >= min_cluster_size:
-                targets.append({"type": "community", "id": comm.get("community_id"), "nodes": nodes_in_comm})
+            # Invariant: Strict Hub Quarantine (Hubs never enter community targets)
+            clean_nodes = [n for n in nodes_in_comm if n not in raw_hubs_set]
+            if len(clean_nodes) >= min_cluster_size:
+                targets.append({"type": "community", "id": comm.get("community_id"), "nodes": clean_nodes})
 
         targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
-        return targets, all_enum_nodes
+
+        # Invariant: Mutually Disjoint Community and Enum Partitioning (no node exists in both)
+        all_target_nodes = set()
+        for t in targets:
+            all_target_nodes.update(t["nodes"])
+        clean_enum_nodes = sorted([n for n in all_enum_nodes if n not in all_target_nodes])
+
+        return targets, clean_enum_nodes
 
     @staticmethod
     def filter_and_cap_triplets(
@@ -57,22 +67,29 @@ class TargetResolver:
         topology: Dict[str, Any] = None,
         max_triplets_cap: int = 1800,
         target_id: Any = "global",
-        path_type: str = "community"
+        path_type: str = "community",
+        config: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
         """
         Filters triplets incident to target_nodes and prioritizes them using a
-        pure Local Community Centrality engine (no global PageRank required):
-
-        1. Tier 1 (Intra-Community): Both subject and object are community members.
-           Ranked by joint local intra-community degree + statement frequency.
-           Always prioritized over external connectors.
-        2. Tier 2 (Boundary Context): Exactly one entity is a community member.
-           Ranked by the community member's internal local centrality + statement frequency.
-           Fills remaining capacity up to max_triplets_cap without displacing internal triplets.
+        pure Local Community Centrality engine.
+        
+        Strict Separation & Quarantine Rules:
+        1. Pure Intra-Community (Default): Both subject and object MUST be community members.
+           Completely excludes boundary triplets, preventing cross-cluster overlap.
+        2. Hub Quarantine: Any triplet touching a pruned global hub is strictly excluded.
         """
         from collections import Counter
 
         target_nodes_norm = {str(n).lower().strip() for n in target_nodes}
+
+        sem_cfg = config.get('topology', {}).get('semantic_clustering', {}) if config else {}
+        exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
+        strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+
+        # Extract global hubs to enforce absolute quarantine purge
+        raw_hubs = set(topology.get("global_hubs", [])) if topology else set()
+        raw_hubs_norm = {str(h).lower().strip() for h in raw_hubs}
 
         # 1. Calculate Local Intra-Community Degree and Edge Observation Frequency
         local_degree = Counter()
@@ -83,14 +100,21 @@ class TargetResolver:
             obj = str(t.get('object', '')).lower().strip()
             pred = str(t.get('predicate', '')).strip()
 
+            if not subj or not obj:
+                continue
+
+            # Absolute Quarantine: Discard any triplet touching a pruned global hub
+            if exclude_hubs and (subj in raw_hubs_norm or obj in raw_hubs_norm):
+                continue
+
             is_subj_in = subj in target_nodes_norm
             is_obj_in = obj in target_nodes_norm
 
             if is_subj_in and is_obj_in:
                 local_degree[subj] += 1
                 local_degree[obj] += 1
-
-            if is_subj_in or is_obj_in:
+                edge_frequencies[(subj, pred, obj)] += 1
+            elif not strictly_intra and (is_subj_in or is_obj_in):
                 edge_frequencies[(subj, pred, obj)] += 1
 
         # 2. Score candidate triplets using Local Community Priority
@@ -99,27 +123,41 @@ class TargetResolver:
             subj = str(t.get('subject', '')).lower().strip()
             obj = str(t.get('object', '')).lower().strip()
 
+            if not subj or not obj:
+                continue
+
+            # Absolute Quarantine: Discard any triplet touching a pruned global hub
+            if exclude_hubs and (subj in raw_hubs_norm or obj in raw_hubs_norm):
+                continue
+
             is_subj_in = subj in target_nodes_norm
             is_obj_in = obj in target_nodes_norm
 
-            if is_subj_in or is_obj_in:
-                pred = str(t.get('predicate', '')).strip()
-                freq = edge_frequencies.get((subj, pred, obj), 1)
-                freq_boost = 1.0 + 0.1 * min(10, freq - 1)
+            if strictly_intra:
+                # Pure Intra-Community Mode: Both endpoints must be inside target_nodes
+                if not (is_subj_in and is_obj_in):
+                    continue
+            else:
+                if not (is_subj_in or is_obj_in):
+                    continue
 
-                if is_subj_in and is_obj_in:
-                    # Tier 1: Pure Intra-Community (Base 1000.0 guarantees absolute priority over boundary)
-                    local_sum = local_degree[subj] + local_degree[obj]
-                    rank_score = 1000.0 + (local_sum * freq_boost)
-                else:
-                    # Tier 2: Boundary Context (Base 1.0, driven by internal anchor prominence)
-                    internal_node = subj if is_subj_in else obj
-                    anchor_degree = local_degree[internal_node]
-                    rank_score = 1.0 + (anchor_degree * freq_boost)
+            pred = str(t.get('predicate', '')).strip()
+            freq = edge_frequencies.get((subj, pred, obj), 1)
+            freq_boost = 1.0 + 0.1 * min(10, freq - 1)
 
-                t_copy = dict(t)
-                t_copy["triplet_rank_score"] = round(float(rank_score), 4)
-                scored_triplets.append((rank_score, t_copy))
+            if is_subj_in and is_obj_in:
+                # Tier 1: Pure Intra-Community (Base 1000.0 guarantees absolute priority)
+                local_sum = local_degree[subj] + local_degree[obj]
+                rank_score = 1000.0 + (local_sum * freq_boost)
+            else:
+                # Tier 2: Boundary Context (only used if strictly_intra is false)
+                internal_node = subj if is_subj_in else obj
+                anchor_degree = local_degree[internal_node]
+                rank_score = 1.0 + (anchor_degree * freq_boost)
+
+            t_copy = dict(t)
+            t_copy["triplet_rank_score"] = round(float(rank_score), 4)
+            scored_triplets.append((rank_score, t_copy))
 
         # 3. Sort descending by community-centric rank score and slice up to cap
         scored_triplets.sort(key=lambda x: x[0], reverse=True)
@@ -137,16 +175,17 @@ class TargetResolver:
         """
         cache_dir.mkdir(parents=True, exist_ok=True)
         if not model_name:
-            # Auto-detect from cache directory with all-MiniLM-L6-v2 as default fallback
-            found_slugs = []
-            for f in cache_dir.glob("subject_*_embeddings.npy"):
-                slug = f.stem.replace("subject_", "").replace("_embeddings", "")
-                found_slugs.append(slug)
-            if "all_MiniLM_L6_v2" in found_slugs:
-                model_name = "all-MiniLM-L6-v2"
-            elif found_slugs:
-                model_name = found_slugs[0].replace("_", "/")
-            else:
+            # Check if any concept or subject meta.json has the exact model_name recorded
+            for meta_f in sorted(cache_dir.glob("*_meta.json")):
+                try:
+                    with open(meta_f, "r", encoding="utf-8") as mf:
+                        m_data = json.load(mf)
+                    if "model_name" in m_data and m_data["model_name"]:
+                        model_name = m_data["model_name"]
+                        break
+                except Exception:
+                    pass
+            if not model_name:
                 model_name = "all-MiniLM-L6-v2"
 
         model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
@@ -472,7 +511,7 @@ class TargetResolver:
             
             # Filter, score, and cap triplets with Asymmetric Synergy Engine
             capped_triplets = TargetResolver.filter_and_cap_triplets(
-                target_nodes, refined_triplets, topology, max_triplets_cap, target_id=c_id, path_type=path_type
+                target_nodes, refined_triplets, topology, max_triplets_cap, target_id=c_id, path_type=path_type, config=config
             )
 
             if tier_enabled:

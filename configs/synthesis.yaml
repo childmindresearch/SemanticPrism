@@ -34,3 +34,73 @@ synthesis:
   #   "raw_text" - {'text': source_quote, 'theme_association': ...}
   #   "both"     - {'triple': 'subject predicate object.', 'text': source_quote, 'theme_association': ...}
   payload_values: "raw_text"
+
+  # Maximum number of curated source text sentences per community target payload (default: 60)
+  max_sentences_per_target: 60
+
+  # Minimum character length for source text quotes to be considered valid observations
+  min_sentence_length: 15
+
+  # Number of prominent, specific domain terms to provide in the payload (default: 12)
+  top_domain_terms_count: 12
+
+  # Maximum concurrent LLM API calls during synthesis when use_async is enabled
+  max_async_calls: 1
+
+  # LLM context window token cap for Phase 3 schema consolidation
+  context_window_cap: 16384
+
+  # Stop words and generic vocabulary filtered out when deriving top domain terms
+  generic_exclusions:
+    - person
+    - name
+    - support
+    - organization
+    - thing
+    - things
+    - away
+    - "-"
+    - other
+    - none
+    - user
+    - people
+    - system
+    - systems
+    - someone
+    - something
+    - anyone
+    - anything
+    - everyone
+    - everything
+    - item
+    - items
+    - concept
+    - concepts
+    - state
+    - states
+    - data
+    - info
+    - information
+    - value
+    - values
+    - lot
+    - lots
+    - bit
+    - bits
+    - day
+    - days
+    - time
+    - times
+    - year
+    - years
+    - week
+    - weeks
+    - part
+    - parts
+    - case
+    - cases
+    - type
+    - types
+    - category
+    - categories
+    - cat

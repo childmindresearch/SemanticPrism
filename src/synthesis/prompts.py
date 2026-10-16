@@ -6,21 +6,20 @@ Output the raw Python string to `source_code` and name the module `enums`."""
 
 SCHEMA_SYNTHESIS_PROMPT = """You are an Expert Domain Modeling and Ontological Architect.
 
-You will receive an extracted thematic cluster of concepts and source text observations.
-Because this data is harvested from raw, unstructured documents, it represents a loose, imperfect collection of terms, fragments, and colloquial phrases. Your job is NOT to map every word literally, but to interpret the underlying domain and synthesize a clean, practical, and coherent Pydantic (v2) schema.
-You must define Pydantic (v2) `BaseModel` classes that model the ontology based on relationships, processes, categories, or contents of this cluster.
+You will receive an extracted thematic cluster of domain concepts and real-world source text observations.
+Because this data is harvested from raw, unstructured documents, it represents authentic domain discourse. Your job is NOT to mechanically transcribe every word, but to interpret the underlying domain workflow, entities, and attributes, and synthesize a clean, practical, and coherent Pydantic (v2) schema module.
+
 INPUT STRUCTURE:
-1. `architectural_tiers`: Conceptual signals to help orient your model design:
-   - **Tier 1 (Thematic Nucleus)**: High-level anchor concepts representing the primary subject matter of this cluster. Use these as guiding inspiration for your main root class(es).
-2. `thematic_triplets`: Relational statements and source quotes. Consult these to understand the real-world context and intent behind the terms.
+1. `top_domain_terms`: The primary domain concepts and key vocabulary defining this cluster. Use these to guide your naming of classes, fields, and core entities.
+2. `thematic_observations`: Rich, authentic source text sentences and observations organized by theme. Study these narrative passages to understand real-world workflows, data types, entity interactions, and field constraints.
 
 CRITICAL MODELING RULES:
-1. **Synthesize, Do Not Transcribe:** Do NOT mechanically turn every listed term into a separate class or field. Instead, step back, identify the coherent domain workflow (e.g. `PatientAssessment`, `TreatmentPlan`, `InterpersonalConflict`), and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
-2. **Filter Out Noise:** Discard ambiguous phrases, conversational fragments, duplicates, and awkward syntax. Generalize specific jargon into clean, idiomatic Python attribute names.
-3. **Inheritance Logic:** If the dominant theme of these triples has a hierarchical structure, subclass its corresponding parent schema. Otherwise, generate an independent root schema.
-4. **Use Enums/Literals:** Type fields representing categories, statuses, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
-5. **Default to Optional:**  Use `Optional[...] = None` for all fields to support sparse, variable real-world data.
-6. **Self-Contained & Valid:** Output solely valid, executable Python code with all necessary imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Dict, Union`). Do not wrap output in markdown code fences or conversational commentary."""
+1. **Synthesize, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative (e.g., `ClinicalAssessment`, `TreatmentPlan`, `SomaticSymptomTracker`, `EducationalAccommodation`), and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
+2. **Model Real World Attributes:** Derive concrete attributes and fields directly from the details in `thematic_observations` (e.g., dosage, duration, severity, diagnostic status, coping responses).
+3. **Use Enums/Literals:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
+4. **Default to Optional:** Use `Optional[...] = None` for all fields to accommodate variable real-world observations.
+5. **Self-Contained & Valid:** Output solely valid, executable Python code with all necessary imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Dict, Union`, `from enum import Enum`). Do not wrap output in markdown code fences or conversational commentary.
+6. **Strictly Isolated Domain:** This cluster is an independent, self-contained semantic module. Model only the concepts and workflows substantiated by the provided data."""
 
 LEIDEN_SCHEMA_SYNTHESIS_PROMPT = SCHEMA_SYNTHESIS_PROMPT
 

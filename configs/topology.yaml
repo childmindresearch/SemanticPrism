@@ -48,12 +48,53 @@ topology:
     leiden_resolution: 1.0        # Leiden modularity resolution density parameter
 
   # =========================================================================
+  # SEMANTIC COMMUNITY ENHANCEMENT & STRICT SEPARATION CONFIGURATION
+  # =========================================================================
+  semantic_clustering:
+    # 1. Strict Quarantine Safeguards
+    quarantine_global_hubs: true           # Immutable invariant: Hubs pruned in 3.1/3.2 can NEVER enter communities
+    quarantine_true_isolates: true         # Degree-0 nodes connected ONLY to global hubs stay in enums, never absorbed
+    
+    # 2. Weighted Leiden Modularity
+    enable_weighted_leiden: true
+    edge_weighting_mode: "hybrid"          # "frequency_only" or "hybrid" (combines frequency with cosine similarity)
+    hybrid_semantic_alpha: 0.35            # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
+    
+    # 3. Centroid-Driven Micro-Cluster Absorption
+    enable_micro_cluster_absorption: true
+    min_absorption_similarity: 0.28        # Guardrail tau_min: Only absorb if cosine similarity to nearest centroid >= 0.28
+    absorption_contrast_margin: 0.05       # Contrast margin: sim(best) - sim(second) >= 0.05 (Enhancement 1)
+    absorption_size_threshold: 12          # Communities with fewer nodes than this threshold are candidates for absorption
+    freeze_centroids_pre_absorption: true  # Prevent centroid drift during absorption
+    
+    # 4. Semantic Singleton Harvesting (Enhancement 2: High-Affinity Orphan Recovery)
+    enable_singleton_harvesting: true      # High-confidence scan of unattached singletons/dyads
+    singleton_harvesting_threshold: 0.40   # Strict high-confidence threshold (tau_harvest >= 0.40)
+    singleton_contrast_margin: 0.05        # Contrast margin over second-best community (delta >= 0.05)
+    
+    # 5. Guarded Semantic Refugee Realignment
+    enable_refugee_realignment: true
+    refugee_margin_delta: 0.20             # sim(foreign) - sim(home) must exceed 0.20 to trigger reassignment
+    require_structural_neighbor: true      # Must have at least 1 graph edge to candidate foreign community
+    
+    # 6. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
+    triplet_payload_mode: "strictly_intra_only" # Strictly pure intra-community triplets only (subj in C AND obj in C)
+    exclude_hub_triplets_from_communities: true # Any triplet containing a global hub is completely excluded
+    
+    # 7. Multi-Tier Confidence Thresholds
+    confidence_thresholds:
+      high: 0.40                           # Core Invariant (Eligible for root BaseModel)
+      medium: 0.25                         # Relational Mechanic (Sub-model / Typed field)
+      low: 0.15                            # Contextual Modifier (Filtered out or marked optional)
+
+  # =========================================================================
   # ARCHITECTURAL TIER PARTITIONING (Hybrid Geometric-Topological Scoring)
   # =========================================================================
-  # Dynamically partitions community concepts into three typed architectural tiers:
-  #   - Tier 1: Thematic Nucleus (Core Invariants -> Pydantic root entities)
-  #   - Tier 2: Relational Mechanics (Domain Spokes -> Typed fields/sub-models)
-  #   - Tier 3: Contextual Modifiers (Peripheral nuances -> Optional fields)
+  # Computes topological tiering for offline diagnostics, 3D visualization,
+  # and human-readable spreadsheet exports (community_architectural_tiers.csv):
+  #   - Tier 1: Thematic Nucleus (Core Invariants)
+  #   - Tier 2: Relational Mechanics (Domain Spokes)
+  #   - Tier 3: Contextual Modifiers (Peripheral nuances)
   architectural_tiers:
     enabled: true
 

@@ -6,6 +6,7 @@ import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from collections import Counter, defaultdict
 
 from src.agents.synthesis_agents import (
     OrphanContext,
@@ -226,81 +227,141 @@ class SynthesisPipeline:
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
         max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
-        payload_mode = self.config.get('synthesis', {}).get('payload_values', 'triples')
+        payload_mode = self.config.get('synthesis', {}).get('payload_values', 'raw_text')
+        max_sentences_per_target = self.config.get('synthesis', {}).get('max_sentences_per_target', 60)
+        top_domain_terms_count = self.config.get('synthesis', {}).get('top_domain_terms_count', 12)
+        min_sentence_length = self.config.get('synthesis', {}).get('min_sentence_length', 15)
 
-        def format_phase2_payload(subset: List[dict], mode: str, tiers_data: Optional[Dict[str, Any]] = None) -> str:
-            theme_to_texts = {}
-            for t in subset:
-                subj = str(t.get('subject', '')).strip()
-                pred = str(t.get('predicate', '')).strip()
-                obj = str(t.get('object', '')).strip()
-                
-                if subj and pred and obj:
-                    concatenated_svo = f"{subj} {pred} {obj}."
-                elif subj or pred or obj:
-                    concatenated_svo = f"{' '.join(x for x in [subj, pred, obj] if x)}."
-                else:
-                    concatenated_svo = ""
-                    
-                quote = str(t.get('source_quote', '')).strip()
-                theme = t.get('theme_association', 'Other') or 'Other'
+        # Precompute global target counts to score community-specificity of terms (C-TF-IDF)
+        global_target_counts = Counter()
+        for t in targets:
+            for n in t.get("nodes", []):
+                global_target_counts[str(n).lower().strip()] += 1
 
-                if mode == "triples":
-                    text_item = concatenated_svo
-                elif mode == "raw_text":
-                    text_item = quote
-                elif mode == "both":
-                    text_item = f"Statement: {concatenated_svo} | Quote: {quote}" if concatenated_svo else quote
-                else:
-                    text_item = concatenated_svo
+        default_exclusions = [
+            'person', 'name', 'support', 'organization', 'thing', 'things', 'away', '-',
+            'other', 'none', 'user', 'people', 'system', 'systems', 'someone', 'something',
+            'anyone', 'anything', 'everyone', 'everything', 'item', 'items', 'concept', 'concepts',
+            'state', 'states', 'data', 'info', 'information', 'value', 'values', 'lot', 'lots',
+            'bit', 'bits', 'day', 'days', 'time', 'times', 'year', 'years', 'week', 'weeks',
+            'part', 'parts', 'case', 'cases', 'type', 'types', 'category', 'categories', 'cat'
+        ]
+        cfg_exclusions = self.config.get('synthesis', {}).get('generic_exclusions', default_exclusions)
+        GENERIC_EXCLUSIONS = {str(x).lower().strip() for x in cfg_exclusions}
 
-                if not text_item:
+        def extract_top_domain_terms(target_nodes: List[str], triplets: List[dict], top_k: int = 12) -> List[str]:
+            target_nodes_norm = {str(n).lower().strip(): str(n) for n in target_nodes}
+            local_deg = Counter()
+            for tr in triplets:
+                s = str(tr.get('subject', '')).lower().strip()
+                o = str(tr.get('object', '')).lower().strip()
+                if s in target_nodes_norm:
+                    local_deg[s] += 1
+                if o in target_nodes_norm:
+                    local_deg[o] += 1
+
+            scored = []
+            for nk, orig in target_nodes_norm.items():
+                if nk in GENERIC_EXCLUSIONS or len(nk) <= 2 or nk.isdigit() or not any(c.isalnum() for c in nk):
                     continue
+                n_targets = global_target_counts.get(nk, 1)
+                deg = local_deg.get(nk, 0)
+                multi_word_boost = 1.2 if ' ' in nk else 1.0
+                score = ((deg + 1.0) / (n_targets ** 1.5)) * multi_word_boost
+                scored.append((score, deg, orig))
 
-                if theme not in theme_to_texts:
-                    theme_to_texts[theme] = []
+            scored.sort(key=lambda x: x[0], reverse=True)
+            
+            # Deduplicate near-duplicate stems (e.g. singular/plural)
+            seen_stems = set()
+            cleaned_terms = []
+            for _, _, orig in scored:
+                base = orig.lower().strip()
+                stem = base[:-1] if base.endswith('s') else base
+                if stem in seen_stems or base in seen_stems:
+                    continue
+                seen_stems.add(stem)
+                seen_stems.add(base)
+                cleaned_terms.append(orig)
+                if len(cleaned_terms) >= top_k:
+                    break
+            return cleaned_terms
 
-                if text_item not in theme_to_texts[theme]:
-                    theme_to_texts[theme].append(text_item)
+        def extract_thematic_observations(triplets: List[dict], target_nodes: List[str], max_sentences: int = 60, mode: str = "raw_text") -> Dict[str, List[str]]:
+            target_nodes_norm = {str(n).lower().strip() for n in target_nodes}
+            quote_info = {} # quote -> {'theme': str, 'fidelities': list, 'svos': list}
 
-            formatted_items = [
-                {
-                    "theme_association": theme,
-                    "text": texts
-                }
-                for theme, texts in theme_to_texts.items()
-            ]
-
-            if tiers_data:
-                tier_1_items = [
-                    {
-                        "entity": item["entity"],
-                        "exemplar_quote": item.get("exemplar_quote", "")
-                    }
-                    for item in tiers_data.get("tier_1_nucleus", [])
-                ]
-
-                payload_dict = {
-                    "community_id": tiers_data.get("community_id"),
-                    "community_label": tiers_data.get("community_label", f"Community #{tiers_data.get('community_id', 'unknown')}"),
-                    "architectural_tiers": {
-                        "tier_1_thematic_nucleus (core_root_entities)": tier_1_items
-                    },
-                    "thematic_triplets": formatted_items
-                }
-                return json.dumps(payload_dict, indent=2)
+            for tr in triplets:
+                subj = str(tr.get('subject', '')).strip()
+                pred = str(tr.get('predicate', '')).strip()
+                obj = str(tr.get('object', '')).strip()
+                svo = f"{subj} {pred} {obj}." if (subj and pred and obj) else ""
                 
-            return json.dumps(formatted_items, indent=2)
+                quote = str(tr.get('source_quote', '')).strip()
+                if not quote or len(quote) < min_sentence_length:
+                    if mode in ["triples", "both"] and svo:
+                        quote = svo
+                    else:
+                        continue
+
+                theme = tr.get('theme_association', 'General Domain Observations') or 'General Domain Observations'
+                fid = float(tr.get('contextual_fidelity', 0.50))
+
+                if quote not in quote_info:
+                    quote_info[quote] = {'theme': theme, 'fidelities': [fid], 'svos': [svo] if svo else []}
+                else:
+                    quote_info[quote]['fidelities'].append(fid)
+                    if svo and svo not in quote_info[quote]['svos']:
+                        quote_info[quote]['svos'].append(svo)
+
+            # Score each sentence
+            scored_quotes = []
+            for q, info in quote_info.items():
+                avg_fid = sum(info['fidelities']) / len(info['fidelities'])
+                q_lower = q.lower()
+                node_overlap = sum(1 for n in target_nodes_norm if n in q_lower)
+                sentence_score = avg_fid * (1.0 + 0.25 * min(4, node_overlap))
+                
+                # Format text item based on mode
+                if mode == "triples":
+                    text_item = " ".join(info['svos']) if info['svos'] else q
+                elif mode == "both":
+                    svo_summary = f" [Facts: {'; '.join(info['svos'][:2])}]" if info['svos'] else ""
+                    text_item = f"{q}{svo_summary}"
+                else: # raw_text
+                    text_item = q
+                    
+                scored_quotes.append((sentence_score, text_item, info['theme']))
+
+            scored_quotes.sort(key=lambda x: x[0], reverse=True)
+            selected = scored_quotes[:max_sentences]
+
+            theme_groups = defaultdict(list)
+            for _, text_item, theme in selected:
+                theme_groups[theme].append(text_item)
+
+            return dict(theme_groups)
+
+        def format_phase2_payload(target_id: Any, target_nodes: List[str], subset: List[dict], mode: str) -> str:
+            top_terms = extract_top_domain_terms(target_nodes, subset, top_k=top_domain_terms_count)
+            observations = extract_thematic_observations(subset, target_nodes, max_sentences=max_sentences_per_target, mode=mode)
+
+            payload_dict = {
+                "community_id": target_id,
+                "top_domain_terms": top_terms,
+                "thematic_observations": observations
+            }
+            return json.dumps(payload_dict, indent=2)
 
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
             
-            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, node_count, tiers_data=None):
+            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, target_nodes):
                 async with sem:
                     pass_name = "normalized" if is_normalized else "raw"
                     target_dir = norm_dir if is_normalized else raw_dir
-                    print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
-                    user_payload = format_phase2_payload(subset, payload_mode, tiers_data)
+                    print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {len(target_nodes)} nodes, {len(subset)} triplets)...")
+                    user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode)
                     active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                     save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                     last_llm_responses.set([])
@@ -341,28 +402,35 @@ class SynthesisPipeline:
                     target_nodes = set(target["nodes"])
                     target_type = target.get("target_type", target.get("type", "spoke"))
                     target_id = target.get("target_id", target.get("id"))
-                    tiers_data = target.get("architectural_tiers")
                     
                     if run_norm:
                         norm_subset = target.get("triplets", [])
                         if norm_subset:
-                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, len(target_nodes), tiers_data))
+                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, target_nodes))
                     
                     if run_raw:
-                        raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                        raw_subset = list(target.get("triplets", []))
+                        if original_triplets:
+                            extra_raw = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                            existing_quotes = {tr.get('source_quote') for tr in raw_subset if tr.get('source_quote')}
+                            for extra in extra_raw:
+                                q = extra.get('source_quote')
+                                if q and q not in existing_quotes:
+                                    raw_subset.append(extra)
+                                    existing_quotes.add(q)
                         if raw_subset:
-                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, len(target_nodes), tiers_data))
+                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, target_nodes))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
 
             asyncio.run(run_phase2_async())
         else:
-            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, node_count, tiers_data=None):
+            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, target_nodes):
                 pass_name = "normalized" if is_normalized else "raw"
                 target_dir = norm_dir if is_normalized else raw_dir
-                print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {node_count} nodes, {len(subset)} triplets)...")
-                user_payload = format_phase2_payload(subset, payload_mode, tiers_data)
+                print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {len(target_nodes)} nodes, {len(subset)} triplets)...")
+                user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode)
                 active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                 save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                 last_llm_responses.set([])
@@ -399,18 +467,24 @@ class SynthesisPipeline:
                 target_nodes = set(target["nodes"])
                 target_type = target.get("target_type", target.get("type", "spoke"))
                 target_id = target.get("target_id", target.get("id"))
-                node_count = len(target_nodes)
-                tiers_data = target.get("architectural_tiers")
                 
                 if run_norm:
                     norm_subset = target.get("triplets", [])
                     if norm_subset:
-                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, node_count, tiers_data)
+                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, target_nodes)
                         
                 if run_raw:
-                    raw_subset = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                    raw_subset = list(target.get("triplets", []))
+                    if original_triplets:
+                        extra_raw = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                        existing_quotes = {tr.get('source_quote') for tr in raw_subset if tr.get('source_quote')}
+                        for extra in extra_raw:
+                            q = extra.get('source_quote')
+                            if q and q not in existing_quotes:
+                                raw_subset.append(extra)
+                                existing_quotes.add(q)
                     if raw_subset:
-                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, node_count, tiers_data)
+                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, target_nodes)
 
         # Phase 3: Global Consolidation
         print(f"   -> [{path_label}] Phase 3: Consolidation...")
