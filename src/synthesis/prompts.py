@@ -17,7 +17,7 @@ CRITICAL MODELING RULES:
 1. **Synthesize, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative (e.g., `ClinicalAssessment`, `TreatmentPlan`, `SomaticSymptomTracker`, `EducationalAccommodation`), and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
 2. **Model Real World Attributes:** Derive concrete attributes and fields directly from the details in `thematic_observations` (e.g., dosage, duration, severity, diagnostic status, coping responses).
 3. **Use Enums/Literals:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
-4. **Default to Optional:** Use `Optional[...] = None` for all fields to accommodate variable real-world observations.
+4. **Field Descriptions & Optionality:** Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the clinical or domain meaning derived from `thematic_observations` (e.g., `dosage: Optional[str] = Field(default=None, description="Prescribed medication dosage and frequency")`).
 5. **Self-Contained & Valid:** Output solely valid, executable Python code with all necessary imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Dict, Union`, `from enum import Enum`). Do not wrap output in markdown code fences or conversational commentary.
 6. **Strictly Isolated Domain:** This cluster is an independent, self-contained semantic module. Model only the concepts and workflows substantiated by the provided data."""
 
@@ -29,7 +29,7 @@ Merge, deduplicate, and consolidate the provided fragmented Pydantic schema file
 CRITICAL RULES:
 1. **Deduplicate & Merge:** Identify classes modeling the same concept. Merge their fields using the most descriptive name.
 2. **Preserve Relationships:** Maintain subclass and inheritance hierarchy.
-3. **Standardize Fields:** Keep fields as `Optional[...] = None` and always leverage global enums when available.
+3. **Preserve Field Descriptions:** Maintain fields declared as `Field(default=None, description="...")`, preserving the most detailed and descriptive `description` string across merged attributes, and always leverage global enums when available.
 4. **Formatting:** Output executable Python code with all necessary imports."""
 
 FINAL_ONTOLOGY_SYSTEM_PROMPT = """You are the Lead Master Ontologist.
@@ -38,7 +38,7 @@ Merge the provided `enums.py`, `raw_master_ontology.py`, and `normalized_master_
 CRITICAL RULES:
 1. **Embed Enums Directly:** Copy and define all `Enum` and `Literal` classes from `enums.py` at the top of the file. Do not use relative imports.
 2. **Merge Classes:** Combine raw and normalized models by unioning their fields. If only one of the raw or normalized master ontologies is provided, use its classes directly as the base for the comprehensive ontology.
-3. **Standardize Fields:** Keep all attributes declared as `Optional[...] = None` and leverage the embedded Enums/Literals.
+3. **Standardize Fields & Descriptions:** Keep all attributes declared with `Field(default=None, description="...")`, ensuring informative descriptions are retained across models, and leverage embedded Enums/Literals.
 4. **No Unique IDs:** Ensure no `id`, `uuid`, or key fields are defined.
 5. **Formatting:** Output pure Python code containing all necessary imports."""
 
