@@ -67,7 +67,7 @@ async def main_async():
         if resume_mode == 'skip' and triple_file_path.exists():
             print(f"-> Skipping triple extraction for: {doc['id']} (already exists on disk)")
         else:
-            print(f"-> Extracting triplets from: {doc['id']}")
+            print(f"-> Extracting triples from: {doc['id']}")
             if pipeline.use_async:
                 await pipeline.extract_triples_async(doc['text'], source_doc=doc['id'])
             else:
@@ -75,7 +75,7 @@ async def main_async():
             
     # Phase 3.5: Triple Aggregation
     print("\n=== Phase 3.5: Triple Aggregation ===")
-    print("-> Consolidating individual triplets files...")
+    print("-> Consolidating individual triples files...")
     pipeline.aggregate_triplets()
         
     print("\nStage 1 Triple Extraction Complete!")
