@@ -101,8 +101,8 @@ topology:
     max_agglomeration_passes: 25           # Maximum iterative merging rounds (safety ceiling until convergence)
     
     # 8. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
-    triplet_payload_mode: "strictly_intra_only" # Strictly pure intra-community triplets only (subj in C AND obj in C)
-    exclude_hub_triplets_from_communities: true # Any triplet containing a global hub is completely excluded
+    triplet_payload_mode: "include_boundary" # include_boundary or strictly_intra_only Strictly pure intra-community triplets only (subj in C AND obj in C)
+    exclude_hub_triplets_from_communities: false # Any triplet containing a global hub is completely excluded
     
     # 9. Multi-Tier Confidence Thresholds
     confidence_thresholds:
