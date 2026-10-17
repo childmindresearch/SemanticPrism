@@ -3,6 +3,8 @@ SemanticPrism Stage 1: Extraction Schemas
 This module contains strictly Pydantic data models used to enforce structured JSON output from Pydantic AI Agents.
 """
 
+import json
+import re
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Any
 
@@ -118,15 +120,12 @@ class MasterThemeSynthesisResult(BaseModel):
     }
 
 class RawTriple(BaseModel):
-    """
-    Extracts a high-fidelity subject-predicate-object relationship.
-    Focuses on atomic facts to ensure graph density and accuracy.
-    """
-    subject: str = Field(..., description="The primary entity or concept exactly as it appears in the source text. Do not modify the casing or format.")
-    predicate: str = Field(..., description="The relationship or action connecting subject and object exactly as it appears in the source text. Do not modify the casing or format.")
-    object: str = Field(..., description="The target entity, concept, or value. Do not modify the casing or format.")
-    source_quote: Optional[str] = Field(default="", description="The EXACT, verbatim substring from the text confirming this relationship.")
-    theme_association: Optional[str] = Field(default="Other", description="The theme this triple most closely aligns with, if any.")
+    """Subject-predicate-object relationship extracted from the text."""
+    subject: str = Field(description="Primary entity, concept, or person.")
+    predicate: str = Field(description="Relationship, action, or finding connecting subject and object.")
+    object: str = Field(description="Target entity, diagnosis, score, or concept.")
+    source_quote: str = Field(default="", description="Verbatim quote from the text confirming this relationship.")
+    theme_association: str = Field(default="Other", description="Matching theme name from allowed themes, or 'Other'.")
 
     @model_validator(mode='before')
     @classmethod
@@ -147,8 +146,8 @@ class RawTriple(BaseModel):
                 "subject": str(subj).strip(),
                 "predicate": str(pred).strip(),
                 "object": str(obj).strip(),
-                "source_quote": str(quote).strip(),
-                "theme_association": str(theme).strip() if str(theme).strip() else "Other"
+                "source_quote": str(quote).strip() if quote is not None else "",
+                "theme_association": str(theme).strip() if (theme and str(theme).strip()) else "Other"
             }
         return data
 
@@ -166,6 +165,17 @@ class TripleExtractionResult(BaseModel):
     @model_validator(mode='before')
     @classmethod
     def handle_raw_payloads(cls, data: Any) -> Any:
+        # If payload is a JSON string or markdown block, parse it first
+        if isinstance(data, str):
+            clean = data.strip()
+            if "```" in clean:
+                clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.MULTILINE)
+                clean = re.sub(r"\s*```$", "", clean, flags=re.MULTILINE).strip()
+            try:
+                data = json.loads(clean)
+            except Exception:
+                pass
+
         # Auto-unwrap bare lists: [{"subject": ...}] -> {"triples": [...]}
         if isinstance(data, list):
             return {"triples": data}
@@ -175,7 +185,7 @@ class TripleExtractionResult(BaseModel):
                 return {"triples": [data]}
             if "triples" not in data:
                 for alt_key in ["triplets", "relationships", "extracted_triples", "triples_list", "data", "results", "items", "response", "output"]:
-                    if alt_key in data and isinstance(data[alt_key], list):
+                    if alt_key in data:
                         data["triples"] = data[alt_key]
                         break
         return data
@@ -183,13 +193,32 @@ class TripleExtractionResult(BaseModel):
     @field_validator('triples', mode='before')
     @classmethod
     def drop_invalid_triples(cls, v):
-        """Intercepts the raw JSON dictionaries before strict Pydantic crash enforcement."""
+        """Intercepts raw JSON dictionaries or strings before strict Pydantic crash enforcement."""
+        if isinstance(v, str):
+            clean = v.strip()
+            if "```" in clean:
+                clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.MULTILINE)
+                clean = re.sub(r"\s*```$", "", clean, flags=re.MULTILINE).strip()
+            try:
+                parsed = json.loads(clean)
+                if isinstance(parsed, list):
+                    v = parsed
+                elif isinstance(parsed, dict):
+                    v = [parsed]
+            except Exception:
+                pass
+
         if not isinstance(v, list):
             return []
             
         valid_chunk = []
         for item in v:
             try:
+                if isinstance(item, str):
+                    try:
+                        item = json.loads(item)
+                    except Exception:
+                        pass
                 if isinstance(item, dict):
                     valid_chunk.append(RawTriple.model_validate(item))
                 elif isinstance(item, RawTriple):
