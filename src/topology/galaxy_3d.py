@@ -68,6 +68,211 @@ class Galaxy3DVisualizer:
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
 
+    def _build_partition_subpack(
+        self,
+        comm_concept_indices: Dict[int, List[int]],
+        comm_labels: Dict[int, str],
+        community_theme_counts: Dict[int, Counter],
+        concepts_payload: List[Dict[str, Any]],
+        coords_pca: np.ndarray,
+        coords_umap: np.ndarray,
+        proj_vecs: np.ndarray,
+        highways_raw: List[Dict[str, Any]],
+        weighting_mode: str,
+        hull_percentile: float,
+        is_baseline: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Builds the complete spatial and topological payload for a specific partition
+        (either agglomerated macro-clusters or baseline granular communities).
+        """
+        centroids_dict: Dict[int, Dict[str, Any]] = {}
+
+        for cid, indices in sorted(comm_concept_indices.items(), key=lambda x: x[0]):
+            if not indices:
+                continue
+
+            if weighting_mode == "tier_1_only":
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
+                if not core_indices:
+                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+            elif weighting_mode == "uniform":
+                core_indices = indices
+                core_weights = np.ones(len(core_indices)) / len(core_indices)
+            else:  # "core_tiers" (default)
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+
+            core_sub_pca = coords_pca[core_indices]
+            core_sub_umap = coords_umap[core_indices]
+
+            c_pca = np.average(core_sub_pca, axis=0, weights=core_weights)
+            c_umap = np.average(core_sub_umap, axis=0, weights=core_weights)
+
+            # Radii: Tight cohesive shells calculated on core community members
+            dists_pca = np.linalg.norm(core_sub_pca - c_pca, axis=1)
+            dists_umap = np.linalg.norm(core_sub_umap - c_umap, axis=1)
+
+            rad_pca = float(np.percentile(dists_pca, hull_percentile)) if len(dists_pca) > 0 else 10.0
+            rad_umap = float(np.percentile(dists_umap, hull_percentile)) if len(dists_umap) > 0 else 10.0
+
+            # Count architectural tiers and top tier 1 exemplars
+            tier_counts = {"tier_1_nucleus": 0, "tier_2_mechanics": 0, "tier_3_modifiers": 0}
+            top_t1 = []
+            for idx in indices:
+                t_key = concepts_payload[idx].get("tier_key", "tier_2_mechanics")
+                if t_key in tier_counts:
+                    tier_counts[t_key] += 1
+                if t_key == "tier_1_nucleus" and len(top_t1) < 5:
+                    top_t1.append(concepts_payload[idx]["entity"])
+
+            if not top_t1 and indices:
+                sorted_core = sorted(indices, key=lambda i: concepts_payload[i]["composite_score"], reverse=True)
+                top_t1 = [concepts_payload[i]["entity"] for i in sorted_core[:5]]
+
+            label = comm_labels.get(cid, f"Community #{cid}")
+            t1_theme = ", ".join(top_t1[:3]) if top_t1 else label
+
+            theme_counter = community_theme_counts.get(cid, Counter())
+            total_triplets = sum(theme_counter.values())
+            top_themes = [
+                {
+                    "theme": name,
+                    "count": count,
+                    "percentage": round((count / total_triplets * 100.0), 1) if total_triplets > 0 else 0.0
+                }
+                for name, count in theme_counter.most_common(6)
+            ]
+
+            color = self.COMMUNITY_COLORS[cid % len(self.COMMUNITY_COLORS)]
+
+            centroids_dict[cid] = {
+                "community_id": cid,
+                "label": label,
+                "headline_theme": t1_theme,
+                "color": color,
+                "total_concepts": len(indices),
+                "total_triplets": total_triplets,
+                "tier_counts": tier_counts,
+                "top_themes": top_themes,
+                "pca_3d": [round(float(c_pca[0]), 2), round(float(c_pca[1]), 2), round(float(c_pca[2]), 2)],
+                "umap_3d": [round(float(c_umap[0]), 2), round(float(c_umap[1]), 2), round(float(c_umap[2]), 2)],
+                "radius_pca": round(max(4.0, rad_pca), 2),
+                "radius_umap": round(max(4.0, rad_umap), 2),
+                "exemplar_concepts": top_t1
+            }
+
+        # Cross-Border Semantic Refugees
+        high_d_centroids = {}
+        for cid, indices in comm_concept_indices.items():
+            if not indices:
+                continue
+            if weighting_mode == "tier_1_only":
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
+                if not core_indices:
+                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+            elif weighting_mode == "uniform":
+                core_indices = indices
+                core_weights = np.ones(len(core_indices)) / len(core_indices)
+            else:
+                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
+                if not core_indices:
+                    core_indices = indices
+                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
+                core_weights /= np.sum(core_weights)
+
+            c_vec = np.average(proj_vecs[core_indices], axis=0, weights=core_weights)
+            c_vec /= max(1e-9, np.linalg.norm(c_vec))
+            high_d_centroids[cid] = c_vec
+
+        cids_list = list(high_d_centroids.keys())
+        refugee_links: List[Dict[str, Any]] = []
+        refugee_map: Dict[int, Dict[str, Any]] = {}
+
+        if len(cids_list) > 1:
+            centroid_matrix = np.array([high_d_centroids[c] for c in cids_list])
+            for cid, indices in comm_concept_indices.items():
+                if not indices:
+                    continue
+                curr_c_idx = cids_list.index(cid)
+                sub_vecs = proj_vecs[indices]
+                dists = 1.0 - np.clip(sub_vecs @ centroid_matrix.T, -1.0, 1.0)
+                own_dists = dists[:, curr_c_idx]
+                min_other_indices = np.argmin(dists, axis=1)
+
+                for local_i, global_idx in enumerate(indices):
+                    best_c_idx = min_other_indices[local_i]
+                    target_cid = cids_list[best_c_idx]
+                    if target_cid != cid and dists[local_i, best_c_idx] < own_dists[local_i] - 0.05:
+                        pull_delta = float(own_dists[local_i] - dists[local_i, best_c_idx])
+                        ref_info = {
+                            "concept_id": global_idx,
+                            "source_community": cid,
+                            "target_community": target_cid,
+                            "pull_delta": round(pull_delta, 4)
+                        }
+                        refugee_links.append(ref_info)
+                        refugee_map[global_idx] = ref_info
+
+        # Filter Highways
+        highways_payload: List[Dict[str, Any]] = []
+        for h in highways_raw:
+            sc = h.get("source_community")
+            tc = h.get("target_community")
+            cnt = h.get("directed_edge_count", 0)
+            if sc in centroids_dict and tc in centroids_dict and sc != tc and cnt >= 5:
+                highways_payload.append({
+                    "source": sc,
+                    "target": tc,
+                    "edge_count": cnt,
+                    "top_predicates": [p.get("predicate") for p in h.get("top_predicates", [])[:3]]
+                })
+        highways_payload.sort(key=lambda x: x["edge_count"], reverse=True)
+
+        # Build Concept Partition Mapping
+        concept_community_map: Dict[int, Dict[str, Any]] = {}
+        for cid, indices in comm_concept_indices.items():
+            if cid not in centroids_dict:
+                continue
+            c_meta = centroids_dict[cid]
+            for idx in indices:
+                is_ref = idx in refugee_map
+                concept_community_map[idx] = {
+                    "community_id": cid,
+                    "community_label": c_meta["headline_theme"],
+                    "color": c_meta["color"],
+                    "tier": concepts_payload[idx]["tier"],
+                    "tier_key": concepts_payload[idx]["tier_key"],
+                    "is_refugee": is_ref,
+                    "refugee_target_id": refugee_map[idx]["target_community"] if is_ref else None,
+                    "refugee_delta": refugee_map[idx]["pull_delta"] if is_ref else 0.0
+                }
+
+        return {
+            "meta": {
+                "total_concepts": len(concepts_payload),
+                "total_communities": len(centroids_dict),
+                "total_highways": len(highways_payload),
+                "total_refugees": len(refugee_links),
+                "partition_name": "Baseline Communities (Granular)" if is_baseline else "Agglomerated Clusters (Macro)"
+            },
+            "communities": list(centroids_dict.values()),
+            "highways": highways_payload,
+            "refugees": refugee_links,
+            "concept_community_map": concept_community_map
+        }
+
     def compute_3d_galaxy_data(
         self,
         base_dir: Path = Path("outputs/03_topology"),
@@ -88,6 +293,9 @@ class Galaxy3DVisualizer:
         desired_weighting = str(g_cfg.get("centroid_weighting", "core_tiers"))
         desired_hull = int(g_cfg.get("density_hull_percentile", 75))
 
+        comm_dir = base_dir / "03_paths" / "community"
+        baseline_file_check = comm_dir / "topology_partitions_baseline.json"
+
         if not force_recompute and cache_file.exists():
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:
@@ -99,11 +307,13 @@ class Galaxy3DVisualizer:
                 has_themes = any("top_themes" in c for c in data.get("communities", []))
                 if (
                     "concepts" in data
+                    and "agglom" in data
                     and len(data["concepts"]) > 100
                     and cached_debiased == desired_debiased
                     and cached_weighting == desired_weighting
                     and cached_hull == desired_hull
                     and has_themes
+                    and (not baseline_file_check.exists() or data.get("has_baseline", False))
                 ):
                     print(f"   -> [3D Galaxy] Loaded cached 3D projections from: {cache_file.name}")
                     return data
@@ -154,10 +364,11 @@ class Galaxy3DVisualizer:
         vocab_map = {str(t).lower().strip(): idx for idx, t in enumerate(meta_data.get("vocab", []))}
         embedding_matrix = np.load(concept_npy)
 
-        # 2. Load Community Tiers & Highways
+        # 2. Load Community Tiers, Partitions & Highways
         comm_dir = base_dir / "03_paths" / "community"
         tiers_json = comm_dir / "community_architectural_tiers.json"
         partitions_json = comm_dir / "topology_partitions.json"
+        baseline_partitions_json = comm_dir / "topology_partitions_baseline.json"
         highways_json = comm_dir / "community_highways.json"
 
         if tiers_json.exists():
@@ -181,6 +392,26 @@ class Galaxy3DVisualizer:
         else:
             raise FileNotFoundError("No community partitions or architectural tiers found.")
 
+        # Ingest baseline partition if available
+        has_baseline = False
+        baseline_data = None
+        node_to_baseline_cid: Dict[str, int] = {}
+        baseline_comm_labels: Dict[int, str] = {}
+        if baseline_partitions_json.exists():
+            try:
+                with open(baseline_partitions_json, "r", encoding="utf-8") as bf:
+                    baseline_data = json.load(bf)
+                if baseline_data.get("communities"):
+                    has_baseline = True
+                    for bc in baseline_data.get("communities", []):
+                        bcid = int(bc.get("community_id", 0))
+                        blabel = bc.get("label", f"Community #{bcid}")
+                        baseline_comm_labels[bcid] = blabel
+                        for node in bc.get("nodes", []):
+                            node_to_baseline_cid[str(node).lower().strip()] = bcid
+            except Exception as e:
+                print(f"   -> [Warning] Failed to load baseline partitions ({e})")
+
         # Load highways
         highways_raw = []
         if highways_json.exists():
@@ -193,6 +424,7 @@ class Galaxy3DVisualizer:
 
         # Load theme associations per community from resolved targets or refined triplets
         community_theme_counts: Dict[int, Counter] = defaultdict(Counter)
+        baseline_theme_counts: Dict[int, Counter] = defaultdict(Counter)
         resolved_targets_json = comm_dir / "resolved_community_targets.json"
         refined_triplets_json = refinement_dir / "refined_triplets.json"
 
@@ -209,10 +441,16 @@ class Galaxy3DVisualizer:
             except Exception as e:
                 print(f"   -> [Warning] Failed to extract themes from resolved targets: {e}")
 
-        if not community_theme_counts and refined_triplets_json.exists():
+        r_triplets = []
+        if refined_triplets_json.exists():
             try:
                 with open(refined_triplets_json, "r", encoding="utf-8") as rf:
                     r_triplets = json.load(rf)
+            except Exception:
+                r_triplets = []
+
+        if not community_theme_counts and r_triplets:
+            try:
                 node_to_cid = {}
                 for c_info in tiers_data:
                     actual_cid = int(c_info.get("community_id", 0))
@@ -231,6 +469,46 @@ class Galaxy3DVisualizer:
                         community_theme_counts[node_to_cid[s]][th] += 1
                     elif o in node_to_cid:
                         community_theme_counts[node_to_cid[o]][th] += 1
+            except Exception:
+                pass
+
+        if has_baseline and r_triplets:
+            try:
+                for tr in r_triplets:
+                    th = tr.get("theme_association")
+                    if not th:
+                        continue
+                    s = str(tr.get("subject", "")).lower().strip()
+                    o = str(tr.get("object", "")).lower().strip()
+                    if s in node_to_baseline_cid:
+                        baseline_theme_counts[node_to_baseline_cid[s]][th] += 1
+                    elif o in node_to_baseline_cid:
+                        baseline_theme_counts[node_to_baseline_cid[o]][th] += 1
+            except Exception:
+                pass
+
+        # Compute baseline inter-community highways from refined triplets if available
+        baseline_highways_raw: List[Dict[str, Any]] = []
+        if has_baseline and r_triplets:
+            try:
+                b_highways = defaultdict(lambda: {"edge_count": 0, "predicates": defaultdict(int)})
+                for tr in r_triplets:
+                    s = str(tr.get("subject", "")).lower().strip()
+                    o = str(tr.get("object", "")).lower().strip()
+                    if s in node_to_baseline_cid and o in node_to_baseline_cid:
+                        cu, cv = node_to_baseline_cid[s], node_to_baseline_cid[o]
+                        if cu != cv:
+                            b_highways[(cu, cv)]["edge_count"] += 1
+                            pred = str(tr.get("predicate", "related_to"))
+                            b_highways[(cu, cv)]["predicates"][pred] += 1
+                for (cu, cv), h_data in sorted(b_highways.items(), key=lambda x: x[1]["edge_count"], reverse=True):
+                    top_preds = sorted(h_data["predicates"].items(), key=lambda x: x[1], reverse=True)[:3]
+                    baseline_highways_raw.append({
+                        "source_community": cu,
+                        "target_community": cv,
+                        "directed_edge_count": h_data["edge_count"],
+                        "top_predicates": [{"predicate": p, "count": cnt} for p, cnt in top_preds]
+                    })
             except Exception:
                 pass
 
@@ -359,166 +637,76 @@ class Galaxy3DVisualizer:
                 round(float(coords_umap[idx, 2]), 2)
             ]
 
-        # 6. Compute 3D Centroids (Tier-Weighted) and Bounding Radii
-        centroids_dict: Dict[int, Dict[str, Any]] = {}
-        for cid, indices in community_concept_indices.items():
-            if not indices:
-                continue
+        # 6. Build Dual-Partition Packs (Agglomerated Macro-Clusters & Baseline Granular Communities)
+        weighting_mode = g_cfg.get("centroid_weighting", "core_tiers")
 
-            weighting_mode = g_cfg.get("centroid_weighting", "core_tiers")
-            if weighting_mode == "tier_1_only":
-                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
-                if not core_indices:
-                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
-                if not core_indices:
-                    core_indices = indices
-                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
-                core_weights /= np.sum(core_weights)
-            elif weighting_mode == "uniform":
-                core_indices = indices
-                core_weights = np.ones(len(core_indices)) / len(core_indices)
-            else:  # "core_tiers" (default)
-                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
-                if not core_indices:
-                    core_indices = indices
-                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
-                core_weights /= np.sum(core_weights)
+        # Map concepts to baseline community indices
+        baseline_community_concept_indices: Dict[int, List[int]] = defaultdict(list)
+        if has_baseline:
+            for idx, c_item in enumerate(concepts_payload):
+                ent = c_item["entity"].lower().strip()
+                b_cid = node_to_baseline_cid.get(ent, c_item["community_id"])
+                baseline_community_concept_indices[b_cid].append(idx)
 
-            core_sub_pca = coords_pca[core_indices]
-            core_sub_umap = coords_umap[core_indices]
+        # Build Agglomerated Partition Pack
+        agglom_pack = self._build_partition_subpack(
+            comm_concept_indices=community_concept_indices,
+            comm_labels={cid: meta["label"] for cid, meta in community_meta.items()},
+            community_theme_counts=community_theme_counts,
+            concepts_payload=concepts_payload,
+            coords_pca=coords_pca,
+            coords_umap=coords_umap,
+            proj_vecs=proj_vecs,
+            highways_raw=highways_raw,
+            weighting_mode=weighting_mode,
+            hull_percentile=hull_percentile,
+            is_baseline=False
+        )
 
-            c_pca = np.average(core_sub_pca, axis=0, weights=core_weights)
-            c_umap = np.average(core_sub_umap, axis=0, weights=core_weights)
+        # Build Baseline Partition Pack (if available)
+        baseline_pack = None
+        if has_baseline and baseline_community_concept_indices:
+            baseline_pack = self._build_partition_subpack(
+                comm_concept_indices=baseline_community_concept_indices,
+                comm_labels=baseline_comm_labels,
+                community_theme_counts=baseline_theme_counts,
+                concepts_payload=concepts_payload,
+                coords_pca=coords_pca,
+                coords_umap=coords_umap,
+                proj_vecs=proj_vecs,
+                highways_raw=baseline_highways_raw,
+                weighting_mode=weighting_mode,
+                hull_percentile=hull_percentile,
+                is_baseline=True
+            )
 
-            # Radii: Tight cohesive shells calculated on core community members
-            dists_pca = np.linalg.norm(core_sub_pca - c_pca, axis=1)
-            dists_umap = np.linalg.norm(core_sub_umap - c_umap, axis=1)
-
-            rad_pca = float(np.percentile(dists_pca, hull_percentile)) if len(dists_pca) > 0 else 10.0
-            rad_umap = float(np.percentile(dists_umap, hull_percentile)) if len(dists_umap) > 0 else 10.0
-
-            meta = community_meta[cid]
-            # Form clean thematic headline from top T1
-            t1_theme = ", ".join(meta["top_t1"][:3]) if meta["top_t1"] else meta["label"]
-
-            theme_counter = community_theme_counts.get(cid, Counter())
-            total_triplets = sum(theme_counter.values())
-            top_themes = [
-                {
-                    "theme": name,
-                    "count": count,
-                    "percentage": round((count / total_triplets * 100.0), 1) if total_triplets > 0 else 0.0
-                }
-                for name, count in theme_counter.most_common(6)
-            ]
-
-            centroids_dict[cid] = {
-                "community_id": cid,
-                "label": meta["label"],
-                "headline_theme": t1_theme,
-                "color": meta["color"],
-                "total_concepts": len(indices),
-                "total_triplets": total_triplets,
-                "tier_counts": meta["tier_counts"],
-                "top_themes": top_themes,
-                "pca_3d": [round(float(c_pca[0]), 2), round(float(c_pca[1]), 2), round(float(c_pca[2]), 2)],
-                "umap_3d": [round(float(c_umap[0]), 2), round(float(c_umap[1]), 2), round(float(c_umap[2]), 2)],
-                "radius_pca": round(max(4.0, rad_pca), 2),
-                "radius_umap": round(max(4.0, rad_umap), 2),
-                "exemplar_concepts": meta["top_t1"]
-            }
-
-        # 7. Detect Cross-Border "Semantic Refugees" in De-Biased Embedding Space
-        # Compute Fréchet normalized vectors for each community using de-biased core vectors
-        high_d_centroids = {}
-        for cid, indices in community_concept_indices.items():
-            if weighting_mode == "tier_1_only":
-                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] == "tier_1_nucleus"]
-                if not core_indices:
-                    core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
-                if not core_indices:
-                    core_indices = indices
-                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
-                core_weights /= np.sum(core_weights)
-            elif weighting_mode == "uniform":
-                core_indices = indices
-                core_weights = np.ones(len(core_indices)) / len(core_indices)
-            else:  # "core_tiers" (default)
-                core_indices = [idx for idx in indices if concepts_payload[idx]["tier_key"] in ("tier_1_nucleus", "tier_2_mechanics")]
-                if not core_indices:
-                    core_indices = indices
-                core_weights = np.array([max(0.01, float(concepts_payload[idx]["composite_score"])) for idx in core_indices])
-                core_weights /= np.sum(core_weights)
-
-            c_vec = np.average(proj_vecs[core_indices], axis=0, weights=core_weights)
-            c_vec /= max(1e-9, np.linalg.norm(c_vec))
-            high_d_centroids[cid] = c_vec
-
-        cids_list = list(high_d_centroids.keys())
-        centroid_matrix = np.array([high_d_centroids[c] for c in cids_list])
-
-        total_refugees = 0
-        refugee_links: List[Dict[str, Any]] = []
-
-        for cid, indices in community_concept_indices.items():
-            if not indices:
-                continue
-            curr_c_idx = cids_list.index(cid)
-            sub_vecs = proj_vecs[indices]
-            # Distances to all centroids: 1 - cosine in de-biased space
-            dists = 1.0 - np.clip(sub_vecs @ centroid_matrix.T, -1.0, 1.0)
-            own_dists = dists[:, curr_c_idx]
-            min_other_indices = np.argmin(dists, axis=1)
-
-            for local_i, global_idx in enumerate(indices):
-                best_c_idx = min_other_indices[local_i]
-                target_cid = cids_list[best_c_idx]
-                if target_cid != cid and dists[local_i, best_c_idx] < own_dists[local_i] - 0.05:
-                    pull_delta = float(own_dists[local_i] - dists[local_i, best_c_idx])
-                    concepts_payload[global_idx]["is_refugee"] = True
-                    concepts_payload[global_idx]["refugee_target_id"] = target_cid
-                    concepts_payload[global_idx]["refugee_delta"] = round(pull_delta, 4)
-                    total_refugees += 1
-                    refugee_links.append({
-                        "concept_id": global_idx,
-                        "source_community": cid,
-                        "target_community": target_cid,
-                        "pull_delta": round(pull_delta, 4)
-                    })
-
-        # 8. Filter and Map Inter-Community Highways
-        highways_payload: List[Dict[str, Any]] = []
-        for h in highways_raw:
-            sc = h.get("source_community")
-            tc = h.get("target_community")
-            cnt = h.get("directed_edge_count", 0)
-            if sc in centroids_dict and tc in centroids_dict and sc != tc and cnt >= 5:
-                highways_payload.append({
-                    "source": sc,
-                    "target": tc,
-                    "edge_count": cnt,
-                    "top_predicates": [p.get("predicate") for p in h.get("top_predicates", [])[:3]]
-                })
-
-        # Sort highways by edge count descending
-        highways_payload.sort(key=lambda x: x["edge_count"], reverse=True)
+        # Synchronize default refugee annotations on concepts_payload to match agglom
+        for idx, concept in enumerate(concepts_payload):
+            node_info = agglom_pack["concept_community_map"].get(idx)
+            if node_info:
+                concept["is_refugee"] = node_info["is_refugee"]
+                concept["refugee_target_id"] = node_info["refugee_target_id"]
+                concept["refugee_delta"] = node_info["refugee_delta"]
 
         galaxy_data = {
+            "has_baseline": bool(has_baseline and baseline_pack is not None),
             "meta": {
                 "total_concepts": total_nodes,
-                "total_communities": len(centroids_dict),
-                "total_highways": len(highways_payload),
-                "total_refugees": total_refugees,
+                "total_communities": agglom_pack["meta"]["total_communities"],
+                "total_highways": agglom_pack["meta"]["total_highways"],
+                "total_refugees": agglom_pack["meta"]["total_refugees"],
                 "pca_explained_variance_pct": round(pca_var * 100.0, 2),
                 "debiased": debias_enabled,
                 "centroid_weighting": weighting_mode,
                 "density_hull_percentile": hull_percentile,
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S")
             },
-            "communities": list(centroids_dict.values()),
+            "agglom": agglom_pack,
+            "baseline": baseline_pack,
+            "communities": agglom_pack["communities"],
             "concepts": concepts_payload,
-            "highways": highways_payload,
-            "refugees": refugee_links
+            "highways": agglom_pack["highways"],
+            "refugees": agglom_pack["refugees"]
         }
 
         with open(cache_file, "w", encoding="utf-8") as f:
@@ -662,6 +850,55 @@ class Galaxy3DVisualizer:
     .title-text p {{
       font-size: 11px;
       color: var(--text-muted);
+    }}
+
+    /* Partition Toggle Button & Badges */
+    .partition-badge {{
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: rgba(168, 85, 247, 0.2);
+      border: 1px solid var(--accent-purple);
+      color: #c084fc;
+      margin-left: 8px;
+      vertical-align: middle;
+      box-shadow: 0 0 10px rgba(168, 85, 247, 0.25);
+    }}
+
+    .partition-badge.baseline {{
+      background: rgba(0, 240, 255, 0.15);
+      border-color: var(--accent-cyan);
+      color: var(--accent-cyan);
+      box-shadow: 0 0 10px rgba(0, 240, 255, 0.25);
+    }}
+
+    .partition-toggle-btn {{
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid rgba(168, 85, 247, 0.5);
+      color: #e2e8f0;
+      font-family: 'Outfit', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 6px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 0 10px rgba(168, 85, 247, 0.2);
+    }}
+
+    .partition-toggle-btn:hover {{
+      background: rgba(168, 85, 247, 0.25);
+      border-color: var(--accent-purple);
+      color: #fff;
+      box-shadow: 0 0 16px rgba(168, 85, 247, 0.45);
+      transform: translateY(-1px);
     }}
 
     /* Engine Switcher (UMAP-3D vs PCA-3D) */
@@ -1267,39 +1504,50 @@ class Galaxy3DVisualizer:
     <div class="logo-group">
       <div class="logo-badge">STAGE 3 TOPOLOGY</div>
       <div class="title-text">
-        <h1>SemanticPrism // 3D Embedding Galaxy</h1>
+        <div style="display:flex; align-items:center;">
+          <h1>SemanticPrism // 3D Embedding Galaxy</h1>
+          <span id="partition-badge" class="partition-badge">Agglomerated Clusters (Macro)</span>
+        </div>
         <p>Fréchet Mean Centroids &bull; Hierarchical Concept Clouds &bull; High-Dimensional Manifolds</p>
       </div>
     </div>
 
-    <!-- Engine Switcher -->
-    <div class="engine-switcher">
-      <button id="btn-engine-umap" class="engine-btn active" title="Non-linear manifold preserving local &amp; global clusters">
-        <span>✨</span>
-        <span>UMAP 3D</span>
+    <!-- Controls Container (Toggle + Engine) -->
+    <div style="display:flex; align-items:center; gap:10px;">
+      <button id="btn-toggle-partition" class="partition-toggle-btn" style="display:none;" title="Toggle between Agglomerated Macro Clusters and Baseline Granular Communities">
+        <span>🔄</span>
+        <span id="partition-toggle-text">Switch to Baseline Communities</span>
       </button>
-      <button id="btn-engine-pca" class="engine-btn" title="Deterministic global variance linear projection">
-        <span>📐</span>
-        <span>PCA 3D ({meta["pca_explained_variance_pct"]}%)</span>
-      </button>
+
+      <!-- Engine Switcher -->
+      <div class="engine-switcher">
+        <button id="btn-engine-umap" class="engine-btn active" title="Non-linear manifold preserving local &amp; global clusters">
+          <span>✨</span>
+          <span>UMAP 3D</span>
+        </button>
+        <button id="btn-engine-pca" class="engine-btn" title="Deterministic global variance linear projection">
+          <span>📐</span>
+          <span>PCA 3D ({meta["pca_explained_variance_pct"]}%)</span>
+        </button>
+      </div>
     </div>
 
     <!-- Stats Ribbon -->
     <div class="stats-ribbon">
       <div class="stat-badge">
-        <span class="val">{meta["total_communities"]}</span>
+        <span class="val" id="stat-total-comms">{meta["total_communities"]}</span>
         <span class="lbl">Centroids</span>
       </div>
       <div class="stat-badge">
-        <span class="val">{meta["total_concepts"]}</span>
+        <span class="val" id="stat-total-concepts">{meta["total_concepts"]}</span>
         <span class="lbl">Concepts</span>
       </div>
       <div class="stat-badge">
-        <span class="val">{meta["total_highways"]}</span>
+        <span class="val" id="stat-total-highways">{meta["total_highways"]}</span>
         <span class="lbl">Highways</span>
       </div>
       <div class="stat-badge">
-        <span class="val" style="color:var(--accent-rose);">{meta["total_refugees"]}</span>
+        <span class="val" id="stat-total-refugees" style="color:var(--accent-rose);">{meta["total_refugees"]}</span>
         <span class="lbl">Refugees</span>
       </div>
     </div>
@@ -1428,6 +1676,11 @@ class Galaxy3DVisualizer:
     let selectedCommunityId = null;
     let autoRotate = true;
 
+    // Dual-Partition State
+    let isAgglomerated = true;
+    const hasBaseline = Boolean(GALAXY_DATA.has_baseline && GALAXY_DATA.baseline);
+    let activeData = (GALAXY_DATA.agglom || GALAXY_DATA);
+
     const container = document.getElementById('webgl-container');
     const width = window.innerWidth;
     const height = window.innerHeight;
@@ -1513,49 +1766,63 @@ class Galaxy3DVisualizer:
     const refugeeLines = [];
 
     // Community Lookup Map
-    const communityMap = {{}};
-    GALAXY_DATA.communities.forEach(c => {{ communityMap[c.community_id] = c; }});
+    let communityMap = {{}};
+    function rebuildCommunityMap() {{
+      communityMap = {{}};
+      activeData.communities.forEach(c => {{ communityMap[c.community_id] = c; }});
+    }}
+    rebuildCommunityMap();
 
     // 1. Build Centroid Meshes (Celestial Stars)
     const centroidGeo = new THREE.SphereGeometry(3.6, 32, 32);
-    GALAXY_DATA.communities.forEach(c => {{
-      const color = new THREE.Color(c.color);
-      const mat = new THREE.MeshStandardMaterial({{
-        color: color,
-        emissive: color,
-        emissiveIntensity: 0.85,
-        roughness: 0.2,
-        metalness: 0.8
+    function rebuildCentroids(engine) {{
+      while (centroidGroup.children.length > 0) {{
+        const obj = centroidGroup.children[0];
+        centroidGroup.remove(obj);
+      }}
+      centroidMeshes.length = 0;
+
+      activeData.communities.forEach(c => {{
+        const color = new THREE.Color(c.color);
+        const mat = new THREE.MeshStandardMaterial({{
+          color: color,
+          emissive: color,
+          emissiveIntensity: 0.85,
+          roughness: 0.2,
+          metalness: 0.8
+        }});
+        const mesh = new THREE.Mesh(centroidGeo, mat);
+        mesh.userData = {{
+          type: 'centroid',
+          community_id: c.community_id,
+          label: c.label,
+          theme: c.headline_theme,
+          total_concepts: c.total_concepts,
+          pca_pos: new THREE.Vector3(...c.pca_3d),
+          umap_pos: new THREE.Vector3(...c.umap_3d),
+          color: c.color,
+          exemplar_concepts: c.exemplar_concepts
+        }};
+
+        mesh.position.copy(engine === 'umap' ? mesh.userData.umap_pos : mesh.userData.pca_pos);
+
+        // Centroid Outer Glow Ring
+        const ringGeo = new THREE.RingGeometry(4.8, 5.4, 32);
+        const ringMat = new THREE.MeshBasicMaterial({{
+          color: color,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.65
+        }});
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.rotation.x = Math.PI / 2;
+        mesh.add(ringMesh);
+
+        centroidGroup.add(mesh);
+        centroidMeshes.push(mesh);
       }});
-      const mesh = new THREE.Mesh(centroidGeo, mat);
-      mesh.userData = {{
-        type: 'centroid',
-        community_id: c.community_id,
-        label: c.label,
-        theme: c.headline_theme,
-        total_concepts: c.total_concepts,
-        pca_pos: new THREE.Vector3(...c.pca_3d),
-        umap_pos: new THREE.Vector3(...c.umap_3d),
-        color: c.color
-      }};
-
-      mesh.position.copy(mesh.userData.umap_pos);
-
-      // Centroid Outer Glow Ring
-      const ringGeo = new THREE.RingGeometry(4.8, 5.4, 32);
-      const ringMat = new THREE.MeshBasicMaterial({{
-        color: color,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.65
-      }});
-      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-      ringMesh.rotation.x = Math.PI / 2;
-      mesh.add(ringMesh);
-
-      centroidGroup.add(mesh);
-      centroidMeshes.push(mesh);
-    }});
+    }}
+    rebuildCentroids('umap');
 
     // 2. Build Concept Meshes (Orbiting Entities)
     const tierGeoNucleus = new THREE.SphereGeometry(1.6, 16, 16);
@@ -1563,7 +1830,8 @@ class Galaxy3DVisualizer:
     const tierGeoModifiers = new THREE.SphereGeometry(0.75, 10, 10);
 
     GALAXY_DATA.concepts.forEach(item => {{
-      const cMeta = communityMap[item.community_id] || {{ color: '#00f0ff' }};
+      const nodeInfo = (activeData.concept_community_map && activeData.concept_community_map[item.id]) || item;
+      const cMeta = communityMap[nodeInfo.community_id] || {{ color: '#00f0ff', headline_theme: `Community #${{nodeInfo.community_id}}` }};
       const baseColor = new THREE.Color(cMeta.color);
 
       let geo = tierGeoMechanics;
@@ -1588,10 +1856,14 @@ class Galaxy3DVisualizer:
       mesh.userData = {{
         type: 'concept',
         ...item,
-        pca_pos: new THREE.Vector3(...item.pca_3d),
-        umap_pos: new THREE.Vector3(...item.umap_3d),
+        community_id: nodeInfo.community_id,
+        community_label: nodeInfo.community_label || cMeta.headline_theme || `Community #${{nodeInfo.community_id}}`,
         color: cMeta.color,
-        community_label: cMeta.headline_theme || `Community #${{item.community_id}}`
+        is_refugee: Boolean(nodeInfo.is_refugee),
+        refugee_target_id: nodeInfo.refugee_target_id,
+        refugee_delta: nodeInfo.refugee_delta || 0.0,
+        pca_pos: new THREE.Vector3(...item.pca_3d),
+        umap_pos: new THREE.Vector3(...item.umap_3d)
       }};
 
       mesh.position.copy(mesh.userData.umap_pos);
@@ -1599,30 +1871,58 @@ class Galaxy3DVisualizer:
       conceptMeshes.push(mesh);
     }});
 
-    // 3. Build Cluster Density Hulls (Translucent Glowing Isochrones)
-    GALAXY_DATA.communities.forEach(c => {{
-      const color = new THREE.Color(c.color);
-      const hullGeo = new THREE.IcosahedronGeometry(1.0, 3);
-      const hullMat = new THREE.MeshBasicMaterial({{
-        color: color,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.14
-      }});
-      const hullMesh = new THREE.Mesh(hullGeo, hullMat);
-      hullMesh.userData = {{
-        community_id: c.community_id,
-        radius_pca: c.radius_pca,
-        radius_umap: c.radius_umap,
-        pca_pos: new THREE.Vector3(...c.pca_3d),
-        umap_pos: new THREE.Vector3(...c.umap_3d)
-      }};
-      hullMesh.position.copy(hullMesh.userData.umap_pos);
-      hullMesh.scale.setScalar(c.radius_umap);
+    function updateConceptPartitions() {{
+      if (!activeData.concept_community_map) return;
+      conceptMeshes.forEach(mesh => {{
+        const nodeInfo = activeData.concept_community_map[mesh.userData.id];
+        if (nodeInfo) {{
+          mesh.userData.community_id = nodeInfo.community_id;
+          mesh.userData.community_label = nodeInfo.community_label;
+          mesh.userData.color = nodeInfo.color;
+          mesh.userData.is_refugee = Boolean(nodeInfo.is_refugee);
+          mesh.userData.refugee_target_id = nodeInfo.refugee_target_id;
+          mesh.userData.refugee_delta = nodeInfo.refugee_delta || 0.0;
 
-      hullGroup.add(hullMesh);
-      hullMeshes.push(hullMesh);
-    }});
+          const baseColor = new THREE.Color(nodeInfo.color);
+          mesh.material.color = baseColor;
+          mesh.material.emissive = baseColor;
+        }}
+      }});
+    }}
+
+    // 3. Build Cluster Density Hulls (Translucent Glowing Isochrones)
+    function rebuildHulls(engine) {{
+      while (hullGroup.children.length > 0) {{
+        const obj = hullGroup.children[0];
+        hullGroup.remove(obj);
+      }}
+      hullMeshes.length = 0;
+
+      activeData.communities.forEach(c => {{
+        const color = new THREE.Color(c.color);
+        const hullGeo = new THREE.IcosahedronGeometry(1.0, 3);
+        const hullMat = new THREE.MeshBasicMaterial({{
+          color: color,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.14
+        }});
+        const hullMesh = new THREE.Mesh(hullGeo, hullMat);
+        hullMesh.userData = {{
+          community_id: c.community_id,
+          radius_pca: c.radius_pca,
+          radius_umap: c.radius_umap,
+          pca_pos: new THREE.Vector3(...c.pca_3d),
+          umap_pos: new THREE.Vector3(...c.umap_3d)
+        }};
+        hullMesh.position.copy(engine === 'umap' ? hullMesh.userData.umap_pos : hullMesh.userData.pca_pos);
+        hullMesh.scale.setScalar(engine === 'umap' ? c.radius_umap : c.radius_pca);
+
+        hullGroup.add(hullMesh);
+        hullMeshes.push(hullMesh);
+      }});
+    }}
+    rebuildHulls('umap');
 
     // 4. Build Highway Conduits (3D Spline Tubes)
     function rebuildHighways(engine) {{
@@ -1632,7 +1932,7 @@ class Galaxy3DVisualizer:
       }}
       highwayLines.length = 0;
 
-      GALAXY_DATA.highways.forEach(hw => {{
+      activeData.highways.forEach(hw => {{
         const sMeta = communityMap[hw.source];
         const tMeta = communityMap[hw.target];
         if (!sMeta || !tMeta) return;
@@ -1677,7 +1977,7 @@ class Galaxy3DVisualizer:
       }}
       refugeeLines.length = 0;
 
-      GALAXY_DATA.refugees.forEach(ref => {{
+      activeData.refugees.forEach(ref => {{
         const concept = GALAXY_DATA.concepts[ref.concept_id];
         const targetComm = communityMap[ref.target_community];
         if (!concept || !targetComm) return;
@@ -1923,76 +2223,83 @@ class Galaxy3DVisualizer:
     // UI POPULATION & EVENT CONTROLS
     // =========================================================================
     // Track visible communities (all visible by default)
-    const visibleCommunityIds = new Set(GALAXY_DATA.communities.map(c => c.community_id));
+    let visibleCommunityIds = new Set(activeData.communities.map(c => c.community_id));
 
     // 1. Populate Community List with Visibility Toggles and Solo Focus
-    const commListEl = document.getElementById('community-list');
-    GALAXY_DATA.communities.forEach(c => {{
-      const item = document.createElement('div');
-      item.className = 'comm-item';
-      item.dataset.cid = c.community_id;
-      item.innerHTML = `
-        <div class="comm-item-top">
-          <span class="comm-title">
-            <span class="color-dot" style="background:${{c.color}};"></span>
-            ${{c.label}}
-          </span>
-          <div class="comm-item-actions">
-            <span class="comm-count">${{c.total_concepts}}</span>
-            <button class="comm-btn-icon comm-solo-btn" title="Solo / Isolate only this community" data-cid="${{c.community_id}}">🎯</button>
-            <button class="comm-btn-icon comm-eye-btn" title="Toggle visibility of this community" data-cid="${{c.community_id}}">👁️</button>
+    function populateCommunityList() {{
+      const commListEl = document.getElementById('community-list');
+      if (!commListEl) return;
+      commListEl.innerHTML = '';
+      visibleCommunityIds = new Set(activeData.communities.map(c => c.community_id));
+
+      activeData.communities.forEach(c => {{
+        const item = document.createElement('div');
+        item.className = 'comm-item';
+        item.dataset.cid = c.community_id;
+        item.innerHTML = `
+          <div class="comm-item-top">
+            <span class="comm-title">
+              <span class="color-dot" style="background:${{c.color}};"></span>
+              ${{c.label}}
+            </span>
+            <div class="comm-item-actions">
+              <span class="comm-count">${{c.total_concepts}}</span>
+              <button class="comm-btn-icon comm-solo-btn" title="Solo / Isolate only this community" data-cid="${{c.community_id}}">🎯</button>
+              <button class="comm-btn-icon comm-eye-btn" title="Toggle visibility of this community" data-cid="${{c.community_id}}">👁️</button>
+            </div>
           </div>
-        </div>
-        <div class="comm-theme">${{c.headline_theme}}</div>
-      `;
+          <div class="comm-theme">${{c.headline_theme}}</div>
+        `;
 
-      // Eye button: Toggle visibility of this specific community
-      const eyeBtn = item.querySelector('.comm-eye-btn');
-      eyeBtn.addEventListener('click', (e) => {{
-        e.stopPropagation();
-        if (visibleCommunityIds.has(c.community_id)) {{
-          visibleCommunityIds.delete(c.community_id);
-        }} else {{
-          visibleCommunityIds.add(c.community_id);
-        }}
-        updateVisibility();
-      }});
-
-      // Solo button: Isolate only this community and fly to it
-      const soloBtn = item.querySelector('.comm-solo-btn');
-      soloBtn.addEventListener('click', (e) => {{
-        e.stopPropagation();
-        visibleCommunityIds.clear();
-        visibleCommunityIds.add(c.community_id);
-        flyToCommunity(c.community_id);
-        updateVisibility();
-      }});
-
-      // Card click: If multi-select modifier (Shift/Ctrl/Cmd), toggle; else ensure visible & fly to it
-      item.addEventListener('click', (e) => {{
-        if (e.shiftKey || e.ctrlKey || e.metaKey) {{
+        // Eye button: Toggle visibility of this specific community
+        const eyeBtn = item.querySelector('.comm-eye-btn');
+        eyeBtn.addEventListener('click', (e) => {{
+          e.stopPropagation();
           if (visibleCommunityIds.has(c.community_id)) {{
             visibleCommunityIds.delete(c.community_id);
           }} else {{
             visibleCommunityIds.add(c.community_id);
           }}
-        }} else {{
-          if (!visibleCommunityIds.has(c.community_id)) {{
-            visibleCommunityIds.add(c.community_id);
-          }}
-          flyToCommunity(c.community_id);
-        }}
-        updateVisibility();
-      }});
+          updateVisibility();
+        }});
 
-      commListEl.appendChild(item);
-    }});
+        // Solo button: Isolate only this community and fly to it
+        const soloBtn = item.querySelector('.comm-solo-btn');
+        soloBtn.addEventListener('click', (e) => {{
+          e.stopPropagation();
+          visibleCommunityIds.clear();
+          visibleCommunityIds.add(c.community_id);
+          flyToCommunity(c.community_id);
+          updateVisibility();
+        }});
+
+        // Card click: If multi-select modifier (Shift/Ctrl/Cmd), toggle; else ensure visible & fly to it
+        item.addEventListener('click', (e) => {{
+          if (e.shiftKey || e.ctrlKey || e.metaKey) {{
+            if (visibleCommunityIds.has(c.community_id)) {{
+              visibleCommunityIds.delete(c.community_id);
+            }} else {{
+              visibleCommunityIds.add(c.community_id);
+            }}
+          }} else {{
+            if (!visibleCommunityIds.has(c.community_id)) {{
+              visibleCommunityIds.add(c.community_id);
+            }}
+            flyToCommunity(c.community_id);
+          }}
+          updateVisibility();
+        }});
+
+        commListEl.appendChild(item);
+      }});
+    }}
+    populateCommunityList();
 
     // Toolbar buttons for batch visibility operations
     const btnShowAll = document.getElementById('btn-show-all-comms');
     if (btnShowAll) {{
       btnShowAll.addEventListener('click', () => {{
-        GALAXY_DATA.communities.forEach(c => visibleCommunityIds.add(c.community_id));
+        activeData.communities.forEach(c => visibleCommunityIds.add(c.community_id));
         updateVisibility();
       }});
     }}
@@ -2008,7 +2315,7 @@ class Galaxy3DVisualizer:
     const btnInvert = document.getElementById('btn-invert-comms');
     if (btnInvert) {{
       btnInvert.addEventListener('click', () => {{
-        GALAXY_DATA.communities.forEach(c => {{
+        activeData.communities.forEach(c => {{
           if (visibleCommunityIds.has(c.community_id)) {{
             visibleCommunityIds.delete(c.community_id);
           }} else {{
@@ -2161,7 +2468,7 @@ class Galaxy3DVisualizer:
       // 7. Update Visible Communities Counter Badge
       const counterEl = document.getElementById('visible-comm-counter');
       if (counterEl) {{
-        counterEl.innerText = `${{visibleCommunityIds.size}} / ${{GALAXY_DATA.communities.length}} Visible`;
+        counterEl.innerText = `${{visibleCommunityIds.size}} / ${{activeData.communities.length}} Visible`;
       }}
     }}
 
@@ -2177,7 +2484,7 @@ class Galaxy3DVisualizer:
       controls.target.set(0, 0, 0);
       selectedCommunityId = null;
       document.querySelectorAll('.comm-item').forEach(el => el.classList.remove('active'));
-      GALAXY_DATA.communities.forEach(c => visibleCommunityIds.add(c.community_id));
+      activeData.communities.forEach(c => visibleCommunityIds.add(c.community_id));
       updateVisibility();
     }});
 
@@ -2193,6 +2500,71 @@ class Galaxy3DVisualizer:
       autoBtn.innerText = `Orbit: ${{autoRotate ? 'ON' : 'OFF'}}`;
     }});
 
+    // 7. Partition Toggle Mode Engine
+    function togglePartitionMode() {{
+      if (!hasBaseline) return;
+      isAgglomerated = !isAgglomerated;
+      activeData = isAgglomerated ? (GALAXY_DATA.agglom || GALAXY_DATA) : GALAXY_DATA.baseline;
+
+      // 1. Update Badge & Button UI
+      const badgeEl = document.getElementById('partition-badge');
+      const btnText = document.getElementById('partition-toggle-text');
+
+      if (isAgglomerated) {{
+        if (badgeEl) {{
+          badgeEl.innerText = 'Agglomerated Clusters (Macro)';
+          badgeEl.classList.remove('baseline');
+        }}
+        if (btnText) {{
+          btnText.innerText = 'Switch to Baseline Communities';
+        }}
+      }} else {{
+        if (badgeEl) {{
+          badgeEl.innerText = 'Baseline Communities (Granular)';
+          badgeEl.classList.add('baseline');
+        }}
+        if (btnText) {{
+          btnText.innerText = 'Switch to Agglomerated Clusters';
+        }}
+      }}
+
+      // 2. Update Stats Ribbon
+      const meta = activeData.meta || {{}};
+      const commsEl = document.getElementById('stat-total-comms');
+      const hwsEl = document.getElementById('stat-total-highways');
+      const refsEl = document.getElementById('stat-total-refugees');
+      if (commsEl) commsEl.innerText = meta.total_communities ?? activeData.communities.length;
+      if (hwsEl) hwsEl.innerText = meta.total_highways ?? activeData.highways.length;
+      if (refsEl) refsEl.innerText = meta.total_refugees ?? activeData.refugees.length;
+
+      // 3. Rebuild Community Lookup & 3D Objects
+      rebuildCommunityMap();
+      updateConceptPartitions();
+      rebuildCentroids(currentEngine);
+      rebuildHulls(currentEngine);
+      rebuildHighways(currentEngine);
+      rebuildRefugees(currentEngine);
+      populateCommunityList();
+
+      // 4. Reset inspector and selections
+      selectedCommunityId = null;
+      if (conceptMeshes.length > 0) {{
+        selectEntity(conceptMeshes[0].userData);
+      }}
+      updateVisibility();
+    }}
+
+    // Initialize button visibility if baseline exists
+    const toggleBtnEl = document.getElementById('btn-toggle-partition');
+    if (toggleBtnEl) {{
+      if (hasBaseline) {{
+        toggleBtnEl.style.display = 'inline-flex';
+        toggleBtnEl.addEventListener('click', togglePartitionMode);
+      }} else {{
+        toggleBtnEl.style.display = 'none';
+      }}
+    }}
+
     // Window Resize
     window.addEventListener('resize', () => {{
       camera.aspect = window.innerWidth / window.innerHeight;
@@ -2201,8 +2573,8 @@ class Galaxy3DVisualizer:
     }});
 
     // Select initial exemplar
-    if (GALAXY_DATA.concepts.length > 0) {{
-      selectEntity(GALAXY_DATA.concepts[0]);
+    if (conceptMeshes.length > 0) {{
+      selectEntity(conceptMeshes[0].userData);
     }}
 
     // =========================================================================

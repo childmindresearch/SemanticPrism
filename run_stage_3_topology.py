@@ -80,8 +80,18 @@ def run_resolver_only(base_dir: Path, config: dict) -> None:
         dg.add_edge(s_norm, o_norm)
 
     result = TopologyResult(**topology)
+    baseline_result = None
+    baseline_path = out_dir / "topology_partitions_baseline.json"
+    if baseline_path.exists():
+        try:
+            with open(baseline_path, "r", encoding="utf-8") as f:
+                baseline_result = TopologyResult(**json.load(f))
+        except Exception:
+            pass
+
     TopologyVisualizer(config=config)._generate_llm_payload_gallery(
-        dg, result, normalized_triplets, out_dir, "Path 1: Community Workflow Path", "community"
+        dg, result, normalized_triplets, out_dir, "Path 1: Community Workflow Path", "community",
+        baseline_result=baseline_result
     )
     print(f"   [OK] Tier-Aware Payload Gallery Saved: {out_dir / 'stage_04_llm_payload_gallery.html'}")
     print("✅ TargetResolver Fast Update Complete.")

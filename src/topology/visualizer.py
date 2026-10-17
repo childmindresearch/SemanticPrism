@@ -2730,6 +2730,15 @@ class TopologyVisualizer:
                 except Exception:
                     pass
 
+        if baseline_result is None:
+            baseline_file = vis_dir / "topology_partitions_baseline.json"
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, "r", encoding="utf-8") as f:
+                        baseline_result = TopologyResult(**json.load(f))
+                except Exception:
+                    pass
+
         # 1. Single Isolated Communities Graph with in-page toggle
         self._generate_isolated_communities_graph(
             dg=dg,
@@ -2774,6 +2783,15 @@ class TopologyVisualizer:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         css = self._get_shared_interactive_css()
 
+        if baseline_result is None:
+            baseline_file = output_path.parent / "topology_partitions_baseline.json"
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, "r", encoding="utf-8") as f:
+                        baseline_result = TopologyResult(**json.load(f))
+                except Exception:
+                    pass
+
         colors = [
             "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
             "#d62728", "#ff9896", "#9467bd", "#c5b0d5", "#8c564b", "#c49c94",
@@ -2798,7 +2816,7 @@ class TopologyVisualizer:
             orig_comm_map = comm_map
             orig_comm_counts = comm_counts
 
-        has_baseline = bool(baseline_result and len(orig_comm_counts) != len(comm_counts))
+        has_baseline = bool(baseline_result is not None)
 
         enriched_nodes = []
         for node in comm_map.keys():
@@ -3894,6 +3912,15 @@ class TopologyVisualizer:
     ):
         agent_name = "leiden_schema_agent"
         
+        if baseline_result is None:
+            baseline_file = vis_dir / "topology_partitions_baseline.json"
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, "r", encoding="utf-8") as f:
+                        baseline_result = TopologyResult(**json.load(f))
+                except Exception:
+                    pass
+
         synth_cfg = self.full_config.get('synthesis', {}) if hasattr(self, 'full_config') and self.full_config else {}
         min_cluster_size = synth_cfg.get('min_cluster_size', 15)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1800)
@@ -4418,6 +4445,15 @@ class TopologyVisualizer:
         cluster_label = "Community"
         css = self._get_shared_interactive_css()
         vis_dir.mkdir(parents=True, exist_ok=True)
+
+        if baseline_result is None:
+            baseline_file = vis_dir / "topology_partitions_baseline.json"
+            if baseline_file.exists():
+                try:
+                    with open(baseline_file, "r", encoding="utf-8") as f:
+                        baseline_result = TopologyResult(**json.load(f))
+                except Exception:
+                    pass
 
         def _build_collapsed_pack(res: TopologyResult):
             clusters = res.communities
