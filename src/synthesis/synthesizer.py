@@ -4,7 +4,7 @@ import subprocess
 import shutil
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import Counter, defaultdict
 
@@ -152,7 +152,7 @@ class SynthesisPipeline:
 
         # Read config options
         schema_pass_mode = self.config.get('synthesis', {}).get('schema_pass_mode', 'both')
-        min_cluster_size = self.config.get('synthesis', {}).get('min_cluster_size', 32)
+        min_cluster_size = self.config.get('synthesis', {}).get('min_cluster_size', 15)
         run_norm = schema_pass_mode in ("both", "normalized")
         run_raw = schema_pass_mode in ("both", "raw")
         print(f"      -> Schema Pass Mode: '{schema_pass_mode}' (Normalized: {run_norm}, Raw: {run_raw})")
@@ -490,7 +490,7 @@ class SynthesisPipeline:
 
             return dict(theme_groups)
 
-        def format_phase2_payload(target_id: Any, target_nodes: List[str], subset: List[dict], mode: str) -> str:
+        def format_phase2_payload(target_id: Any, target_nodes: List[str], subset: List[dict], mode: str, merged_from: Optional[List[Any]] = None) -> str:
             top_terms = extract_top_domain_terms(target_nodes, subset, top_k=top_domain_terms_count)
             observations = extract_thematic_observations(subset, target_nodes, max_sentences=max_sentences_per_target, mode=mode)
 
@@ -507,17 +507,19 @@ class SynthesisPipeline:
                 "top_domain_terms": top_terms,
                 "thematic_observations": observations
             }
+            if merged_from and len(merged_from) > 1:
+                payload_dict["consolidated_sub_communities"] = merged_from
             return json.dumps(payload_dict, indent=2)
 
         if use_async:
             print(f"      -> Executing Phase 2 concurrently with max_async_calls: {max_async}")
             
-            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, target_nodes):
+            async def run_single_pass(subset, is_normalized, i, target_type, target_id, sem, target_nodes, merged_from=None):
                 async with sem:
                     pass_name = "normalized" if is_normalized else "raw"
                     target_dir = norm_dir if is_normalized else raw_dir
                     print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {len(target_nodes)} nodes, {len(subset)} triplets)...")
-                    user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode)
+                    user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode, merged_from=merged_from)
                     active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                     save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                     last_llm_responses.set([])
@@ -552,6 +554,11 @@ class SynthesisPipeline:
                             except Exception as reformat_err:
                                 log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), pass_name, f"{target_type} {target_id}", i)
 
+            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {})
+            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
+            strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+            raw_hubs_norm = {str(h).lower().strip() for h in targets_data.get("global_hubs", [])}
+
             async def run_phase2_async():
                 sem = asyncio.Semaphore(max_async)
                 tasks = []
@@ -560,35 +567,55 @@ class SynthesisPipeline:
                     target_nodes = set(target["nodes"])
                     target_type = target.get("target_type", target.get("type", "spoke"))
                     target_id = target.get("target_id", target.get("id"))
+                    merged_from = target.get("merged_from", [target_id])
                     
                     if run_norm:
                         norm_subset = target.get("triplets", [])
                         if norm_subset:
-                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, target_nodes))
+                            tasks.append(run_single_pass(norm_subset, True, i, target_type, target_id, sem, target_nodes, merged_from=merged_from))
                     
                     if run_raw:
                         raw_subset = list(target.get("triplets", []))
                         if original_triplets:
-                            extra_raw = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                            target_nodes_norm = {str(n).lower().strip() for n in target_nodes}
                             existing_quotes = {tr.get('source_quote') for tr in raw_subset if tr.get('source_quote')}
-                            for extra in extra_raw:
+                            for extra in original_triplets:
+                                s = str(extra.get('subject', '')).lower().strip()
+                                o = str(extra.get('object', '')).lower().strip()
+                                if not s or not o:
+                                    continue
+                                if exclude_hubs and (s in raw_hubs_norm or o in raw_hubs_norm):
+                                    continue
+                                is_s = s in target_nodes_norm
+                                is_o = o in target_nodes_norm
+                                if strictly_intra:
+                                    if not (is_s and is_o):
+                                        continue
+                                else:
+                                    if not (is_s or is_o):
+                                        continue
                                 q = extra.get('source_quote')
                                 if q and q not in existing_quotes:
                                     raw_subset.append(extra)
                                     existing_quotes.add(q)
                         if raw_subset:
-                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, target_nodes))
+                            tasks.append(run_single_pass(raw_subset, False, i, target_type, target_id, sem, target_nodes, merged_from=merged_from))
                 
                 if tasks:
                     await asyncio.gather(*tasks)
 
             asyncio.run(run_phase2_async())
         else:
-            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, target_nodes):
+            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {})
+            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
+            strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+            raw_hubs_norm = {str(h).lower().strip() for h in targets_data.get("global_hubs", [])}
+
+            def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, target_nodes, merged_from=None):
                 pass_name = "normalized" if is_normalized else "raw"
                 target_dir = norm_dir if is_normalized else raw_dir
                 print(f"         -> API call for Target {i}/{len(targets)} ({target_type} {target_id}) - {pass_name} (Size: {len(target_nodes)} nodes, {len(subset)} triplets)...")
-                user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode)
+                user_payload = format_phase2_payload(target_id, list(target_nodes), subset, payload_mode, merged_from=merged_from)
                 active_sys_prompt = synth_prompts.LEIDEN_SCHEMA_SYNTHESIS_PROMPT
                 save_payload_file(f"phase2_target_{i:02d}_{pass_name}_{target_id}_payload.txt", f"=== SYSTEM PROMPT ===\n{active_sys_prompt}\n\n=== USER PAYLOAD ===\n{user_payload}")
                 last_llm_responses.set([])
@@ -627,24 +654,39 @@ class SynthesisPipeline:
                 target_nodes = set(target["nodes"])
                 target_type = target.get("target_type", target.get("type", "spoke"))
                 target_id = target.get("target_id", target.get("id"))
+                merged_from = target.get("merged_from", [target_id])
                 
                 if run_norm:
                     norm_subset = target.get("triplets", [])
                     if norm_subset:
-                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, target_nodes)
+                        run_single_pass_sync(norm_subset, True, i, target_type, target_id, target_nodes, merged_from=merged_from)
                         
                 if run_raw:
                     raw_subset = list(target.get("triplets", []))
                     if original_triplets:
-                        extra_raw = [t for t in original_triplets if str(t.get('subject','')).lower().strip() in target_nodes or str(t.get('object','')).lower().strip() in target_nodes]
+                        target_nodes_norm = {str(n).lower().strip() for n in target_nodes}
                         existing_quotes = {tr.get('source_quote') for tr in raw_subset if tr.get('source_quote')}
-                        for extra in extra_raw:
+                        for extra in original_triplets:
+                            s = str(extra.get('subject', '')).lower().strip()
+                            o = str(extra.get('object', '')).lower().strip()
+                            if not s or not o:
+                                continue
+                            if exclude_hubs and (s in raw_hubs_norm or o in raw_hubs_norm):
+                                continue
+                            is_s = s in target_nodes_norm
+                            is_o = o in target_nodes_norm
+                            if strictly_intra:
+                                if not (is_s and is_o):
+                                    continue
+                            else:
+                                if not (is_s or is_o):
+                                    continue
                             q = extra.get('source_quote')
                             if q and q not in existing_quotes:
                                 raw_subset.append(extra)
                                 existing_quotes.add(q)
                     if raw_subset:
-                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, target_nodes)
+                        run_single_pass_sync(raw_subset, False, i, target_type, target_id, target_nodes, merged_from=merged_from)
 
         # Phase 3: Global Consolidation
         print(f"   -> [{path_label}] Phase 3: Consolidation...")
@@ -745,11 +787,22 @@ class SynthesisPipeline:
                     
             if use_async:
                 try:
-                    master_code = asyncio.run(process_consolidation_async(files_list, schema_dir))
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        master_code = loop.run_until_complete(process_consolidation_async(files_list, schema_dir))
+                    finally:
+                        loop.close()
                     with open(schema_dir / "master_ontology.py", "w") as f:
                         f.write(master_code)
                 except Exception as e:
-                    log_error(f"[Synthesis {path_type}] Error generating master_ontology for {schema_dir.name}: {e}")
+                    print(f"      [Warning] Async consolidation failed ({e}). Falling back to sync...")
+                    try:
+                        master_code = process_consolidation_sync(files_list, schema_dir)
+                        with open(schema_dir / "master_ontology.py", "w") as f:
+                            f.write(master_code)
+                    except Exception as sync_e:
+                        log_error(f"[Synthesis {path_type}] Error generating master_ontology for {schema_dir.name}: {sync_e}")
             else:
                 try:
                     master_code = process_consolidation_sync(files_list, schema_dir)

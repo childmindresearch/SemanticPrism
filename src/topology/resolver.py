@@ -24,7 +24,7 @@ class TargetResolver:
         Returns:
             (targets, all_enum_nodes)
         """
-        min_cluster_size = config.get('synthesis', {}).get('min_cluster_size', 12)
+        min_cluster_size = config.get('synthesis', {}).get('min_cluster_size', 15) if config else 15
         
         # 1. Global hubs are routed directly into Enum synthesis (enums.py)
         raw_hubs = list(topology.get("global_hubs", []))
@@ -51,6 +51,89 @@ class TargetResolver:
                 targets.append({"type": "community", "id": comm.get("community_id"), "nodes": clean_nodes})
 
         targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
+
+        # 3.5 Pre-Synthesis Community Target Agglomeration Safety Check
+        synth_cfg = config.get('synthesis', {}) if config else {}
+        enable_target_agglom = synth_cfg.get('enable_target_agglomeration', True)
+        target_agglom_sim = float(synth_cfg.get('target_agglomeration_similarity', 0.85))
+
+        if enable_target_agglom and len(targets) > 1:
+            all_target_nodes_pool = set()
+            for t in targets:
+                all_target_nodes_pool.update(t.get("nodes", []))
+            ref_cfg = config.get('refinement', {}) if config else {}
+            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_target_nodes_pool), cache_dir=c_dir, model_name=m_name)
+
+            # Check if precomputed centroid diagnostics are available as fallback or fast-path similarity matrix
+            diag_sims = {}
+            if not concept_vecs:
+                diag_file = Path(f"outputs/03_topology/03_paths/{path_type}/cluster_centroid_diagnostics.json")
+                if diag_file.exists():
+                    try:
+                        with open(diag_file, "r", encoding="utf-8") as df:
+                            diag_data = json.load(df)
+                        for c in diag_data.get("communities", []):
+                            cid = c.get("community_id")
+                            for nn in c.get("nearest_neighbors", []):
+                                tid = nn.get("target_community_id")
+                                s_val = float(nn.get("cosine_similarity", 0.0))
+                                diag_sims[(min(cid, tid), max(cid, tid))] = max(diag_sims.get((min(cid, tid), max(cid, tid)), 0.0), s_val)
+                    except Exception:
+                        pass
+
+            merged_targets = list(targets)
+            for m in merged_targets:
+                if "source_ids" not in m:
+                    m["source_ids"] = {m["id"]}
+
+            while True:
+                best_pair = None
+                best_sim = target_agglom_sim
+
+                if concept_vecs:
+                    target_centroids = {}
+                    for idx, t in enumerate(merged_targets):
+                        vecs = [concept_vecs[n.lower().strip()] for n in t.get("nodes", []) if n.lower().strip() in concept_vecs]
+                        if vecs:
+                            c_sum = np.sum(vecs, axis=0)
+                            c_norm = np.linalg.norm(c_sum)
+                            target_centroids[idx] = c_sum / c_norm if c_norm > 0 else c_sum
+
+                    for i in range(len(merged_targets)):
+                        for j in range(i + 1, len(merged_targets)):
+                            if i in target_centroids and j in target_centroids:
+                                sim = float(np.dot(target_centroids[i], target_centroids[j]))
+                                if sim > best_sim:
+                                    best_sim = sim
+                                    best_pair = (i, j, sim)
+                elif diag_sims:
+                    for i in range(len(merged_targets)):
+                        for j in range(i + 1, len(merged_targets)):
+                            s_list = [diag_sims.get((min(a, b), max(a, b)), 0.0) for a in merged_targets[i]["source_ids"] for b in merged_targets[j]["source_ids"]]
+                            if s_list:
+                                sim = sum(s_list) / len(s_list)
+                                if sim > best_sim:
+                                    best_sim = sim
+                                    best_pair = (i, j, sim)
+
+                if not best_pair:
+                    break
+
+                i, j, sim_val = best_pair
+                merged_targets[i]["source_ids"].update(merged_targets[j]["source_ids"])
+                # Directional merge: preserve ID of larger community
+                if len(merged_targets[i]["nodes"]) < len(merged_targets[j]["nodes"]):
+                    merged_targets[i]["id"] = merged_targets[j]["id"]
+                merged_targets[i]["nodes"] = sorted(list(set(merged_targets[i]["nodes"] + merged_targets[j]["nodes"])))
+                merged_targets.pop(j)
+
+            targets = merged_targets
+            for t in targets:
+                if "source_ids" in t:
+                    t["merged_from"] = sorted(list(t.pop("source_ids")))
+            targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
 
         # Invariant: Mutually Disjoint Community and Enum Partitioning (no node exists in both)
         all_target_nodes = set()
@@ -476,8 +559,8 @@ class TargetResolver:
         Also computes and exports geometric-topological architectural tiers.
         """
         output_dir.mkdir(parents=True, exist_ok=True)
-        synth_cfg = config.get('synthesis', {})
-        min_cluster_size = synth_cfg.get('min_cluster_size', 12)
+        synth_cfg = config.get('synthesis', {}) if config else {}
+        min_cluster_size = synth_cfg.get('min_cluster_size', 15)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1800)
         
         # 1. Resolve target qualification & enum nodes
@@ -593,6 +676,7 @@ class TargetResolver:
                 "target_index": i,
                 "target_type": target_type,
                 "target_id": c_id,
+                "merged_from": target.get("merged_from", [c_id]),
                 "output_module_name": output_module_name,
                 "rank_score": rank_score,
                 "nodes_count": len(target_nodes),
@@ -608,6 +692,7 @@ class TargetResolver:
             "path_type": path_type,
             "min_cluster_size": min_cluster_size,
             "max_triplets_per_target": max_triplets_cap,
+            "global_hubs": list(topology.get("global_hubs", [])),
             "enum_nodes_count": len(all_enum_nodes),
             "enum_nodes": all_enum_nodes,
             "targets_count": len(target_payloads),

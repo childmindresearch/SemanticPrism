@@ -155,9 +155,12 @@ class TopologyPipeline:
         
         # Global Hub Pruning Config (Stages 3.1 & 3.2 - Universal Evaluation)
         self.hub_cfg = self.config.get('hub_pruning', {})
-        self.hub_p_thresh = self.hub_cfg.get('participation_threshold', 0.80)
-        self.min_hub_degree = self.hub_cfg.get('min_hub_degree', 40)
-        self.hub_betw_percentile = self.hub_cfg.get('betweenness_percentile', 0.95)
+        self.hub_p_thresh = float(self.hub_cfg.get('participation_threshold', 0.70))
+        self.min_hub_degree = int(self.hub_cfg.get('min_hub_degree', 30))
+        self.enable_dynamic_hub_degree = bool(self.hub_cfg.get('enable_dynamic_hub_degree', True))
+        self.dynamic_hub_percentile = float(self.hub_cfg.get('dynamic_hub_percentile', 0.95))
+        self.min_hub_degree_floor = int(self.hub_cfg.get('min_hub_degree_floor', 15))
+        self.hub_betw_percentile = float(self.hub_cfg.get('betweenness_percentile', 0.95))
         self.min_betweenness_score = float(self.hub_cfg.get('min_betweenness_score', 0.02))
         self.min_vitality_delta = float(self.hub_cfg.get('min_vitality_delta', -0.005))
         self.min_vitality_degree = int(self.hub_cfg.get('min_vitality_degree', 3))
@@ -178,6 +181,8 @@ class TopologyPipeline:
         self.edge_weighting_mode = self.semantic_cfg.get('edge_weighting_mode', 'hybrid')
         self.hybrid_semantic_alpha = float(self.semantic_cfg.get('hybrid_semantic_alpha', 0.35))
         self.min_cosine_floor = float(self.semantic_cfg.get('min_cosine_floor', 0.1))
+        self.enable_guarded_leaf_attachment = bool(self.semantic_cfg.get('enable_guarded_leaf_attachment', True))
+        self.min_leaf_attachment_similarity = float(self.semantic_cfg.get('min_leaf_attachment_similarity', 0.45))
         self.enable_micro_cluster_absorption = self.semantic_cfg.get('enable_micro_cluster_absorption', True)
         self.min_absorption_similarity = float(self.semantic_cfg.get('min_absorption_similarity', 0.28))
         self.absorption_contrast_margin = float(self.semantic_cfg.get('absorption_contrast_margin', 0.05))
@@ -187,8 +192,11 @@ class TopologyPipeline:
         self.singleton_harvesting_threshold = float(self.semantic_cfg.get('singleton_harvesting_threshold', 0.40))
         self.singleton_contrast_margin = float(self.semantic_cfg.get('singleton_contrast_margin', 0.05))
         self.enable_refugee_realignment = self.semantic_cfg.get('enable_refugee_realignment', True)
-        self.refugee_margin_delta = float(self.semantic_cfg.get('refugee_margin_delta', 0.20))
+        self.refugee_margin_delta = float(self.semantic_cfg.get('refugee_margin_delta', 0.06))
         self.require_structural_neighbor = self.semantic_cfg.get('require_structural_neighbor', True)
+        self.enable_community_agglomeration = bool(self.semantic_cfg.get('enable_community_agglomeration', True))
+        self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.85))
+        self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 25))
         self.triplet_payload_mode = self.semantic_cfg.get('triplet_payload_mode', 'strictly_intra_only')
         self.exclude_hub_triplets = self.semantic_cfg.get('exclude_hub_triplets_from_communities', True)
 
@@ -322,7 +330,8 @@ class TopologyPipeline:
                 dg=dg,
                 result=results["community"],
                 refined_triplets=refined_triplets,
-                vis_dir=Path("outputs/03_topology/03_paths/community")
+                vis_dir=Path("outputs/03_topology/03_paths/community"),
+                baseline_result=getattr(self, 'baseline_community_result', None)
             )
 
         # ---------------------------------------------------------------------
@@ -491,6 +500,14 @@ class TopologyPipeline:
 
         min_top_hubs = getattr(self, "top_n_hubs_export", 30) or 30
 
+        # Determine effective minimum hub degree (dynamic scaling if enabled)
+        if self.enable_dynamic_hub_degree and len(dg) > 0:
+            all_degs = [dg.degree(n) for n in dg.nodes()]
+            deg_cutoff = float(np.percentile(all_degs, self.dynamic_hub_percentile * 100))
+            effective_min_hub_deg = max(self.min_hub_degree_floor, min(self.min_hub_degree, int(deg_cutoff)))
+        else:
+            effective_min_hub_deg = self.min_hub_degree
+
         global_hubs = []
         global_hubs_set = set()
         node_candidates = {}
@@ -502,13 +519,13 @@ class TopologyPipeline:
             deg_val = dg.degree(node)
             mv_val = mod_vitality.get(node, 0.0)
 
-            is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= self.min_hub_degree)
+            is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= effective_min_hub_deg)
             is_workflow_chokepoint = (node in top_betweenness_nodes)
             is_boundary_blurring = self.enable_mod_vitality and (node in neg_mod_v_nodes)
 
             reasons = []
             if is_thematic_bridge:
-                reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {self.min_hub_degree})")
+                reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {effective_min_hub_deg})")
             if is_workflow_chokepoint:
                 reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > {self.min_betweenness_score})")
             if is_boundary_blurring:
@@ -559,6 +576,10 @@ class TopologyPipeline:
                 "hub_criteria": {
                     "participation_threshold": self.hub_p_thresh,
                     "min_hub_degree": self.min_hub_degree,
+                    "effective_min_hub_degree": effective_min_hub_deg,
+                    "enable_dynamic_hub_degree": self.enable_dynamic_hub_degree,
+                    "dynamic_hub_percentile": self.dynamic_hub_percentile,
+                    "min_hub_degree_floor": self.min_hub_degree_floor,
                     "betweenness_percentile": self.hub_betw_percentile,
                     "betweenness_min_score": self.min_betweenness_score,
                     "enable_modularity_vitality": self.enable_mod_vitality,
@@ -879,12 +900,55 @@ class TopologyPipeline:
         # Re-attach degree-1 pendant leaves to their unique core neighbor's community
         comm_lookup = {c.community_id: c for c in communities}
         reattached_leaf_count = 0
+        segregated_leaf_count = 0
+
+        leaf_vecs = {}
+        core_centroids = {}
+        if self.enable_guarded_leaf_attachment and attachable_leaves:
+            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            all_leaf_terms = list(attachable_leaves.keys()) + list(attachable_leaves.values())
+            for c in communities:
+                all_leaf_terms.extend(c.nodes)
+            leaf_vecs = TargetResolver._get_or_load_concept_embeddings(all_leaf_terms, cache_dir=c_dir, model_name=m_name)
+            for c in communities:
+                c_vecs = [leaf_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in leaf_vecs]
+                if c_vecs:
+                    c_sum = np.sum(c_vecs, axis=0)
+                    c_norm = np.linalg.norm(c_sum)
+                    core_centroids[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+
         for u, v in attachable_leaves.items():
             if v in comm_map:
                 target_cid = comm_map[v]
-                comm_lookup[target_cid].nodes.append(u)
-                comm_map[u] = target_cid
-                reattached_leaf_count += 1
+                if self.enable_guarded_leaf_attachment:
+                    u_norm = str(u).lower().strip()
+                    v_norm = str(v).lower().strip()
+                    u_vec = leaf_vecs.get(u_norm)
+                    c_centroid = core_centroids.get(target_cid)
+                    v_vec = leaf_vecs.get(v_norm)
+
+                    leaf_sim = 0.0
+                    if u_vec is not None and c_centroid is not None:
+                        leaf_sim = float(np.dot(u_vec, c_centroid))
+                    elif u_vec is not None and v_vec is not None:
+                        leaf_sim = float(np.dot(u_vec, v_vec))
+
+                    if leaf_sim >= self.min_leaf_attachment_similarity:
+                        comm_lookup[target_cid].nodes.append(u)
+                        comm_map[u] = target_cid
+                        reattached_leaf_count += 1
+                    else:
+                        orphans.append(u)
+                        segregated_leaf_count += 1
+                else:
+                    comm_lookup[target_cid].nodes.append(u)
+                    comm_map[u] = target_cid
+                    reattached_leaf_count += 1
+
+        if self.enable_guarded_leaf_attachment and (reattached_leaf_count > 0 or segregated_leaf_count > 0):
+            print(f"      -> Guarded Leaf Attachment: {reattached_leaf_count} leaves attached (tau >= {self.min_leaf_attachment_similarity}), {segregated_leaf_count} noisy leaves segregated to orphans")
 
         # -------------------------------------------------------------
         # Pass 3: Gated Micro-Cluster Absorption with Frozen Centroids
@@ -1149,8 +1213,103 @@ class TopologyPipeline:
                             "delta": round(best_foreign_sim - home_sim, 4)
                         })
 
-            if realigned_count > 0:
-                print(f"      -> Refugee Realignment: {realigned_count} nodes realigned to structurally adjacent centroids (delta > {self.refugee_margin_delta})")
+        # Snapshot Baseline Pre-Agglomeration Communities
+        baseline_communities = [
+            CommunityPartition(community_id=c.community_id, nodes=list(c.nodes))
+            for c in communities
+        ]
+        baseline_result = TopologyResult(
+            global_hubs=list(global_hubs),
+            hub_partitions=hub_partitions,
+            communities=baseline_communities,
+            structural_clusters=[],
+            orphans=list(orphans),
+            node_metrics=node_metrics,
+            theme_inheritance=[]
+        )
+        self.baseline_community_result = baseline_result
+        with open(path_out_dir / "topology_partitions_baseline.json", "w", encoding="utf-8") as f:
+            json.dump(baseline_result.model_dump(), f, indent=2)
+
+        # -------------------------------------------------------------
+        # Pass 5: Semantic Community Agglomeration (Hierarchical Centroid Merging)
+        # -------------------------------------------------------------
+        agglomeration_records = []
+        if self.enable_community_agglomeration and len(communities) > 1:
+            all_active_nodes = set()
+            for c in communities:
+                all_active_nodes.update(c.nodes)
+            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
+
+            for pass_idx in range(self.max_agglomeration_passes):
+                active_comms = [c for c in communities if len(c.nodes) > 0]
+                if len(active_comms) < 2:
+                    break
+
+                cent_map = {}
+                for c in active_comms:
+                    vecs = [concept_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs]
+                    if vecs:
+                        c_sum = np.sum(vecs, axis=0)
+                        c_norm = np.linalg.norm(c_sum)
+                        cent_map[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+
+                best_pair = None
+                best_sim = self.agglomeration_similarity_threshold
+
+                c_ids = list(cent_map.keys())
+                for i_idx in range(len(c_ids)):
+                    for j_idx in range(i_idx + 1, len(c_ids)):
+                        cid_a = c_ids[i_idx]
+                        cid_b = c_ids[j_idx]
+                        sim = float(np.dot(cent_map[cid_a], cent_map[cid_b]))
+                        if sim > best_sim:
+                            best_sim = sim
+                            best_pair = (cid_a, cid_b, sim)
+
+                if not best_pair:
+                    break
+
+                cid_a, cid_b, sim_val = best_pair
+                comm_a = comm_lookup[cid_a]
+                comm_b = comm_lookup[cid_b]
+
+                # Directional merge: smaller community is always absorbed into the larger community
+                if len(comm_a.nodes) < len(comm_b.nodes):
+                    comm_a, comm_b = comm_b, comm_a
+                    cid_a, cid_b = comm_a.community_id, comm_b.community_id
+
+                absorbed_nodes = list(comm_b.nodes)
+                comm_a.nodes.extend(absorbed_nodes)
+                comm_a.nodes = sorted(list(set(comm_a.nodes)))
+                for n in absorbed_nodes:
+                    comm_map[n] = cid_a
+
+                communities = [c for c in communities if c.community_id != cid_b]
+                comm_lookup.pop(cid_b, None)
+
+                agglomeration_records.append({
+                    "pass": pass_idx + 1,
+                    "target_community": cid_a,
+                    "merged_community": cid_b,
+                    "nodes_merged": len(absorbed_nodes),
+                    "centroid_similarity": round(sim_val, 4)
+                })
+
+            if agglomeration_records:
+                print(f"      -> Community Agglomeration: {len(agglomeration_records)} community merges completed (tau >= {self.agglomeration_similarity_threshold})")
+
+            with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
+                json.dump({
+                    "enabled": self.enable_community_agglomeration,
+                    "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
+                    "max_agglomeration_passes": self.max_agglomeration_passes,
+                    "total_merges": len(agglomeration_records),
+                    "merges": agglomeration_records
+                }, f, indent=2)
 
         # -------------------------------------------------------------
         # Re-index & Normalize Communities by Size Descending

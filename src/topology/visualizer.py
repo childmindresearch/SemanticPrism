@@ -2705,13 +2705,103 @@ class TopologyVisualizer:
         with open(output_path, "w") as f:
             f.write(html)
 
-    def _generate_stage_3_3_community_visuals(self, dg: nx.DiGraph, result: TopologyResult, refined_triplets: List[dict], vis_dir: Path):
+    def _generate_stage_3_3_community_visuals(
+        self,
+        dg: nx.DiGraph,
+        result: TopologyResult,
+        refined_triplets: List[dict],
+        vis_dir: Path,
+        baseline_result: Optional[TopologyResult] = None
+    ):
         vis_dir.mkdir(parents=True, exist_ok=True)
-        self._generate_isolated_communities_graph(dg, result, vis_dir / "isolated_communities_only.html")
-        self._generate_collapsed_modules_graph(dg, result, vis_dir, "Path 1: Community Workflow Path", "community")
-        self._generate_llm_payload_gallery(dg, result, refined_triplets, vis_dir, "Path 1: Community Workflow Path", "community")
+        import shutil
 
-    def _generate_isolated_communities_graph(self, dg: nx.DiGraph, result: TopologyResult, output_path: Path):
+        if baseline_result:
+            # 1. Baseline Suite (Pre-Agglomeration Granular Communities)
+            self._generate_isolated_communities_graph(
+                dg=dg,
+                result=baseline_result,
+                output_path=vis_dir / "isolated_communities_baseline.html",
+                switch_target="isolated_communities_only.html",
+                switch_label="✨ View Agglomerated Macro-Domains",
+                view_badge="Baseline Sub-Communities"
+            )
+            self._generate_collapsed_modules_graph(
+                dg=dg,
+                result=baseline_result,
+                vis_dir=vis_dir,
+                path_label="Path 1: Baseline Sub-Communities",
+                path_type="community",
+                output_filename="collapsed_modules_baseline.html",
+                switch_target="collapsed_module_architecture.html",
+                switch_label="✨ View Agglomerated Modules",
+                view_badge="Baseline Modules"
+            )
+            self._generate_llm_payload_gallery(
+                dg=dg,
+                result=baseline_result,
+                refined_triplets=refined_triplets,
+                vis_dir=vis_dir,
+                path_label="Baseline Sub-Communities",
+                path_type="community",
+                output_filename="stage_04_llm_payload_gallery_baseline.html",
+                switch_target="stage_04_llm_payload_gallery.html",
+                switch_label="✨ View Agglomerated Payloads",
+                view_badge="Baseline Payloads"
+            )
+
+            # 2. Agglomerated Suite (Post-Agglomeration Consolidated Macro-Domains)
+            self._generate_isolated_communities_graph(
+                dg=dg,
+                result=result,
+                output_path=vis_dir / "isolated_communities_only.html",
+                switch_target="isolated_communities_baseline.html",
+                switch_label="🔍 View Baseline Sub-Communities",
+                view_badge="Agglomerated Macro-Domains",
+                baseline_result=baseline_result
+            )
+            shutil.copyfile(vis_dir / "isolated_communities_only.html", vis_dir / "isolated_communities_agglomerated.html")
+
+            self._generate_collapsed_modules_graph(
+                dg=dg,
+                result=result,
+                vis_dir=vis_dir,
+                path_label="Path 1: Agglomerated Macro-Domains",
+                path_type="community",
+                output_filename="collapsed_module_architecture.html",
+                switch_target="collapsed_modules_baseline.html",
+                switch_label="🔍 View Baseline Modules",
+                view_badge="Agglomerated Macro-Domains"
+            )
+            shutil.copyfile(vis_dir / "collapsed_module_architecture.html", vis_dir / "collapsed_modules_agglomerated.html")
+
+            self._generate_llm_payload_gallery(
+                dg=dg,
+                result=result,
+                refined_triplets=refined_triplets,
+                vis_dir=vis_dir,
+                path_label="Agglomerated Macro-Domains",
+                path_type="community",
+                output_filename="stage_04_llm_payload_gallery.html",
+                switch_target="stage_04_llm_payload_gallery_baseline.html",
+                switch_label="🔍 View Baseline Payloads",
+                view_badge="Agglomerated Payloads"
+            )
+        else:
+            self._generate_isolated_communities_graph(dg, result, vis_dir / "isolated_communities_only.html")
+            self._generate_collapsed_modules_graph(dg, result, vis_dir, "Path 1: Community Workflow Path", "community")
+            self._generate_llm_payload_gallery(dg, result, refined_triplets, vis_dir, "Path 1: Community Workflow Path", "community")
+
+    def _generate_isolated_communities_graph(
+        self,
+        dg: nx.DiGraph,
+        result: TopologyResult,
+        output_path: Path,
+        switch_target: Optional[str] = None,
+        switch_label: Optional[str] = None,
+        view_badge: Optional[str] = None,
+        baseline_result: Optional[TopologyResult] = None
+    ):
         output_path.parent.mkdir(parents=True, exist_ok=True)
         css = self._get_shared_interactive_css()
 
@@ -2728,6 +2818,12 @@ class TopologyVisualizer:
                 comm_map[n] = comm.community_id
                 comm_counts[comm.community_id] = comm_counts.get(comm.community_id, 0) + 1
 
+        orig_comm_map = {}
+        if baseline_result:
+            for comm in baseline_result.communities:
+                for n in comm.nodes:
+                    orig_comm_map[n] = comm.community_id
+
         enriched_nodes = []
         for node in comm_map.keys():
             if node in dg:
@@ -2735,13 +2831,24 @@ class TopologyVisualizer:
                 color = colors[comm_id % len(colors)]
                 deg = dg.degree(node)
 
-                role_desc = f"Community #{comm_id} Member — Intra-community degree: {deg}"
-                tooltip = (
-                    f"<b>{html.escape(str(node))}</b><br>"
-                    f"Partition: Community #{comm_id}<br>"
-                    f"Intra-Community Degree: {deg}<br>"
-                    f"Status: 100% Isolated (Hubs Pruned)"
-                )
+                orig_id = orig_comm_map.get(node)
+                if orig_id is not None and orig_id != comm_id:
+                    role_desc = f"Macro-Domain #{comm_id} (Merged from Comm #{orig_id}) — Intra-domain degree: {deg}"
+                    tooltip = (
+                        f"<b>{html.escape(str(node))}</b><br>"
+                        f"Partition: Macro-Domain #{comm_id}<br>"
+                        f"Source: Merged from Community #{orig_id}<br>"
+                        f"Intra-Domain Degree: {deg}<br>"
+                        f"Status: 100% Isolated (Hubs Pruned)"
+                    )
+                else:
+                    role_desc = f"Community #{comm_id} Member — Intra-community degree: {deg}"
+                    tooltip = (
+                        f"<b>{html.escape(str(node))}</b><br>"
+                        f"Partition: Community #{comm_id}<br>"
+                        f"Intra-Community Degree: {deg}<br>"
+                        f"Status: 100% Isolated (Hubs Pruned)"
+                    )
 
                 enriched_nodes.append({
                     "id": str(node),
@@ -2780,7 +2887,11 @@ class TopologyVisualizer:
 
         comm_options_html = f'<option value="all">All Communities ({num_communities})</option>'
         for c_id in sorted(comm_counts.keys()):
-            comm_options_html += f'<option value="{c_id}">Community #{c_id} ({comm_counts[c_id]} entities)</option>'
+            label_prefix = "Macro-Domain" if baseline_result else "Community"
+            comm_options_html += f'<option value="{c_id}">{label_prefix} #{c_id} ({comm_counts[c_id]} entities)</option>'
+
+        badge_html = f'<span class="stat-badge" style="background:#2563eb; color:white; font-weight:700;">{view_badge}</span>' if view_badge else ''
+        switch_btn_html = f'<a href="{switch_target}" class="btn btn-primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:6px 12px; background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px;">{switch_label}</a>' if switch_target and switch_label else ''
 
         html_out = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2800,14 +2911,16 @@ class TopologyVisualizer:
                 <h1>Stage 3.3: Path 1 (Community Workflow) — Isolated Communities Topology</h1>
                 <div class="header-sub">
                     <span>Intra-Community Cohesion: De-noised Thematic Neighborhoods (Hubs & Inter-Links Severed)</span>
+                    {badge_html}
                     <span class="stat-badge">Partitioned Entities: {total_nodes}</span>
-                    <span class="stat-badge stat-badge-blue">Isolated Communities: {num_communities}</span>
+                    <span class="stat-badge stat-badge-blue">Communities: {num_communities}</span>
                     <span class="stat-badge stat-badge-success">Intra-Community Edges: {total_edges}</span>
                     <span class="stat-badge stat-badge-danger">Hubs Stripped: {hubs_stripped} (100% Decoupled)</span>
                 </div>
             </div>
         </div>
         <div class="header-actions">
+            {switch_btn_html}
             <div class="search-box">
                 <input type="text" class="search-input" id="nodeSearch" placeholder="Search entity in community..." onkeydown="if(event.key==='Enter') searchNode(this.value)">
             </div>
@@ -3682,11 +3795,23 @@ class TopologyVisualizer:
         top_bigrams = [{"term": term, "count": count} for term, count in bigram_counts.most_common(top_n)]
         return top_unigrams, top_bigrams
 
-    def _generate_llm_payload_gallery(self, dg: nx.DiGraph, result: TopologyResult, refined_triplets: List[dict], vis_dir: Path, path_label: str, path_type: str = "community"):
+    def _generate_llm_payload_gallery(
+        self,
+        dg: nx.DiGraph,
+        result: TopologyResult,
+        refined_triplets: List[dict],
+        vis_dir: Path,
+        path_label: str,
+        path_type: str = "community",
+        output_filename: str = "stage_04_llm_payload_gallery.html",
+        switch_target: Optional[str] = None,
+        switch_label: Optional[str] = None,
+        view_badge: Optional[str] = None
+    ):
         agent_name = "leiden_schema_agent"
         
-        synth_cfg = self.full_config.get('synthesis', {})
-        min_cluster_size = synth_cfg.get('min_cluster_size', 12)
+        synth_cfg = self.full_config.get('synthesis', {}) if hasattr(self, 'full_config') and self.full_config else {}
+        min_cluster_size = synth_cfg.get('min_cluster_size', 15)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1800)
         
         # Resolve targets via TargetResolver (resolver.py)
@@ -3789,6 +3914,9 @@ class TopologyVisualizer:
             
         payload_json = json.dumps(payload_data)
         hubs_json = json.dumps(result.global_hubs)
+
+        badge_html = f'<span style="padding:4px 10px; background:#2563eb; color:white; border-radius:4px; font-size:12px; font-weight:700; margin-left:8px;">{view_badge}</span>' if view_badge else ''
+        switch_btn_html = f'<a href="{switch_target}" style="text-decoration:none; padding:8px 16px; background:#1e3a5f; color:#38bdf8; border:1px solid #38bdf8; border-radius:6px; font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:6px;">{switch_label}</a>' if switch_target and switch_label else ''
         
         html_content = f"""<!DOCTYPE html>
 <html>
@@ -3834,10 +3962,15 @@ class TopologyVisualizer:
     </style>
 </head>
 <body>
-    <h1>[{path_label}] Stage 4 LLM Payload Gallery</h1>
-    <div class="subtitle">
-        Visualizing data sent to LLM for Stage 4 Pydantic schema synthesis.
-        Current Configuration: <code>min_cluster_size: {min_cluster_size}</code> | <code>max_triplets_per_target: {max_triplets_cap}</code>.
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+        <div>
+            <h1 style="display:flex; align-items:center; gap:8px;">[{path_label}] Stage 4 LLM Payload Gallery {badge_html}</h1>
+            <div class="subtitle">
+                Visualizing data sent to LLM for Stage 4 Pydantic schema synthesis.
+                Current Configuration: <code>min_cluster_size: {min_cluster_size}</code> | <code>max_triplets_per_target: {max_triplets_cap}</code>.
+            </div>
+        </div>
+        {switch_btn_html}
     </div>
     
     <div class="container">
@@ -4128,10 +4261,21 @@ class TopologyVisualizer:
     </script>
 </body>
 </html>"""
-        with open(vis_dir / "stage_04_llm_payload_gallery.html", "w") as f:
+        with open(vis_dir / output_filename, "w", encoding="utf-8") as f:
             f.write(html_content)
 
-    def _generate_collapsed_modules_graph(self, dg: nx.DiGraph, result: TopologyResult, vis_dir: Path, path_label: str = "Path 1: Community Workflow Path", path_type: str = "community"):
+    def _generate_collapsed_modules_graph(
+        self,
+        dg: nx.DiGraph,
+        result: TopologyResult,
+        vis_dir: Path,
+        path_label: str = "Path 1: Community Workflow Path",
+        path_type: str = "community",
+        output_filename: str = "collapsed_module_architecture.html",
+        switch_target: Optional[str] = None,
+        switch_label: Optional[str] = None,
+        view_badge: Optional[str] = None
+    ):
         clusters = result.communities
         cluster_label = "Community"
         css = self._get_shared_interactive_css()
@@ -4210,6 +4354,9 @@ class TopologyVisualizer:
         nodes_json = json.dumps(enriched_nodes)
         edges_json = json.dumps(enriched_edges)
 
+        badge_html = f'<span class="stat-badge" style="background:#2563eb; color:white; font-weight:700;">{view_badge}</span>' if view_badge else ''
+        switch_btn_html = f'<a href="{switch_target}" class="btn btn-primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:6px 12px; background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px;">{switch_label}</a>' if switch_target and switch_label else ''
+
         html_out = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -4228,6 +4375,7 @@ class TopologyVisualizer:
                 <h1>Stage 3.3: Macro Architecture — Collapsed Module Architecture Diagram</h1>
                 <div class="header-sub">
                     <span>Executive Modular Decomposition: High-Level Partition Blocks & Global Hub Routers</span>
+                    {badge_html}
                     <span class="stat-badge">Path: {path_label}</span>
                     <span class="stat-badge stat-badge-blue">Modules (■): {modules_count}</span>
                     <span class="stat-badge stat-badge-danger">Global Hubs (★): {hubs_count}</span>
@@ -4236,6 +4384,7 @@ class TopologyVisualizer:
             </div>
         </div>
         <div class="header-actions">
+            {switch_btn_html}
             <div class="search-box">
                 <input type="text" class="search-input" id="nodeSearch" placeholder="Search module or hub..." onkeydown="if(event.key==='Enter') searchNode(this.value)">
             </div>
@@ -4477,6 +4626,6 @@ class TopologyVisualizer:
 </body>
 </html>"""
 
-        with open(vis_dir / "collapsed_module_architecture.html", "w", encoding="utf-8") as f:
+        with open(vis_dir / output_filename, "w", encoding="utf-8") as f:
             f.write(html_out)
 

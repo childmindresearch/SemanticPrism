@@ -29,11 +29,17 @@ topology:
     # Value range: 0.0 to 1.0 (Measures how evenly a concept bridges different themes).
     # - Increase (e.g. 0.8): Extract FEWER hubs (only concepts spanning many themes evenly).
     # - Decrease (e.g. 0.5): Extract MORE hubs (includes moderately connected concepts).
-    participation_threshold: 0.80
+    participation_threshold: 0.70
 
     # Minimum total node degree required to qualify as a global hub.
     # Prevents low-degree peripheral concepts from being classified as structural hubs.
-    min_hub_degree: 40
+    min_hub_degree: 30
+
+    # Dynamic Degree Floor: Dynamically scales min_hub_degree based on the graph's degree distribution.
+    # When enabled, calculates the percentile degree floor and clamps between min_hub_degree_floor and min_hub_degree.
+    enable_dynamic_hub_degree: true
+    dynamic_hub_percentile: 0.95           # Degree percentile cutoff (e.g. 0.95 = top 5% degree in graph)
+    min_hub_degree_floor: 15               # Absolute minimum degree floor to qualify as a global hub
 
     # Shortest-path betweenness percentile cutoff for extracting workflow chokepoints.
     # Value range: 0.0 to 1.0 (e.g. 0.95 extracts concepts in top 1 - 0.95 = 5% betweenness).
@@ -68,28 +74,37 @@ topology:
     hybrid_semantic_alpha: 0.35            # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
     min_cosine_floor: 0.1                  # Minimum floor for cosine similarity in hybrid edge weighting (mod = max(floor, cos_sim))
     
-    # 3. Centroid-Driven Micro-Cluster Absorption
+    # 3. Guarded Pendant Leaf Attachment (Pass 2 Noise Defense)
+    enable_guarded_leaf_attachment: true   # Filter degree-1 pendant leaves before attaching to core communities
+    min_leaf_attachment_similarity: 0.45   # Minimum cosine similarity to community centroid to reattach a degree-1 leaf
+    
+    # 4. Centroid-Driven Micro-Cluster Absorption
     enable_micro_cluster_absorption: true
     min_absorption_similarity: 0.28        # Guardrail tau_min: Only absorb if cosine similarity to nearest centroid >= 0.28
     absorption_contrast_margin: 0.05       # Contrast margin: sim(best) - sim(second) >= 0.05 (Enhancement 1)
     absorption_size_threshold: 12          # Communities with fewer nodes than this threshold are candidates for absorption
     freeze_centroids_pre_absorption: true  # Prevent centroid drift during absorption
     
-    # 4. Semantic Singleton Harvesting (Enhancement 2: High-Affinity Orphan Recovery)
+    # 5. Semantic Singleton Harvesting (Enhancement 2: High-Affinity Orphan Recovery)
     enable_singleton_harvesting: true      # High-confidence scan of unattached singletons/dyads
     singleton_harvesting_threshold: 0.40   # Strict high-confidence threshold (tau_harvest >= 0.40)
     singleton_contrast_margin: 0.05        # Contrast margin over second-best community (delta >= 0.05)
     
-    # 5. Guarded Semantic Refugee Realignment
+    # 6. Guarded Semantic Refugee Realignment
     enable_refugee_realignment: true
-    refugee_margin_delta: 0.20             # sim(foreign) - sim(home) must exceed 0.20 to trigger reassignment
+    refugee_margin_delta: 0.06             # sim(foreign) - sim(home) must exceed 0.06 to trigger reassignment (lowered from 0.20)
     require_structural_neighbor: true      # Must have at least 1 graph edge to candidate foreign community
     
-    # 6. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
+    # 7. Hierarchical Community Agglomeration (Cross-Community Consolidation)
+    enable_community_agglomeration: true   # Merges communities with high centroid similarity before finalization
+    agglomeration_similarity_threshold: 0.85 # Merge communities if centroid cosine similarity >= 0.85
+    max_agglomeration_passes: 25           # Maximum iterative merging rounds (safety ceiling until convergence)
+    
+    # 8. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
     triplet_payload_mode: "strictly_intra_only" # Strictly pure intra-community triplets only (subj in C AND obj in C)
     exclude_hub_triplets_from_communities: true # Any triplet containing a global hub is completely excluded
     
-    # 7. Multi-Tier Confidence Thresholds
+    # 9. Multi-Tier Confidence Thresholds
     confidence_thresholds:
       high: 0.40                           # Core Invariant (Eligible for root BaseModel)
       medium: 0.25                         # Relational Mechanic (Sub-model / Typed field)
