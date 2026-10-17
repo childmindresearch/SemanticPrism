@@ -3,18 +3,92 @@ SemanticPrism Stage 1: Extraction Schemas
 This module contains strictly Pydantic data models used to enforce structured JSON output from Pydantic AI Agents.
 """
 
-from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import List, Optional, Any
 
 class Theme(BaseModel):
     """Represents an isolated, high-level structural theme."""
     title: str = Field(description="The formal title of the extracted theme.")
-    description: str = Field(description="A brief description of the theme.")
-    reasoning: str = Field(description="Reasoning for classifying this as a critical theme.")
+    description: Optional[str] = Field(default="", description="A brief description of the theme.")
+    reasoning: Optional[str] = Field(default="", description="Reasoning for classifying this as a critical theme.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def remap_and_clean(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"title": data.strip(), "description": "", "reasoning": ""}
+        if isinstance(data, dict):
+            title = data.get("title") or data.get("name") or data.get("theme") or data.get("theme_title") or ""
+            desc = data.get("description") or data.get("desc") or data.get("summary") or data.get("scope") or ""
+            reason = data.get("reasoning") or data.get("rationale") or data.get("justification") or data.get("reason") or ""
+            return {
+                "title": str(title).strip(),
+                "description": str(desc).strip(),
+                "reasoning": str(reason).strip()
+            }
+        return data
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, v: str) -> str:
+        if not v or len(v.strip()) == 0:
+            raise ValueError("Theme title cannot be empty")
+        return v.strip()
+
 
 class ThemeDiscoveryResult(BaseModel):
     """The aggregate output of the Theme Discovery phase."""
-    themes: List[Theme] = Field(description="List of themes discovered in the text.")
+    themes: List[Theme] = Field(default_factory=list, description="List of themes discovered in the text.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_raw_payloads(cls, data: Any) -> Any:
+        if isinstance(data, list):
+            return {"themes": data}
+        if isinstance(data, dict):
+            if "themes" not in data:
+                for alt_key in ["discovered_themes", "theme_list", "raw_themes", "categories", "items", "results"]:
+                    if alt_key in data and isinstance(data[alt_key], list):
+                        data["themes"] = data[alt_key]
+                        break
+        return data
+
+    @field_validator("themes", mode="before")
+    @classmethod
+    def filter_and_salvage_themes(cls, v: Any) -> List[Any]:
+        if not isinstance(v, list):
+            return []
+        valid_themes = []
+        for item in v:
+            try:
+                if isinstance(item, str) and item.strip():
+                    valid_themes.append(Theme(title=item.strip()))
+                elif isinstance(item, dict):
+                    valid_themes.append(Theme.model_validate(item))
+                elif isinstance(item, Theme):
+                    valid_themes.append(item)
+            except Exception:
+                pass
+        return valid_themes
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "themes": [
+                    {
+                        "title": "Historical Philosophical Traditions",
+                        "description": "Systemic analysis of classical thinkers and theoretical lineages.",
+                        "reasoning": "Serves as the foundational intellectual framework across the text."
+                    },
+                    {
+                        "title": "Epistemological Methodology",
+                        "description": "Principles and criteria used to assess knowledge, truth, and logic.",
+                        "reasoning": "Underpins the analytical arguments made throughout the discourse."
+                    }
+                ]
+            }
+        }
+    }
 
 class ClusterCandidateSynthesis(BaseModel):
     """Intermediate candidate synthesis for an individual cluster produced during the Map phase."""

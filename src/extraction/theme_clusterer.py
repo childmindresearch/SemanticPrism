@@ -288,16 +288,58 @@ class ThemeClusteringEngine:
         N = len(raw_themes)
         partitions = {}
 
+        if N == 0:
+            return {
+                "dynamic_leiden": {"name": "Dynamic Leiden (0 Themes)", "description": "Empty corpus", "cluster_count": 0, "assignments": [], "clusters": {}},
+                "fixed_ward": {"name": "Fixed Ward (0 Themes)", "description": "Empty corpus", "cluster_count": 0, "assignments": [], "clusters": {}}
+            }
+
+        def _get_conf(sim_score: float) -> str:
+            if sim_score >= self.high_thresh:
+                return "high"
+            elif sim_score >= self.med_thresh:
+                return "medium"
+            elif sim_score >= self.low_thresh:
+                return "low"
+            return "unassigned"
+
+        if N == 1:
+            single_dict = {0: [0]}
+            leiden_meta = self._build_cluster_metadata(single_dict, raw_themes, embeddings, label_prefix="Domain")
+            ward_meta = self._build_cluster_metadata(single_dict, raw_themes, embeddings, label_prefix="Theme Group")
+            t_assign = [{
+                "cluster_id": 0,
+                "cluster_label": leiden_meta[0]["label"],
+                "similarity": 1.0,
+                "confidence": "high"
+            }]
+            partitions["dynamic_leiden"] = {
+                "name": "Dynamic Topological Leiden (1 Domain)",
+                "description": "Single theme corpus.",
+                "cluster_count": 1,
+                "assignments": t_assign,
+                "clusters": leiden_meta
+            }
+            partitions["fixed_ward"] = {
+                "name": "Fixed Variance-Minimized (Ward K=1)",
+                "description": "Single theme corpus.",
+                "cluster_count": 1,
+                "assignments": t_assign,
+                "clusters": ward_meta
+            }
+            return partitions
+
         # -------------------------------------------------------------
         # Partition 1 (PRIMARY): Adaptive Mutual kNN Graph + Leiden
         # -------------------------------------------------------------
         print("-> Computing Partition 1 (PRIMARY): Dynamic Topological (Adaptive kNN + Leiden)...")
         
-        # Self-calibrating neighborhood size k based on corpus volume
+        # Self-calibrating neighborhood size k based on corpus volume, dynamically bounded by sample size N
         k_neighbors = int(np.clip(round(2.0 * math.log2(max(10, N))), 8, 30))
-        print(f"   -> Calibrated adaptive k-NN neighborhood size: k={k_neighbors} neighbors")
+        k_eff = max(1, min(k_neighbors, N))
+        print(f"   -> Calibrated adaptive k-NN neighborhood size: k={k_eff} (target={k_neighbors}, N={N})")
 
-        nn = NearestNeighbors(n_neighbors=k_neighbors, metric="cosine").fit(embeddings)
+        nn = NearestNeighbors(n_neighbors=k_eff, metric="cosine").fit(embeddings)
         distances, indices = nn.kneighbors(embeddings)
 
         # Build sparse semantic manifold graph
@@ -313,14 +355,27 @@ class ThemeClusteringEngine:
                     G.add_edge(i, int(j_idx), weight=sim)
 
         print(f"   -> Constructed Semantic Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-        comms_result = algorithms.leiden(G, weights="weight")
-        raw_communities = comms_result.communities
-        print(f"   -> Leiden detected {len(raw_communities)} raw communities.")
+        raw_communities = []
+        if G.number_of_edges() > 0:
+            try:
+                comms_result = algorithms.leiden(G, weights="weight")
+                raw_communities = comms_result.communities
+                print(f"   -> Leiden detected {len(raw_communities)} raw communities.")
+            except Exception as e:
+                print(f"   [Warning] Leiden community detection failed ({e}), falling back to connected components.")
+                raw_communities = [list(c) for c in nx.connected_components(G)]
+        else:
+            print("   -> Sparse graph with 0 threshold-passing edges; treating each theme as its own community.")
+            raw_communities = [[i] for i in range(N)]
 
         # Micro-cluster absorption: Any community < 1% of N is merged into its nearest dominant centroid
-        min_cluster_size = max(5, int(N * 0.01))
+        min_cluster_size = max(1, min(5, int(N * 0.01))) if N >= 50 else 1
         major_raw_clusters = [list(c) for c in raw_communities if len(c) >= min_cluster_size]
         minor_raw_clusters = [list(c) for c in raw_communities if len(c) < min_cluster_size]
+
+        if not major_raw_clusters:
+            major_raw_clusters = [list(c) for c in raw_communities]
+            minor_raw_clusters = []
 
         major_raw_clusters.sort(key=len, reverse=True)
         print(f"   -> Major communities: {len(major_raw_clusters)} (sizes: {[len(c) for c in major_raw_clusters]})")
@@ -337,29 +392,20 @@ class ThemeClusteringEngine:
         # Absorb minor clusters into nearest major centroid
         final_leiden_dict = {i: list(c) for i, c in enumerate(major_raw_clusters)}
         absorbed_count = 0
-        for minor in minor_raw_clusters:
-            for node_idx in minor:
-                node_vec = embeddings[node_idx]
-                best_major_idx = int(np.argmax(np.dot(major_centroids, node_vec)))
-                final_leiden_dict[best_major_idx].append(node_idx)
-                absorbed_count += 1
+        if len(major_centroids) > 0 and minor_raw_clusters:
+            for minor in minor_raw_clusters:
+                for node_idx in minor:
+                    node_vec = embeddings[node_idx]
+                    best_major_idx = int(np.argmax(np.dot(major_centroids, node_vec)))
+                    final_leiden_dict[best_major_idx].append(node_idx)
+                    absorbed_count += 1
 
         if absorbed_count > 0:
             print(f"   -> Absorbed {absorbed_count} peripheral outlier themes into nearest dominant centroids.")
 
         leiden_meta = self._build_cluster_metadata(final_leiden_dict, raw_themes, embeddings, label_prefix="Domain")
 
-        # Theme level assignments
-        def _get_conf(sim_score: float) -> str:
-            if sim_score >= self.high_thresh:
-                return "high"
-            elif sim_score >= self.med_thresh:
-                return "medium"
-            elif sim_score >= self.low_thresh:
-                return "low"
-            return "unassigned"
-
-        leiden_theme_assignments = [{}] * N
+        leiden_theme_assignments = [{} for _ in range(N)]
         for c_id, c_data in leiden_meta.items():
             for t_item in c_data["all_themes"]:
                 idx = t_item["theme_id"]
@@ -381,21 +427,25 @@ class ThemeClusteringEngine:
         # -------------------------------------------------------------
         # Partition 2 (FIXED): Ward's Minimum-Variance Hierarchical
         # -------------------------------------------------------------
-        print(f"-> Computing Partition 2 (FIXED): Ward Hierarchical Clustering (Fixed K={self.fixed_k})...")
-        ward = AgglomerativeClustering(n_clusters=self.fixed_k, linkage="ward")
-        ward_labels = ward.fit_predict(embeddings)
+        effective_fixed_k = max(1, min(self.fixed_k, N))
+        print(f"-> Computing Partition 2 (FIXED): Ward Hierarchical Clustering (Fixed K={effective_fixed_k}, configured={self.fixed_k})...")
+        if effective_fixed_k == 1:
+            sorted_ward_dict = {0: list(range(N))}
+        else:
+            ward = AgglomerativeClustering(n_clusters=effective_fixed_k, linkage="ward")
+            ward_labels = ward.fit_predict(embeddings)
 
-        ward_clusters = defaultdict(list)
-        for i, lbl in enumerate(ward_labels):
-            ward_clusters[int(lbl)].append(i)
+            ward_clusters = defaultdict(list)
+            for i, lbl in enumerate(ward_labels):
+                ward_clusters[int(lbl)].append(i)
 
-        # Sort clusters by size descending for clean numbering
-        sorted_ward_tuples = sorted(ward_clusters.items(), key=lambda x: len(x[1]), reverse=True)
-        sorted_ward_dict = {i: nodes for i, (_, nodes) in enumerate(sorted_ward_tuples)}
+            # Sort clusters by size descending for clean numbering
+            sorted_ward_tuples = sorted(ward_clusters.items(), key=lambda x: len(x[1]), reverse=True)
+            sorted_ward_dict = {i: nodes for i, (_, nodes) in enumerate(sorted_ward_tuples)}
 
         ward_meta = self._build_cluster_metadata(sorted_ward_dict, raw_themes, embeddings, label_prefix="Theme Group")
         
-        ward_theme_assignments = [{}] * N
+        ward_theme_assignments = [{} for _ in range(N)]
         for c_id, c_data in ward_meta.items():
             for t_item in c_data["all_themes"]:
                 idx = t_item["theme_id"]
@@ -407,8 +457,8 @@ class ThemeClusteringEngine:
                 }
 
         partitions["fixed_ward"] = {
-            "name": f"Fixed Variance-Minimized (Ward K={self.fixed_k})",
-            "description": f"Strict variance-minimizing partition into {self.fixed_k} balanced semantic categories.",
+            "name": f"Fixed Variance-Minimized (Ward K={effective_fixed_k})",
+            "description": f"Strict variance-minimizing partition into {effective_fixed_k} balanced semantic categories.",
             "cluster_count": len(sorted_ward_dict),
             "assignments": ward_theme_assignments,
             "clusters": ward_meta
@@ -470,22 +520,45 @@ class ThemeClusteringEngine:
 
     def compute_3d_projections(self, embeddings: np.ndarray) -> Dict[str, np.ndarray]:
         print("-> Computing 3D Dimensionality Reductions...")
+        N = len(embeddings)
+        if N == 0:
+            return {"umap": np.zeros((0, 3)), "pca": np.zeros((0, 3))}
 
-        print("   -> Running UMAP-3D (cosine metric, n_neighbors=15, min_dist=0.1)...")
-        reducer_umap = umap.UMAP(
-            n_components=3,
-            metric="cosine",
-            n_neighbors=15,
-            min_dist=0.1,
-            random_state=42
-        )
-        u_coords = reducer_umap.fit_transform(embeddings)
-
+        # PCA-3D with defensive dimensional bounds
         print("   -> Running PCA-3D...")
-        reducer_pca = PCA(n_components=3, random_state=42)
-        p_coords = reducer_pca.fit_transform(embeddings)
+        n_comp_pca = min(3, N)
+        if n_comp_pca >= 1:
+            reducer_pca = PCA(n_components=n_comp_pca, random_state=42)
+            p_raw = reducer_pca.fit_transform(embeddings)
+            p_coords = np.zeros((N, 3))
+            p_coords[:, :n_comp_pca] = p_raw
+        else:
+            p_coords = np.zeros((N, 3))
+
+        # UMAP-3D with defensive bounds (requires N >= 5 for robust spectral initialization)
+        u_coords = None
+        if N >= 5:
+            try:
+                umap_neighbors = max(2, min(15, N - 1))
+                print(f"   -> Running UMAP-3D (cosine metric, n_neighbors={umap_neighbors}, min_dist=0.1)...")
+                reducer_umap = umap.UMAP(
+                    n_components=3,
+                    metric="cosine",
+                    n_neighbors=umap_neighbors,
+                    min_dist=0.1,
+                    random_state=42
+                )
+                u_coords = reducer_umap.fit_transform(embeddings)
+            except Exception as e:
+                print(f"   [Warning] UMAP-3D projection failed ({e}), falling back to PCA-3D coordinates.")
+                u_coords = p_coords.copy()
+        else:
+            print("   -> Skipping UMAP-3D for small sample size (N < 5), using PCA-3D coordinates.")
+            u_coords = p_coords.copy()
 
         def normalize_coords(c: np.ndarray, span: float = 300.0) -> np.ndarray:
+            if len(c) == 0:
+                return c
             c_min = c.min(axis=0)
             c_max = c.max(axis=0)
             denom = np.where((c_max - c_min) == 0, 1.0, (c_max - c_min))
@@ -1703,7 +1776,7 @@ class ThemeClusteringEngine:
             if active_key == "dynamic_leiden":
                 active_part["name"] = f"Dynamic Topological Leiden (Discovered {len(active_part['clusters'])} Master Themes{domain_label})"
             else:
-                active_part["name"] = f"Fixed Variance-Minimized (Ward K={self.fixed_k}{domain_label})"
+                active_part["name"] = f"Fixed Variance-Minimized (Ward K={len(active_part['clusters'])}{domain_label})"
 
             if master_domain:
                 active_part["master_domain"] = master_domain

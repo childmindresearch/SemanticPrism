@@ -23,12 +23,12 @@ extraction:
 # Stage 2 (Refinement) Token & Concurrency Parameters
 refinement:
   max_async_calls: 2
-  context_window_cap: 2048     # Max tokens per taxonomic lifting prompt payload
+  context_window_cap: 6000     # Max tokens per taxonomic lifting prompt payload
 
 # Stage 4 (Synthesis) Token & Concurrency Parameters
 synthesis:
   max_async_calls: 1           # Concurrency limit for Phase 2 schema synthesis (set to 1 for local Ollama VRAM stability)
-  context_window_cap: 16384    # Max tokens for Pydantic schema synthesis and Phase 3 consolidation
+  context_window_cap: 180000    # Max tokens for Pydantic schema synthesis and Phase 3 consolidation
   # Stage-specific model override (optional)
   llm:
     provider: "ollama"

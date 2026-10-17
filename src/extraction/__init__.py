@@ -12,7 +12,13 @@ from .schemas import (
     TripleExtractionResult,
 )
 from .theme_clusterer import ThemeClusteringEngine, format_theme_embedding_text
-from .extractor import ExtractionPipeline, PipelineRunContext
+
+def __getattr__(name: str):
+    if name in ("ExtractionPipeline", "PipelineRunContext"):
+        import importlib
+        ext_mod = importlib.import_module(".extractor", __name__)
+        return getattr(ext_mod, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "Theme",
