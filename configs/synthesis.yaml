@@ -28,7 +28,7 @@ synthesis:
     # Maximum cosine distance between cluster members (0.48 distance ~ 0.52+ cosine similarity)
     distance_threshold: 0.48
     # Minimum cluster size to form a qualified Enum class (singletons discarded as noise)
-    min_cluster_size: 2
+    min_cluster_size: 4
     # Minimum average cosine similarity to cluster centroid to qualify as a strong cluster
     min_cohesion_score: 0.55
     # Maximum candidate clusters per LLM payload batch to prevent context window overflow
@@ -51,13 +51,13 @@ synthesis:
   payload_values: "raw_text"
 
   # Maximum number of curated source text sentences per community target payload (default: 60)
-  max_sentences_per_target: 60
+  max_sentences_per_target: 200
 
   # Minimum character length for source text quotes to be considered valid observations
   min_sentence_length: 15
 
   # Number of prominent, specific domain terms to provide in the payload (default: 12)
-  top_domain_terms_count: 12
+  top_domain_terms_count: 8
 
   # Stop words and generic vocabulary filtered out when deriving top domain terms
   generic_exclusions:

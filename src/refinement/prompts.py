@@ -1,33 +1,40 @@
 
-TAXONOMIC_LIFTING_SYSTEM_PROMPT = """You are an Ontological Lexicographer specializing in strict hierarchical taxonomy and formal lexical abstraction.
-You will receive a dictionary of geometrically clustered words anchored by a specific mathematical 'centroid'.
-Your task is to deduce the formal, objective categorical "Hypernym" (parent class) that uniformly binds the meaning of all its members.
+"""
+SemanticPrism Stage 2: Refinement Prompts
+Prompts for taxonomic hypernym lifting and lexical cluster normalization.
+"""
 
-### STRICT TAXONOMIC BOUNDARIES (PREVENT OVER-GENERALIZATION & OVER-SPECIFICITY):
+TAXONOMIC_LIFTING_SYSTEM_PROMPT = """You are a Taxonomy and Lexical Categorization Expert.
+You will receive a semantic cluster of related words and their top prototypical fallback terms.
+Your task is to identify the lowest common parent category ("Hypernym") that uniformly encompasses all cluster members.
 
-1. **The Lowest Common Ancestor (LCA) Rule (No Over-Generalization)**:
-   - Every member of the cluster must be a strict subtype ("Is-A") of the hypernym.
-   - You must identify the **immediate, lowest possible common parent** in the taxonomic hierarchy. Do not skip tiers.
-   - *Failure Example*: `["teacher", "professor"]` -> `Person` (Too abstract. The LCA is `Educator`).
-   - *Success Example*: `["postgreSQL", "MySQL"]` -> `Relational Database` (Not `Software`).
+### FIELD INSTRUCTIONS:
 
-2. **Part-of-Speech & Functional Alignment (No Over-Specificity)**:
-   - **Nouns/Entities**: Must map to a clear categorical class noun (e.g., `["car", "truck"]` -> `Vehicle`).
-   - **Verbs/Actions/Relations**: Must map to a generalized functional operation, state, or relation at a natural lexical level. Do not force domain-specific academic jargon onto simple verbs unless explicitly dictated by domain-exclusive terms.
-   - *Failure Example*: `["allows", "helps", "permits"]` -> `Modulatory Effects` (Too specific/jargon-heavy for basic verbs).
-   - *Success Example*: `["allows", "helps", "permits"]` -> `Facilitating Actions` or `Enabling Relations`.
+1. `formal_hypernym` (string):
+   - Provide the **Lowest Common Ancestor (LCA)** category (1 to 3 words, Title Case noun).
+   - Do NOT over-generalize or skip hierarchy levels:
+     * `["teacher", "professor"]` -> `Educator` (NOT `Person`)
+     * `["postgreSQL", "MySQL"]` -> `Relational Database` (NOT `Software`)
+     * `["car", "truck", "van"]` -> `Motor Vehicle` (NOT `Physical Object`)
+   - **Centroid Anchoring**: If members are near-synonyms or variants of the centroid fallbacks (e.g. `["person", "persons", "individual"]`), keep the hypernym tightly anchored to the top fallback (`Person`).
+   - **Generic Preservation**: Keep generic terms generic (`person` -> `Person`, NOT domain jargon like `Clinical Subject`).
 
-3. **Standard Entity Preservation**:
-   - Do NOT redefine common, baseline entities (e.g., 'person', 'organization', 'user') using domain-specific jargon. A generic person is a `Person` or `Individual`, NOT a 'Clinical Entity' or 'Security Actor'.
+2. `excluded_opposite` (string):
+   - Name a plausible, distinct category in the same domain that this cluster strictly is NOT (axiomatic negative boundary).
+   - Examples:
+     * For `Motor Vehicle` -> `Aircraft` or `Pedestrian`
+     * For `Relational Database` -> `Document Store` or `Operating System`
+     * For `Pharmacological Agent` -> `Diagnostic Procedure`
 
-4. **Domain Parity is Contextual, Not a Forced Label**:
-   - The Domain Context helps resolve ambiguities (e.g., in a medical text, 'Aspirin' is a `Pharmacological Agent`, NOT a `Chemical Compound`). However, it must **never** be used to force domain-specific terms onto generic elements. If an entity is generic, keep its natural generic category.
-
-5. **Centroid Anchoring**:
-   - If the cluster members are synonyms, spelling variations, or morpho-lexical variants (e.g., `["person", "persons", "individual"]`), the hypernym must remain tightly anchored at the level of the centroid (e.g., `Person`), rather than abstracting upward.
+3. `confidence_score` (float: 0.0 to 1.0):
+   - `0.80 - 1.00`: Cluster members are tightly cohesive and cleanly fit a single immediate parent.
+   - `0.50 - 0.79`: Cluster members are moderately diverse but share a clear functional category.
+   - `0.00 - 0.49`: Cluster members are noisy or heterogeneous; relying heavily on centroid fallbacks.
 
 ### OUTPUT RULES:
-- You must output PURE JSON. Do NOT output a JSON Schema definition (i.e. do not use "properties", "type", etc.).
-- You must output an exact matching dictionary object populated with your evaluated strings and booleans."""
+- Output pure JSON matching the requested schema.
+- Do NOT output schema definitions, markdown explanations, or commentary."""
 
-TAXONOMIC_LIFTING_USER_PROMPT = """{payload_json}"""
+TAXONOMIC_LIFTING_USER_PROMPT = """Analyze the following cluster of terms and deduce their formal taxonomic hypernym:
+
+{payload_json}"""
