@@ -2714,83 +2714,52 @@ class TopologyVisualizer:
         baseline_result: Optional[TopologyResult] = None
     ):
         vis_dir.mkdir(parents=True, exist_ok=True)
-        import shutil
 
-        if baseline_result:
-            # 1. Baseline Suite (Pre-Agglomeration Granular Communities)
-            self._generate_isolated_communities_graph(
-                dg=dg,
-                result=baseline_result,
-                output_path=vis_dir / "isolated_communities_baseline.html",
-                switch_target="isolated_communities_only.html",
-                switch_label="✨ View Agglomerated Macro-Domains",
-                view_badge="Baseline Sub-Communities"
-            )
-            self._generate_collapsed_modules_graph(
-                dg=dg,
-                result=baseline_result,
-                vis_dir=vis_dir,
-                path_label="Path 1: Baseline Sub-Communities",
-                path_type="community",
-                output_filename="collapsed_modules_baseline.html",
-                switch_target="collapsed_module_architecture.html",
-                switch_label="✨ View Agglomerated Modules",
-                view_badge="Baseline Modules"
-            )
-            self._generate_llm_payload_gallery(
-                dg=dg,
-                result=baseline_result,
-                refined_triplets=refined_triplets,
-                vis_dir=vis_dir,
-                path_label="Baseline Sub-Communities",
-                path_type="community",
-                output_filename="stage_04_llm_payload_gallery_baseline.html",
-                switch_target="stage_04_llm_payload_gallery.html",
-                switch_label="✨ View Agglomerated Payloads",
-                view_badge="Baseline Payloads"
-            )
+        # Clean up any legacy redundant HTML outputs if they exist on disk
+        for legacy_f in [
+            "isolated_communities_baseline.html",
+            "isolated_communities_agglomerated.html",
+            "collapsed_modules_baseline.html",
+            "collapsed_modules_agglomerated.html",
+            "stage_04_llm_payload_gallery_baseline.html"
+        ]:
+            legacy_p = vis_dir / legacy_f
+            if legacy_p.exists():
+                try:
+                    legacy_p.unlink()
+                except Exception:
+                    pass
 
-            # 2. Agglomerated Suite (Post-Agglomeration Consolidated Macro-Domains)
-            self._generate_isolated_communities_graph(
-                dg=dg,
-                result=result,
-                output_path=vis_dir / "isolated_communities_only.html",
-                switch_target="isolated_communities_baseline.html",
-                switch_label="🔍 View Baseline Sub-Communities",
-                view_badge="Agglomerated Macro-Domains",
-                baseline_result=baseline_result
-            )
-            shutil.copyfile(vis_dir / "isolated_communities_only.html", vis_dir / "isolated_communities_agglomerated.html")
+        # 1. Single Isolated Communities Graph with in-page toggle
+        self._generate_isolated_communities_graph(
+            dg=dg,
+            result=result,
+            output_path=vis_dir / "isolated_communities_only.html",
+            baseline_result=baseline_result
+        )
 
-            self._generate_collapsed_modules_graph(
-                dg=dg,
-                result=result,
-                vis_dir=vis_dir,
-                path_label="Path 1: Agglomerated Macro-Domains",
-                path_type="community",
-                output_filename="collapsed_module_architecture.html",
-                switch_target="collapsed_modules_baseline.html",
-                switch_label="🔍 View Baseline Modules",
-                view_badge="Agglomerated Macro-Domains"
-            )
-            shutil.copyfile(vis_dir / "collapsed_module_architecture.html", vis_dir / "collapsed_modules_agglomerated.html")
+        # 2. Single Collapsed Module Architecture with in-page toggle
+        self._generate_collapsed_modules_graph(
+            dg=dg,
+            result=result,
+            vis_dir=vis_dir,
+            path_label="Path 1: Community Workflow Path",
+            path_type="community",
+            output_filename="collapsed_module_architecture.html",
+            baseline_result=baseline_result
+        )
 
-            self._generate_llm_payload_gallery(
-                dg=dg,
-                result=result,
-                refined_triplets=refined_triplets,
-                vis_dir=vis_dir,
-                path_label="Agglomerated Macro-Domains",
-                path_type="community",
-                output_filename="stage_04_llm_payload_gallery.html",
-                switch_target="stage_04_llm_payload_gallery_baseline.html",
-                switch_label="🔍 View Baseline Payloads",
-                view_badge="Agglomerated Payloads"
-            )
-        else:
-            self._generate_isolated_communities_graph(dg, result, vis_dir / "isolated_communities_only.html")
-            self._generate_collapsed_modules_graph(dg, result, vis_dir, "Path 1: Community Workflow Path", "community")
-            self._generate_llm_payload_gallery(dg, result, refined_triplets, vis_dir, "Path 1: Community Workflow Path", "community")
+        # 3. Single LLM Payload Gallery with in-page toggle
+        self._generate_llm_payload_gallery(
+            dg=dg,
+            result=result,
+            refined_triplets=refined_triplets,
+            vis_dir=vis_dir,
+            path_label="Stage 4 LLM Payload Gallery",
+            path_type="community",
+            output_filename="stage_04_llm_payload_gallery.html",
+            baseline_result=baseline_result
+        )
 
     def _generate_isolated_communities_graph(
         self,
@@ -2819,22 +2788,30 @@ class TopologyVisualizer:
                 comm_counts[comm.community_id] = comm_counts.get(comm.community_id, 0) + 1
 
         orig_comm_map = {}
+        orig_comm_counts = {}
         if baseline_result:
             for comm in baseline_result.communities:
                 for n in comm.nodes:
                     orig_comm_map[n] = comm.community_id
+                    orig_comm_counts[comm.community_id] = orig_comm_counts.get(comm.community_id, 0) + 1
+        else:
+            orig_comm_map = comm_map
+            orig_comm_counts = comm_counts
+
+        has_baseline = bool(baseline_result and len(orig_comm_counts) != len(comm_counts))
 
         enriched_nodes = []
         for node in comm_map.keys():
             if node in dg:
                 comm_id = comm_map[node]
-                color = colors[comm_id % len(colors)]
+                orig_id = orig_comm_map.get(node, comm_id)
                 deg = dg.degree(node)
 
-                orig_id = orig_comm_map.get(node)
-                if orig_id is not None and orig_id != comm_id:
-                    role_desc = f"Macro-Domain #{comm_id} (Merged from Comm #{orig_id}) — Intra-domain degree: {deg}"
-                    tooltip = (
+                # Agglomerated properties
+                agglom_color = colors[comm_id % len(colors)]
+                if orig_id != comm_id:
+                    agglom_role_desc = f"Macro-Domain #{comm_id} (Merged from Comm #{orig_id}) — Intra-domain degree: {deg}"
+                    agglom_tooltip = (
                         f"<b>{html.escape(str(node))}</b><br>"
                         f"Partition: Macro-Domain #{comm_id}<br>"
                         f"Source: Merged from Community #{orig_id}<br>"
@@ -2842,13 +2819,23 @@ class TopologyVisualizer:
                         f"Status: 100% Isolated (Hubs Pruned)"
                     )
                 else:
-                    role_desc = f"Community #{comm_id} Member — Intra-community degree: {deg}"
-                    tooltip = (
+                    agglom_role_desc = f"Macro-Domain #{comm_id} Member — Intra-domain degree: {deg}"
+                    agglom_tooltip = (
                         f"<b>{html.escape(str(node))}</b><br>"
-                        f"Partition: Community #{comm_id}<br>"
-                        f"Intra-Community Degree: {deg}<br>"
+                        f"Partition: Macro-Domain #{comm_id}<br>"
+                        f"Intra-Domain Degree: {deg}<br>"
                         f"Status: 100% Isolated (Hubs Pruned)"
                     )
+
+                # Baseline properties
+                baseline_color = colors[orig_id % len(colors)]
+                baseline_role_desc = f"Community #{orig_id} Member — Intra-community degree: {deg}"
+                baseline_tooltip = (
+                    f"<b>{html.escape(str(node))}</b><br>"
+                    f"Partition: Community #{orig_id}<br>"
+                    f"Intra-Community Degree: {deg}<br>"
+                    f"Status: 100% Isolated (Hubs Pruned)"
+                )
 
                 enriched_nodes.append({
                     "id": str(node),
@@ -2856,18 +2843,27 @@ class TopologyVisualizer:
                     "full_label": str(node),
                     "shape": "dot",
                     "size": 15 + min(20, deg),
-                    "color": color,
+                    "color": agglom_color,
                     "borderWidth": 1.5,
                     "font": {"color": "#ffffff", "size": 10, "face": "Inter, sans-serif"},
-                    "title": tooltip,
+                    "title": agglom_tooltip,
                     "comm_id": comm_id,
                     "deg": deg,
-                    "role_desc": role_desc
+                    "role_desc": agglom_role_desc,
+                    "agglom_comm_id": comm_id,
+                    "agglom_color": agglom_color,
+                    "agglom_role_desc": agglom_role_desc,
+                    "agglom_tooltip": agglom_tooltip,
+                    "baseline_comm_id": orig_id,
+                    "baseline_color": baseline_color,
+                    "baseline_role_desc": baseline_role_desc,
+                    "baseline_tooltip": baseline_tooltip
                 })
 
         enriched_edges = []
         for idx, (u, v, data) in enumerate(dg.edges(data=True)):
             if u in comm_map and v in comm_map and comm_map.get(u) == comm_map.get(v):
+                is_base = bool(orig_comm_map.get(u) == orig_comm_map.get(v))
                 enriched_edges.append({
                     "id": f"e_{idx}",
                     "from": str(u),
@@ -2875,23 +2871,38 @@ class TopologyVisualizer:
                     "arrows": "to",
                     "title": data.get("predicate", ""),
                     "color": {"color": "rgba(200, 200, 200, 0.3)", "highlight": "#38bdf8"},
-                    "width": 1
+                    "width": 1,
+                    "is_baseline": is_base
                 })
 
         total_nodes = len(enriched_nodes)
-        total_edges = len(enriched_edges)
-        num_communities = len(comm_counts)
+        agglom_edges_count = len(enriched_edges)
+        baseline_edges_count = sum(1 for e in enriched_edges if e.get("is_baseline"))
+        num_agglom = len(comm_counts)
+        num_baseline = len(orig_comm_counts)
         hubs_stripped = len(result.global_hubs)
+
+        agglom_meta = [{"id": cid, "label": f"Macro-Domain #{cid} ({comm_counts[cid]} entities)"} for cid in sorted(comm_counts.keys())]
+        baseline_meta = [{"id": cid, "label": f"Community #{cid} ({orig_comm_counts[cid]} entities)"} for cid in sorted(orig_comm_counts.keys())]
+
         nodes_json = json.dumps(enriched_nodes)
         edges_json = json.dumps(enriched_edges)
+        agglom_meta_json = json.dumps(agglom_meta)
+        baseline_meta_json = json.dumps(baseline_meta)
 
-        comm_options_html = f'<option value="all">All Communities ({num_communities})</option>'
-        for c_id in sorted(comm_counts.keys()):
-            label_prefix = "Macro-Domain" if baseline_result else "Community"
-            comm_options_html += f'<option value="{c_id}">{label_prefix} #{c_id} ({comm_counts[c_id]} entities)</option>'
+        toggle_btn_html = (
+            '<button class="btn btn-primary" id="viewToggleBtn" onclick="toggleCommunityView()" '
+            'style="display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:6px 12px; '
+            'background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px; cursor:pointer;">'
+            '🔍 Switch to Baseline Sub-Communities'
+            '</button>'
+        ) if has_baseline else ''
 
-        badge_html = f'<span class="stat-badge" style="background:#2563eb; color:white; font-weight:700;">{view_badge}</span>' if view_badge else ''
-        switch_btn_html = f'<a href="{switch_target}" class="btn btn-primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:6px 12px; background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px;">{switch_label}</a>' if switch_target and switch_label else ''
+        badge_html = (
+            f'<span class="stat-badge" id="viewBadge" style="background:#2563eb; color:white; font-weight:700;">'
+            f'{"Agglomerated Macro-Domains" if has_baseline else (view_badge or "Isolated Communities")}'
+            f'</span>'
+        )
 
         html_out = f"""<!DOCTYPE html>
 <html lang="en">
@@ -2913,20 +2924,18 @@ class TopologyVisualizer:
                     <span>Intra-Community Cohesion: De-noised Thematic Neighborhoods (Hubs & Inter-Links Severed)</span>
                     {badge_html}
                     <span class="stat-badge">Partitioned Entities: {total_nodes}</span>
-                    <span class="stat-badge stat-badge-blue">Communities: {num_communities}</span>
-                    <span class="stat-badge stat-badge-success">Intra-Community Edges: {total_edges}</span>
+                    <span class="stat-badge stat-badge-blue" id="commCountBadge">Communities: {num_agglom}</span>
+                    <span class="stat-badge stat-badge-success" id="edgeCountBadge">Intra-Community Edges: {agglom_edges_count}</span>
                     <span class="stat-badge stat-badge-danger">Hubs Stripped: {hubs_stripped} (100% Decoupled)</span>
                 </div>
             </div>
         </div>
         <div class="header-actions">
-            {switch_btn_html}
+            {toggle_btn_html}
             <div class="search-box">
                 <input type="text" class="search-input" id="nodeSearch" placeholder="Search entity in community..." onkeydown="if(event.key==='Enter') searchNode(this.value)">
             </div>
-            <select class="filter-select" id="commFilter" onchange="filterCommunity(this.value)">
-                {comm_options_html}
-            </select>
+            <select class="filter-select" id="commFilter" onchange="filterCommunity(this.value)"></select>
             <button class="btn" id="labelBtn" onclick="toggleAllLabels()">🏷️ Show All Labels</button>
             <button class="btn btn-paper" id="paperBtn" onclick="togglePaperMode()">📄 Paper Mode (White)</button>
             <button class="btn btn-guide" onclick="toggleGuide()">ℹ️ Guide & Reference</button>
@@ -3006,7 +3015,7 @@ class TopologyVisualizer:
                 <div class="guide-card">
                     <div class="guide-card-title">💡 Community Isolation Filter</div>
                     <div>
-                        Use the Community Filter dropdown in the header bar to isolate a single community (e.g. Community #0, Community #1) and inspect its internal sub-network.
+                        Use the Community Filter dropdown in the header bar to isolate a single community and inspect its internal sub-network.
                     </div>
                 </div>
             </div>
@@ -3018,6 +3027,12 @@ class TopologyVisualizer:
     <script>
         const allNodes = {nodes_json};
         const allEdges = {edges_json};
+        const agglomMeta = {agglom_meta_json};
+        const baselineMeta = {baseline_meta_json};
+        const hasBaseline = {json.dumps(has_baseline)};
+        const agglomEdgeCount = {agglom_edges_count};
+        const baselineEdgeCount = {baseline_edges_count};
+        let isAgglomerated = true;
 
         const nodesDataSet = new vis.DataSet(allNodes);
         const edgesDataSet = new vis.DataSet(allEdges);
@@ -3047,6 +3062,68 @@ class TopologyVisualizer:
         }};
 
         const network = new vis.Network(container, data, options);
+
+        function populateSelect(meta, defaultLabel) {{
+            const sel = document.getElementById('commFilter');
+            let opts = `<option value="all">${{defaultLabel}} (${{meta.length}})</option>`;
+            meta.forEach(item => {{
+                opts += `<option value="${{item.id}}">${{item.label}}</option>`;
+            }});
+            sel.innerHTML = opts;
+            sel.value = "all";
+        }}
+
+        populateSelect(agglomMeta, hasBaseline ? "All Macro-Domains" : "All Communities");
+
+        function toggleCommunityView() {{
+            if (!hasBaseline) return;
+            isAgglomerated = !isAgglomerated;
+            const btn = document.getElementById('viewToggleBtn');
+            const badge = document.getElementById('viewBadge');
+            const commBadge = document.getElementById('commCountBadge');
+            const edgeBadge = document.getElementById('edgeCountBadge');
+
+            if (isAgglomerated) {{
+                if (btn) btn.innerHTML = '🔍 Switch to Baseline Sub-Communities';
+                if (badge) {{
+                    badge.innerText = 'Agglomerated Macro-Domains';
+                    badge.style.background = '#2563eb';
+                }}
+                if (commBadge) commBadge.innerText = 'Communities: ' + agglomMeta.length;
+                if (edgeBadge) edgeBadge.innerText = 'Intra-Community Edges: ' + agglomEdgeCount;
+                populateSelect(agglomMeta, 'All Macro-Domains');
+            }} else {{
+                if (btn) btn.innerHTML = '✨ Switch to Agglomerated Macro-Domains';
+                if (badge) {{
+                    badge.innerText = 'Baseline Sub-Communities';
+                    badge.style.background = '#059669';
+                }}
+                if (commBadge) commBadge.innerText = 'Communities: ' + baselineMeta.length;
+                if (edgeBadge) edgeBadge.innerText = 'Intra-Community Edges: ' + baselineEdgeCount;
+                populateSelect(baselineMeta, 'All Communities');
+            }}
+
+            // Update nodes in dataset
+            const nodeUpdates = allNodes.map(n => ({{
+                id: n.id,
+                color: isAgglomerated ? n.agglom_color : n.baseline_color,
+                title: isAgglomerated ? n.agglom_tooltip : n.baseline_tooltip,
+                comm_id: isAgglomerated ? n.agglom_comm_id : n.baseline_comm_id,
+                role_desc: isAgglomerated ? n.agglom_role_desc : n.baseline_role_desc,
+                hidden: false
+            }}));
+            nodesDataSet.update(nodeUpdates);
+
+            // Update edges in dataset
+            const edgeUpdates = allEdges.map(e => ({{
+                id: e.id,
+                hidden: isAgglomerated ? false : !e.is_baseline
+            }}));
+            edgesDataSet.update(edgeUpdates);
+
+            closeInspector();
+            network.fit({{ animation: {{ duration: 500 }} }});
+        }}
 
         network.on('stabilizationProgress', function(params) {{
             const pct = Math.round((params.iterations / params.total) * 100);
@@ -3082,7 +3159,10 @@ class TopologyVisualizer:
                 filteredNodes = allNodes.map(n => ({{ id: n.id, hidden: false }}));
             }} else {{
                 const targetId = parseInt(val);
-                filteredNodes = allNodes.map(n => ({{ id: n.id, hidden: n.comm_id !== targetId }}));
+                filteredNodes = allNodes.map(n => {{
+                    const cId = isAgglomerated ? n.agglom_comm_id : n.baseline_comm_id;
+                    return {{ id: n.id, hidden: cId !== targetId }};
+                }});
             }}
             nodesDataSet.update(filteredNodes);
             network.fit({{ animation: {{ duration: 500 }} }});
@@ -3131,16 +3211,19 @@ class TopologyVisualizer:
             const n = allNodes.find(item => item.id === nodeId);
             if (!n) return;
             document.getElementById('inspName').innerText = n.full_label;
+            const activeCommId = isAgglomerated ? n.agglom_comm_id : n.baseline_comm_id;
+            const activeRoleDesc = isAgglomerated ? n.agglom_role_desc : n.baseline_role_desc;
+            const commType = isAgglomerated && hasBaseline ? "Macro-Domain" : "Community";
             const html = `
                 <div style="margin-bottom: 8px;">
-                    <span class="metric-pill">Community: <b>#${{n.comm_id}}</b></span>
+                    <span class="metric-pill">${{commType}}: <b>#${{activeCommId}}</b></span>
                     <span class="metric-pill">Local Degree: <b>${{n.deg}}</b></span>
                 </div>
                 <div style="color: var(--text-sub); font-size: 11px; line-height: 1.4; margin-bottom: 6px;">
-                    ${{n.role_desc}}
+                    ${{activeRoleDesc}}
                 </div>
                 <div style="color: var(--text-dim); font-size: 10px;">
-                    Entity completely decoupled from external hubs; retains dense relationships within Community #${{n.comm_id}}.
+                    Entity completely decoupled from external hubs; retains dense relationships within ${{commType}} #${{activeCommId}}.
                 </div>
             `;
             document.getElementById('inspContent').innerHTML = html;
@@ -3806,7 +3889,8 @@ class TopologyVisualizer:
         output_filename: str = "stage_04_llm_payload_gallery.html",
         switch_target: Optional[str] = None,
         switch_label: Optional[str] = None,
-        view_badge: Optional[str] = None
+        view_badge: Optional[str] = None,
+        baseline_result: Optional[TopologyResult] = None
     ):
         agent_name = "leiden_schema_agent"
         
@@ -3814,110 +3898,122 @@ class TopologyVisualizer:
         min_cluster_size = synth_cfg.get('min_cluster_size', 15)
         max_triplets_cap = synth_cfg.get('max_triplets_per_target', 1800)
         
-        # Resolve targets via TargetResolver (resolver.py)
-        targets, _ = TargetResolver.qualify_and_resolve_targets(result.model_dump(), path_type, self.full_config)
-
         # Architectural tiers (Tier 1 Nucleus / Tier 2 Mechanics / Tier 3 Modifiers)
         tiers_enabled = self.config.get('architectural_tiers', {}).get('enabled', True)
         concept_embeddings = {}
-        if tiers_enabled and targets:
+        if tiers_enabled:
             all_target_nodes = set()
-            for target in targets:
+            targets_main, _ = TargetResolver.qualify_and_resolve_targets(result.model_dump(), path_type, self.full_config)
+            for target in targets_main:
                 all_target_nodes.update(target.get("nodes", []))
-            ref_cfg = getattr(self, 'full_config', {}).get('refinement', {}) if hasattr(self, 'full_config') else {}
-            model_name = ref_cfg.get('embedding_model') or self.config.get('embedding_model')
-            cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-            concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
-                list(all_target_nodes),
-                cache_dir=cache_dir,
-                model_name=model_name
-            )
-            
-        payload_data = []
-        for i, target in enumerate(targets, start=1):
-            target_type = target["type"]
-            c_id = target["id"]
-            target_nodes = set(target["nodes"])
-            
-            # Filter and cap triplets via TargetResolver (resolver.py)
-            capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, result.model_dump(), max_triplets_cap, config=self.full_config)
+            if baseline_result is not None:
+                targets_base, _ = TargetResolver.qualify_and_resolve_targets(baseline_result.model_dump(), path_type, self.full_config)
+                for target in targets_base:
+                    all_target_nodes.update(target.get("nodes", []))
 
-            # Per-entity tier lookup: normalized name -> {tier, scores}
-            tier_map = {}
-            tier_counts = {}
-            tier_rosters = {}
-            if tiers_enabled:
-                tiers_data = TargetResolver.compute_architectural_tiers(
-                    target_nodes=target_nodes,
-                    triplets=capped_triplets,
-                    config=self.full_config,
-                    concept_embeddings=concept_embeddings,
-                    community_id=c_id
+            if all_target_nodes:
+                ref_cfg = getattr(self, 'full_config', {}).get('refinement', {}) if hasattr(self, 'full_config') else {}
+                model_name = ref_cfg.get('embedding_model') or self.config.get('embedding_model')
+                cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+                concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
+                    list(all_target_nodes),
+                    cache_dir=cache_dir,
+                    model_name=model_name
                 )
-                tier_counts = tiers_data.get("tier_counts", {})
-                for tier_num, key in ((1, "tier_1_nucleus"), (2, "tier_2_mechanics"), (3, "tier_3_modifiers")):
-                    roster = tiers_data.get(key, [])
-                    tier_rosters[str(tier_num)] = [x["entity"] for x in roster]
-                    for item in roster:
-                        tier_map[str(item["entity"]).lower().strip()] = {
-                            "tier": tier_num,
-                            "S": item["composite_score"],
-                            "P": item["prototypicality"],
-                            "D": item["centrality"],
-                            "G": item["fidelity"],
-                            "deg_in": item["internal_degree"],
-                            "deg_bound": item["boundary_degree"],
-                            "quote": item["exemplar_quote"],
-                            "demoted": bool(item.get("demoted_due_to_low_fidelity", False))
-                        }
-            
-            associated_triplets = [
-                {
-                    "subject": str(t.get('subject', '')).strip(),
-                    "predicate": str(t.get('predicate', '')).strip(),
-                    "object": str(t.get('object', '')).strip(),
-                    "rank_score": round(float(t.get('triplet_rank_score', 0.0)), 1),
-                    "source_quote": str(t.get('source_quote', '')).strip()
-                }
-                for t in capped_triplets
-            ]
-            
-            # Top 6 highest-scoring triplets
-            top_triplets = associated_triplets[:6]
 
-            # Extract raw quotes and compute unigrams & bigrams
-            raw_quotes = [t.get('source_quote', '') for t in capped_triplets if t.get('source_quote')]
-            top_unigrams, top_bigrams = self._extract_top_ngrams(raw_quotes, top_n=14)
-
-            # Connected hubs (for graph node styling context)
-            connected_hubs = [h for h in result.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in target["nodes"])]
+        def _extract_payloads(topo_res: TopologyResult) -> List[dict]:
+            targets, _ = TargetResolver.qualify_and_resolve_targets(topo_res.model_dump(), path_type, self.full_config)
+            payload_data = []
+            for i, target in enumerate(targets, start=1):
+                target_type = target["type"]
+                c_id = target["id"]
+                target_nodes = set(target["nodes"])
                 
-            # Define output schema filename matching synthesizer.py naming style
-            filename_suffix = f"community_{c_id}"
-            filename = f"{i:02d}_{filename_suffix}.py"
+                # Filter and cap triplets via TargetResolver (resolver.py)
+                capped_triplets = TargetResolver.filter_and_cap_triplets(target_nodes, refined_triplets, topo_res.model_dump(), max_triplets_cap, config=self.full_config)
+
+                # Per-entity tier lookup: normalized name -> {tier, scores}
+                tier_map = {}
+                tier_counts = {}
+                tier_rosters = {}
+                if tiers_enabled:
+                    tiers_data = TargetResolver.compute_architectural_tiers(
+                        target_nodes=target_nodes,
+                        triplets=capped_triplets,
+                        config=self.full_config,
+                        concept_embeddings=concept_embeddings,
+                        community_id=c_id
+                    )
+                    tier_counts = tiers_data.get("tier_counts", {})
+                    for tier_num, key in ((1, "tier_1_nucleus"), (2, "tier_2_mechanics"), (3, "tier_3_modifiers")):
+                        roster = tiers_data.get(key, [])
+                        tier_rosters[str(tier_num)] = [x["entity"] for x in roster]
+                        for item in roster:
+                            tier_map[str(item["entity"]).lower().strip()] = {
+                                "tier": tier_num,
+                                "S": item["composite_score"],
+                                "P": item["prototypicality"],
+                                "D": item["centrality"],
+                                "G": item["fidelity"],
+                                "deg_in": item["internal_degree"],
+                                "deg_bound": item["boundary_degree"],
+                                "quote": item["exemplar_quote"],
+                                "demoted": bool(item.get("demoted_due_to_low_fidelity", False))
+                            }
+                
+                associated_triplets = [
+                    {
+                        "subject": str(t.get('subject', '')).strip(),
+                        "predicate": str(t.get('predicate', '')).strip(),
+                        "object": str(t.get('object', '')).strip(),
+                        "rank_score": round(float(t.get('triplet_rank_score', 0.0)), 1),
+                        "source_quote": str(t.get('source_quote', '')).strip()
+                    }
+                    for t in capped_triplets
+                ]
+                
+                # Top 6 highest-scoring triplets
+                top_triplets = associated_triplets[:6]
+
+                # Extract raw quotes and compute unigrams & bigrams
+                raw_quotes = [t.get('source_quote', '') for t in capped_triplets if t.get('source_quote')]
+                top_unigrams, top_bigrams = self._extract_top_ngrams(raw_quotes, top_n=14)
+
+                # Connected hubs (for graph node styling context)
+                connected_hubs = [h for h in topo_res.global_hubs if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in target["nodes"])]
+                    
+                # Define output schema filename matching synthesizer.py naming style
+                filename_suffix = f"community_{c_id}"
+                filename = f"{i:02d}_{filename_suffix}.py"
+                
+                payload_data.append({
+                    "id": c_id,
+                    "type": target_type,
+                    "module_name": filename,
+                    "nodes": list(target_nodes),
+                    "triplet_count": len(associated_triplets),
+                    "triplets": associated_triplets,
+                    "top_triplets": top_triplets,
+                    "top_unigrams": top_unigrams,
+                    "top_bigrams": top_bigrams,
+                    "connected_hubs": connected_hubs,
+                    "tier_map": tier_map,
+                    "tier_counts": tier_counts,
+                    "tier_rosters": tier_rosters
+                })
+            return payload_data
             
-            payload_data.append({
-                "id": c_id,
-                "type": target_type,
-                "module_name": filename,
-                "nodes": list(target_nodes),
-                "triplet_count": len(associated_triplets),
-                "triplets": associated_triplets,
-                "top_triplets": top_triplets,
-                "top_unigrams": top_unigrams,
-                "top_bigrams": top_bigrams,
-                "connected_hubs": connected_hubs,
-                "tier_map": tier_map,
-                "tier_counts": tier_counts,
-                "tier_rosters": tier_rosters
-            })
-            
-        payload_json = json.dumps(payload_data)
+        agglom_payloads = _extract_payloads(result)
+        baseline_payloads = _extract_payloads(baseline_result) if baseline_result is not None else None
+
+        agglom_payloads_json = json.dumps(agglom_payloads)
+        baseline_payloads_json = json.dumps(baseline_payloads) if baseline_payloads is not None else "null"
+        has_baseline_json = "true" if baseline_payloads is not None else "false"
         hubs_json = json.dumps(result.global_hubs)
 
-        badge_html = f'<span style="padding:4px 10px; background:#2563eb; color:white; border-radius:4px; font-size:12px; font-weight:700; margin-left:8px;">{view_badge}</span>' if view_badge else ''
-        switch_btn_html = f'<a href="{switch_target}" style="text-decoration:none; padding:8px 16px; background:#1e3a5f; color:#38bdf8; border:1px solid #38bdf8; border-radius:6px; font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:6px;">{switch_label}</a>' if switch_target and switch_label else ''
-        
+        initial_badge = view_badge if view_badge else "Agglomerated Clusters"
+        toggle_display = "inline-flex" if baseline_payloads is not None else "none"
+
         html_content = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -3959,18 +4055,27 @@ class TopologyVisualizer:
         .node-inspector .metric {{ display: flex; justify-content: space-between; margin: 3px 0; }}
         .metric-bar {{ height: 4px; background: #1e293b; border-radius: 2px; margin-bottom: 5px; }}
         .metric-bar span {{ display: block; height: 100%; border-radius: 2px; background: #38bdf8; }}
+        .toggle-btn {{ text-decoration:none; padding:8px 16px; background:#1e3a5f; color:#38bdf8; border:1px solid #38bdf8; border-radius:6px; font-weight:600; font-size:13px; display:inline-flex; align-items:center; gap:6px; cursor:pointer; transition:all 0.2s; }}
+        .toggle-btn:hover {{ background:#2563eb; color:#ffffff; }}
     </style>
 </head>
 <body>
     <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
         <div>
-            <h1 style="display:flex; align-items:center; gap:8px;">[{path_label}] Stage 4 LLM Payload Gallery {badge_html}</h1>
+            <h1 style="display:flex; align-items:center; gap:8px;">
+                [{path_label}] Stage 4 LLM Payload Gallery 
+                <span id="payloadViewBadge" style="padding:4px 10px; background:#2563eb; color:white; border-radius:4px; font-size:12px; font-weight:700; margin-left:8px;">{initial_badge}</span>
+            </h1>
             <div class="subtitle">
                 Visualizing data sent to LLM for Stage 4 Pydantic schema synthesis.
                 Current Configuration: <code>min_cluster_size: {min_cluster_size}</code> | <code>max_triplets_per_target: {max_triplets_cap}</code>.
             </div>
         </div>
-        {switch_btn_html}
+        <div style="display:flex; gap:10px; align-items:center;">
+            <button id="payloadToggleBtn" class="toggle-btn" onclick="togglePayloadView()" style="display:{toggle_display};">
+                🔄 Switch to Baseline Communities
+            </button>
+        </div>
     </div>
     
     <div class="container">
@@ -3994,7 +4099,12 @@ class TopologyVisualizer:
     </div>
 
     <script>
-        const payloads = {payload_json};
+        const agglomPayloads = {agglom_payloads_json};
+        const baselinePayloads = {baseline_payloads_json};
+        const hasBaseline = {has_baseline_json};
+        let isAgglomerated = true;
+        let payloads = agglomPayloads;
+
         const globalHubs = new Set({hubs_json});
         const selectEl = document.getElementById('clusterSelect');
         const detailsEl = document.getElementById('payloadDetails');
@@ -4063,13 +4173,49 @@ class TopologyVisualizer:
             showInspector(target.id);
         }}
 
-        payloads.forEach((p, idx) => {{
-            const opt = document.createElement('option');
-            opt.value = idx;
-            const label = `${{p.type === 'community' ? 'Community' : 'Structural Cluster'}} ${{p.id}} (${{p.nodes.length}} entities)`;
-            opt.textContent = label;
-            selectEl.appendChild(opt);
-        }});
+        function repopulateClusterSelect() {{
+            selectEl.innerHTML = '';
+            payloads.forEach((p, idx) => {{
+                const opt = document.createElement('option');
+                opt.value = idx;
+                const label = `${{p.type === 'community' ? 'Community' : 'Structural Cluster'}} ${{p.id}} (${{p.nodes.length}} entities)`;
+                opt.textContent = label;
+                selectEl.appendChild(opt);
+            }});
+            if (payloads.length > 0) {{
+                selectEl.value = 0;
+                loadCluster(0);
+            }} else {{
+                const defaultOpt = document.createElement('option');
+                defaultOpt.value = "";
+                defaultOpt.textContent = "-- No Partitions Available --";
+                selectEl.appendChild(defaultOpt);
+                detailsEl.innerHTML = '<div style="color: #888888; font-style: italic; padding: 20px 0;">No partition payloads available.</div>';
+                if (network) {{ network.destroy(); network = null; }}
+            }}
+        }}
+
+        function togglePayloadView() {{
+            if (!hasBaseline || !baselinePayloads) return;
+            isAgglomerated = !isAgglomerated;
+            payloads = isAgglomerated ? agglomPayloads : baselinePayloads;
+            const badge = document.getElementById('payloadViewBadge');
+            const btn = document.getElementById('payloadToggleBtn');
+            if (isAgglomerated) {{
+                if (badge) {{
+                    badge.innerText = 'Agglomerated Clusters';
+                    badge.style.background = '#2563eb';
+                }}
+                if (btn) btn.innerHTML = '🔄 Switch to Baseline Communities';
+            }} else {{
+                if (badge) {{
+                    badge.innerText = 'Baseline Communities';
+                    badge.style.background = '#059669';
+                }}
+                if (btn) btn.innerHTML = '🔄 Switch to Agglomerated Clusters';
+            }}
+            repopulateClusterSelect();
+        }}
 
         function switchNgramTab(tab) {{
             const uniTab = document.getElementById('unigramsTab');
@@ -4093,6 +4239,7 @@ class TopologyVisualizer:
         function loadCluster(idx) {{
             if (idx === "" || idx === null || idx === undefined) return;
             const payload = payloads[idx];
+            if (!payload) return;
             
             // Format Top Triplets HTML
             const topTripletsHtml = payload.top_triplets && payload.top_triplets.length > 0
@@ -4248,16 +4395,7 @@ class TopologyVisualizer:
             network.on('click', params => showInspector(params.nodes.length ? params.nodes[0] : null));
         }}
 
-        if (payloads.length > 0) {{
-            selectEl.value = 0;
-            loadCluster(0);
-        }} else {{
-            const defaultOpt = document.createElement('option');
-            defaultOpt.value = "";
-            defaultOpt.textContent = "-- No Partitions Available --";
-            selectEl.appendChild(defaultOpt);
-            detailsEl.innerHTML = '<div style="color: #888888; font-style: italic; padding: 20px 0;">No partition payloads available.</div>';
-        }}
+        repopulateClusterSelect();
     </script>
 </body>
 </html>"""
@@ -4274,88 +4412,101 @@ class TopologyVisualizer:
         output_filename: str = "collapsed_module_architecture.html",
         switch_target: Optional[str] = None,
         switch_label: Optional[str] = None,
-        view_badge: Optional[str] = None
+        view_badge: Optional[str] = None,
+        baseline_result: Optional[TopologyResult] = None
     ):
-        clusters = result.communities
         cluster_label = "Community"
         css = self._get_shared_interactive_css()
         vis_dir.mkdir(parents=True, exist_ok=True)
 
-        enriched_nodes = []
-        hubs_set = set(result.global_hubs)
-        hubs_count = 0
-        modules_count = 0
+        def _build_collapsed_pack(res: TopologyResult):
+            clusters = res.communities
+            enriched_nodes = []
+            hubs_set = set(res.global_hubs)
+            hubs_count = 0
+            modules_count = 0
 
-        # Add Global Hubs as Star Nodes
-        for h in hubs_set:
-            metrics = result.node_metrics.get(h)
-            cent = metrics.degree_centrality if metrics else 0.0
-            hubs_count += 1
-            role_desc = "Global Hub Router — Cross-cutting entity connecting across multiple discrete modules"
-            tooltip = f"<b>{html.escape(str(h))}</b><br>Global Hub Router<br>Degree Centrality: {cent:.4f}"
-
-            enriched_nodes.append({
-                "id": str(h),
-                "label": f"HUB: {h}",
-                "full_label": str(h),
-                "shape": "star",
-                "size": 40,
-                "color": "#ef4444",
-                "borderWidth": 2,
-                "font": {"color": "#ffffff", "size": 12, "face": "Inter, sans-serif"},
-                "title": tooltip,
-                "is_hub": True,
-                "raw_title": f"Degree Centrality: {cent:.4f}",
-                "role_desc": role_desc
-            })
-
-        # Add Clusters as Collapsed Box Nodes
-        enriched_edges = []
-        edge_idx = 0
-        for cluster in clusters:
-            c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
-            nodes = cluster.nodes
-            mod_id = f"Module_{c_id}"
-            label = f"{cluster_label} {c_id}\n({len(nodes)} entities)"
-            raw_title = f"{cluster_label} {c_id} Members:\n" + "\n".join(nodes[:10]) + (f"\n... and {len(nodes)-10} more" if len(nodes) > 10 else "")
-            tooltip = f"<b>{cluster_label} #{c_id} ({len(nodes)} entities)</b><br>" + "<br>".join(html.escape(n) for n in nodes[:10]) + (f"<br>... and {len(nodes)-10} more" if len(nodes) > 10 else "")
-            modules_count += 1
-            role_desc = f"Collapsed Module Block — Aggregates {len(nodes)} cohesive entity members"
-
-            enriched_nodes.append({
-                "id": mod_id,
-                "label": label,
-                "full_label": f"{cluster_label} {c_id} ({len(nodes)} entities)",
-                "shape": "box",
-                "size": 32,
-                "color": "#38bdf8",
-                "borderWidth": 2,
-                "font": {"color": "#ffffff", "size": 12, "face": "Inter, sans-serif"},
-                "title": tooltip,
-                "is_hub": False,
-                "raw_title": raw_title,
-                "role_desc": role_desc
-            })
-
-            # Connect Hubs to Modules
+            # Add Global Hubs as Star Nodes
             for h in hubs_set:
-                if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes):
-                    enriched_edges.append({
-                        "id": f"e_{edge_idx}",
-                        "from": str(h),
-                        "to": mod_id,
-                        "color": "rgba(255, 100, 100, 0.7)",
-                        "width": 2
-                    })
-                    edge_idx += 1
+                metrics = res.node_metrics.get(h)
+                cent = metrics.degree_centrality if metrics else 0.0
+                hubs_count += 1
+                role_desc = "Global Hub Router — Cross-cutting entity connecting across multiple discrete modules"
+                tooltip = f"<b>{html.escape(str(h))}</b><br>Global Hub Router<br>Degree Centrality: {cent:.4f}"
 
-        total_nodes = len(enriched_nodes)
-        total_edges = len(enriched_edges)
-        nodes_json = json.dumps(enriched_nodes)
-        edges_json = json.dumps(enriched_edges)
+                enriched_nodes.append({
+                    "id": str(h),
+                    "label": f"HUB: {h}",
+                    "full_label": str(h),
+                    "shape": "star",
+                    "size": 40,
+                    "color": "#ef4444",
+                    "borderWidth": 2,
+                    "font": {"color": "#ffffff", "size": 12, "face": "Inter, sans-serif"},
+                    "title": tooltip,
+                    "is_hub": True,
+                    "raw_title": f"Degree Centrality: {cent:.4f}",
+                    "role_desc": role_desc
+                })
 
-        badge_html = f'<span class="stat-badge" style="background:#2563eb; color:white; font-weight:700;">{view_badge}</span>' if view_badge else ''
-        switch_btn_html = f'<a href="{switch_target}" class="btn btn-primary" style="text-decoration:none; display:inline-flex; align-items:center; gap:6px; font-weight:600; padding:6px 12px; background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px;">{switch_label}</a>' if switch_target and switch_label else ''
+            # Add Clusters as Collapsed Box Nodes
+            enriched_edges = []
+            edge_idx = 0
+            for cluster in clusters:
+                c_id = getattr(cluster, 'community_id', getattr(cluster, 'cluster_id', 0))
+                nodes = cluster.nodes
+                mod_id = f"Module_{c_id}"
+                label = f"{cluster_label} {c_id}\n({len(nodes)} entities)"
+                raw_title = f"{cluster_label} {c_id} Members:\n" + "\n".join(nodes[:10]) + (f"\n... and {len(nodes)-10} more" if len(nodes) > 10 else "")
+                tooltip = f"<b>{cluster_label} #{c_id} ({len(nodes)} entities)</b><br>" + "<br>".join(html.escape(n) for n in nodes[:10]) + (f"<br>... and {len(nodes)-10} more" if len(nodes) > 10 else "")
+                modules_count += 1
+                role_desc = f"Collapsed Module Block — Aggregates {len(nodes)} cohesive entity members"
+
+                enriched_nodes.append({
+                    "id": mod_id,
+                    "label": label,
+                    "full_label": f"{cluster_label} {c_id} ({len(nodes)} entities)",
+                    "shape": "box",
+                    "size": 32,
+                    "color": "#38bdf8",
+                    "borderWidth": 2,
+                    "font": {"color": "#ffffff", "size": 12, "face": "Inter, sans-serif"},
+                    "title": tooltip,
+                    "is_hub": False,
+                    "raw_title": raw_title,
+                    "role_desc": role_desc
+                })
+
+                # Connect Hubs to Modules
+                for h in hubs_set:
+                    if any(dg.has_edge(h, n) or dg.has_edge(n, h) for n in nodes):
+                        enriched_edges.append({
+                            "id": f"e_{edge_idx}",
+                            "from": str(h),
+                            "to": mod_id,
+                            "color": "rgba(255, 100, 100, 0.7)",
+                            "width": 2
+                        })
+                        edge_idx += 1
+
+            return {
+                "nodes": enriched_nodes,
+                "edges": enriched_edges,
+                "modules_count": modules_count,
+                "hubs_count": hubs_count,
+                "total_edges": len(enriched_edges),
+                "total_nodes": len(enriched_nodes)
+            }
+
+        agglom_pack = _build_collapsed_pack(result)
+        baseline_pack = _build_collapsed_pack(baseline_result) if baseline_result is not None else None
+
+        agglom_pack_json = json.dumps(agglom_pack)
+        baseline_pack_json = json.dumps(baseline_pack) if baseline_pack is not None else "null"
+        has_baseline_json = "true" if baseline_pack is not None else "false"
+
+        initial_badge = view_badge if view_badge else "Agglomerated Clusters"
+        toggle_display = "inline-flex" if baseline_pack is not None else "none"
 
         html_out = f"""<!DOCTYPE html>
 <html lang="en">
@@ -4375,23 +4526,25 @@ class TopologyVisualizer:
                 <h1>Stage 3.3: Macro Architecture — Collapsed Module Architecture Diagram</h1>
                 <div class="header-sub">
                     <span>Executive Modular Decomposition: High-Level Partition Blocks & Global Hub Routers</span>
-                    {badge_html}
+                    <span id="archBadge" class="stat-badge" style="background:#2563eb; color:white; font-weight:700;">{initial_badge}</span>
                     <span class="stat-badge">Path: {path_label}</span>
-                    <span class="stat-badge stat-badge-blue">Modules (■): {modules_count}</span>
-                    <span class="stat-badge stat-badge-danger">Global Hubs (★): {hubs_count}</span>
-                    <span class="stat-badge stat-badge-warning">Cross-Module Bridges: {total_edges}</span>
+                    <span class="stat-badge stat-badge-blue" id="modCountBadge">Modules (■): {agglom_pack['modules_count']}</span>
+                    <span class="stat-badge stat-badge-danger" id="hubCountBadge">Global Hubs (★): {agglom_pack['hubs_count']}</span>
+                    <span class="stat-badge stat-badge-warning" id="bridgeCountBadge">Cross-Module Bridges: {agglom_pack['total_edges']}</span>
                 </div>
             </div>
         </div>
         <div class="header-actions">
-            {switch_btn_html}
+            <button id="archToggleBtn" class="btn btn-primary" onclick="toggleArchView()" style="display:{toggle_display}; align-items:center; gap:6px; font-weight:600; padding:6px 12px; background:linear-gradient(135deg, #2563eb, #3b82f6); color:white; border-radius:6px; cursor:pointer;">
+                🔄 Switch to Baseline Communities
+            </button>
             <div class="search-box">
                 <input type="text" class="search-input" id="nodeSearch" placeholder="Search module or hub..." onkeydown="if(event.key==='Enter') searchNode(this.value)">
             </div>
             <select class="filter-select" id="archFilter" onchange="filterArch(this.value)">
-                <option value="all">All Components ({total_nodes})</option>
-                <option value="modules">Modules Only ({modules_count})</option>
-                <option value="hubs">Global Hubs Only ({hubs_count})</option>
+                <option value="all">All Components ({agglom_pack['total_nodes']})</option>
+                <option value="modules">Modules Only ({agglom_pack['modules_count']})</option>
+                <option value="hubs">Global Hubs Only ({agglom_pack['hubs_count']})</option>
             </select>
             <button class="btn btn-paper" id="paperBtn" onclick="togglePaperMode()">📄 Paper Mode (White)</button>
             <button class="btn btn-guide" onclick="toggleGuide()">ℹ️ Guide & Reference</button>
@@ -4477,8 +4630,13 @@ class TopologyVisualizer:
     </div>
 
     <script>
-        const allNodes = {nodes_json};
-        const allEdges = {edges_json};
+        const agglomPack = {agglom_pack_json};
+        const baselinePack = {baseline_pack_json};
+        const hasBaseline = {has_baseline_json};
+        let isAgglomerated = true;
+        let currentPack = agglomPack;
+        let allNodes = currentPack.nodes;
+        let allEdges = currentPack.edges;
 
         const nodesDataSet = new vis.DataSet(allNodes);
         const edgesDataSet = new vis.DataSet(allEdges);
@@ -4525,6 +4683,60 @@ class TopologyVisualizer:
                 bar.classList.add('hidden');
             }}
         }}, 2500);
+
+        function toggleArchView() {{
+            if (!hasBaseline || !baselinePack) return;
+            isAgglomerated = !isAgglomerated;
+            currentPack = isAgglomerated ? agglomPack : baselinePack;
+            allNodes = currentPack.nodes;
+            allEdges = currentPack.edges;
+
+            // Update badge & button
+            const badge = document.getElementById('archBadge');
+            const btn = document.getElementById('archToggleBtn');
+            if (isAgglomerated) {{
+                if (badge) {{
+                    badge.innerText = 'Agglomerated Clusters';
+                    badge.style.background = '#2563eb';
+                }}
+                if (btn) btn.innerHTML = '🔄 Switch to Baseline Communities';
+            }} else {{
+                if (badge) {{
+                    badge.innerText = 'Baseline Communities';
+                    badge.style.background = '#059669';
+                }}
+                if (btn) btn.innerHTML = '🔄 Switch to Agglomerated Clusters';
+            }}
+
+            // Update header count badges
+            document.getElementById('modCountBadge').innerText = 'Modules (■): ' + currentPack.modules_count;
+            document.getElementById('hubCountBadge').innerText = 'Global Hubs (★): ' + currentPack.hubs_count;
+            document.getElementById('bridgeCountBadge').innerText = 'Cross-Module Bridges: ' + currentPack.total_edges;
+
+            // Update filter dropdown options
+            const filterEl = document.getElementById('archFilter');
+            filterEl.options[0].text = `All Components (${{currentPack.total_nodes}})`;
+            filterEl.options[1].text = `Modules Only (${{currentPack.modules_count}})`;
+            filterEl.options[2].text = `Global Hubs Only (${{currentPack.hubs_count}})`;
+            filterEl.value = 'all';
+
+            // Clear and reload Vis.js datasets
+            nodesDataSet.clear();
+            nodesDataSet.add(allNodes);
+            edgesDataSet.clear();
+            edgesDataSet.add(allEdges);
+
+            // Re-apply paper mode styling if active
+            if (paperMode) {{
+                const edgeColor = 'rgba(239, 68, 68, 0.85)';
+                const fontColor = '#0f172a';
+                nodesDataSet.update(allNodes.map(n => ({{ id: n.id, font: {{ color: fontColor, size: 12, face: 'Inter, sans-serif' }} }})));
+                edgesDataSet.update(allEdges.map(e => ({{ id: e.id, color: edgeColor }})));
+            }}
+
+            closeInspector();
+            network.fit({{ animation: {{ duration: 500 }} }});
+        }}
 
         function filterArch(val) {{
             let filteredNodes;
