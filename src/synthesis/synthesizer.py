@@ -4,9 +4,12 @@ import subprocess
 import shutil
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from datetime import datetime
 from collections import Counter, defaultdict
+
+import numpy as np
+from sklearn.cluster import AgglomerativeClustering
 
 from src.agents.synthesis_agents import (
     OrphanContext,
@@ -16,7 +19,76 @@ from src.agents.synthesis_agents import (
     last_llm_responses
 )
 from src.synthesis import prompts as synth_prompts
+from src.topology.resolver import TargetResolver
 
+
+def cluster_enum_candidates(
+    enum_nodes: List[str],
+    concept_embeddings: Dict[str, np.ndarray],
+    config: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """
+    Groups orphan and low-density nodes into high-cohesion semantic clusters
+    using pre-computed concept vectors. Discards isolated terms and weak clusters.
+    """
+    enum_cfg = config.get('synthesis', {}).get('enum_clustering', {})
+    min_cluster_size = enum_cfg.get('min_cluster_size', 2)
+    dist_threshold = enum_cfg.get('distance_threshold', 0.48)
+    min_cohesion = enum_cfg.get('min_cohesion_score', 0.55)
+
+    valid_terms = []
+    vector_list = []
+    for term in enum_nodes:
+        clean_key = str(term).lower().strip()
+        if clean_key in concept_embeddings:
+            valid_terms.append(str(term).strip())
+            vector_list.append(concept_embeddings[clean_key])
+
+    if len(valid_terms) < min_cluster_size:
+        return []
+
+    X = np.vstack(vector_list)
+
+    clustering = AgglomerativeClustering(
+        n_clusters=None,
+        distance_threshold=dist_threshold,
+        metric="cosine",
+        linkage="average"
+    )
+    labels = clustering.fit_predict(X)
+
+    clusters_by_id = defaultdict(lambda: {"terms": [], "vectors": []})
+    for term, vec, lbl in zip(valid_terms, X, labels):
+        clusters_by_id[lbl]["terms"].append(term)
+        clusters_by_id[lbl]["vectors"].append(vec)
+
+    strong_clusters = []
+    for c_id, data in clusters_by_id.items():
+        terms = data["terms"]
+        if len(terms) < min_cluster_size:
+            continue
+
+        vecs = np.array(data["vectors"])
+        centroid = np.mean(vecs, axis=0)
+        norm = np.linalg.norm(centroid)
+        if norm > 0:
+            centroid = centroid / norm
+
+        sims = np.dot(vecs, centroid)
+        avg_cohesion = float(np.mean(sims))
+
+        if avg_cohesion >= min_cohesion:
+            prototypical_idx = int(np.argmax(sims))
+            strong_clusters.append({
+                "cluster_id": int(c_id),
+                "suggested_category": terms[prototypical_idx],
+                "cohesion_score": round(avg_cohesion, 3),
+                "member_count": len(terms),
+                "terms": terms
+            })
+
+    strong_clusters.sort(key=lambda c: (c["member_count"], c["cohesion_score"]), reverse=True)
+    return strong_clusters
 
 
 def clean_python_code(code: str) -> str:
@@ -49,7 +121,7 @@ def clean_python_code(code: str) -> str:
                 return f"{indent}{clean_var}{rest}"
         return line
 
-    code = '\n'.join(fix_line(l) for l in code.splitlines())
+    code = '\n'.join(fix_line(line_str) for line_str in code.splitlines())
     return code.strip()
 
 class SynthesisPipeline:
@@ -138,7 +210,7 @@ class SynthesisPipeline:
                         content = text_parts[0].content
                         if "```" in content:
                             lines = content.splitlines()
-                            cleaned = [l for l in lines if not l.strip().startswith("```")]
+                            cleaned = [line for line in lines if not line.strip().startswith("```")]
                             content = "\n".join(cleaned)
                         return content.strip()
             if exception:
@@ -181,38 +253,101 @@ class SynthesisPipeline:
         all_enum_nodes = targets_data.get("enum_nodes", [])
         active_agent = leiden_schema_agent
         
-        # Phase 1: Orphan & Low-Density Node Aggregation (Enums)
-        print(f"   -> [{path_label}] Phase 1: Orphan & Low-Density Node Aggregation (Enums)...")
-        print(f"      -> Total Enum Nodes: {len(all_enum_nodes)}")
+        # Phase 1: Semantic Enum Clustering & Synthesis
+        print(f"   -> [{path_label}] Phase 1: Semantic Enum Clustering & Synthesis...")
+        print(f"      -> Total Raw Enum Candidates: {len(all_enum_nodes)}")
         global_enums_code = ""
-        
+
+        enum_clustering_cfg = self.config.get('synthesis', {}).get('enum_clustering', {})
+        clustering_enabled = enum_clustering_cfg.get('enabled', True)
+
         if all_enum_nodes:
-            orphan_ctx = OrphanContext(master_themes=master_themes)
-            payload = json.dumps(all_enum_nodes)
-            save_payload_file("phase1_enums_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.ORPHAN_SYNTHESIS_SYSTEM_PROMPT}\n\n=== SYSTEM CONTEXT ===\nMaster Themes Context: {json.dumps(master_themes)}\n\n=== USER PAYLOAD ===\n{payload}")
-            last_llm_responses.set([])
-            from pydantic_ai import capture_run_messages
-            with capture_run_messages() as messages:
+            if clustering_enabled:
+                ref_cfg = self.config.get('refinement', {})
+                model_name = ref_cfg.get('embedding_model', 'all-MiniLM-L6-v2')
+                cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+
+                concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
+                    all_enum_nodes,
+                    cache_dir=cache_dir,
+                    model_name=model_name
+                )
+
+                qualified_clusters = cluster_enum_candidates(all_enum_nodes, concept_embeddings, self.config)
+                retained_terms = sum(c["member_count"] for c in qualified_clusters)
+                discarded_terms = len(all_enum_nodes) - retained_terms
+
+                print(f"      -> Qualified Strong Clusters: {len(qualified_clusters)} ({retained_terms} concepts)")
+                print(f"      -> Filtered Outliers / Noise Discarded: {discarded_terms} concepts")
+
+                # Save cluster diagnostics for transparency
+                clusters_audit_file = log_dir / f"enum_clusters_{path_type}.json"
                 try:
-                    result = orphan_agent.run_sync(payload, deps=orphan_ctx)
-                    global_enums_code = clean_python_code(result.output.source_code)
-                except Exception as e:
-                    malformed_text = extract_malformed_text(messages, e)
-                    print(f"      [Warning] Initial enum generation failed for {path_type}. Running Schema Reformat Agent...")
-                    reformat_prompt = (
-                        f"Original Enum Generation Task payload was:\n{payload}\n\n"
-                        f"The malformed output from the failed attempts was:\n{malformed_text}\n\n"
-                        f"The parsing validation error that occurred was:\n{str(e)}\n\n"
-                        f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
-                        f"Set module_name to 'enums' and source_code to pure Python Enum definitions."
-                    )
+                    with open(clusters_audit_file, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "total_raw_nodes": len(all_enum_nodes),
+                            "retained_terms_count": retained_terms,
+                            "discarded_noise_count": discarded_terms,
+                            "clusters_count": len(qualified_clusters),
+                            "clusters": qualified_clusters
+                        }, f, indent=2)
+                except Exception as err:
+                    log_error(f"[Synthesis {path_type}] Error saving enum clusters audit: {err}")
+
+                if qualified_clusters:
+                    max_clusters_per_batch = enum_clustering_cfg.get('max_clusters_per_batch', 25)
+                    selected_clusters = qualified_clusters[:max_clusters_per_batch]
+                    if len(qualified_clusters) > max_clusters_per_batch:
+                        print(f"      -> Selected Top {max_clusters_per_batch} clusters for primary enum synthesis")
+
+                    payload_data = {
+                        "instructions": "Synthesize standardized Python Enum and Literal classes for each strongly grouped semantic cluster.",
+                        "candidate_clusters": [
+                            {
+                                "cluster_id": c["cluster_id"],
+                                "category_hint": c["suggested_category"],
+                                "cohesion_score": c["cohesion_score"],
+                                "terms": c["terms"]
+                            }
+                            for c in selected_clusters
+                        ]
+                    }
+                    payload = json.dumps(payload_data, indent=2)
+                else:
+                    payload = ""
+            else:
+                # Legacy unclustered flat list
+                payload = json.dumps(all_enum_nodes)
+
+            if payload:
+                orphan_ctx = OrphanContext(master_themes=master_themes)
+                save_payload_file("phase1_enums_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.ORPHAN_SYNTHESIS_SYSTEM_PROMPT}\n\n=== SYSTEM CONTEXT ===\nMaster Themes Context: {json.dumps(master_themes)}\n\n=== USER PAYLOAD ===\n{payload}")
+                last_llm_responses.set([])
+                from pydantic_ai import capture_run_messages
+                with capture_run_messages() as messages:
                     try:
-                        ref_res = schema_reformat_agent.run_sync(reformat_prompt)
-                        global_enums_code = clean_python_code(ref_res.output.source_code)
-                        print(f"      -> Reformat successful for enums ({path_type})!")
-                    except Exception as ref_err:
-                        log_error(f"[Synthesis {path_type}] Error generating enums: {ref_err}")
-                        global_enums_code = "# Error generating enums"
+                        result = orphan_agent.run_sync(payload, deps=orphan_ctx)
+                        global_enums_code = clean_python_code(result.output.source_code)
+                    except Exception as e:
+                        malformed_text = extract_malformed_text(messages, e)
+                        print(f"      [Warning] Initial enum generation failed for {path_type}. Running Schema Reformat Agent...")
+                        reformat_prompt = (
+                            f"Original Enum Generation Task payload was:\n{payload}\n\n"
+                            f"The malformed output from the failed attempts was:\n{malformed_text}\n\n"
+                            f"The parsing validation error that occurred was:\n{str(e)}\n\n"
+                            f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
+                            f"Set module_name to 'enums' and source_code to pure Python Enum definitions."
+                        )
+                        try:
+                            ref_res = schema_reformat_agent.run_sync(reformat_prompt)
+                            global_enums_code = clean_python_code(ref_res.output.source_code)
+                            print(f"      -> Reformat successful for enums ({path_type})!")
+                        except Exception as ref_err:
+                            log_error(f"[Synthesis {path_type}] Error generating enums: {ref_err}")
+                            global_enums_code = "# Error generating enums"
+            else:
+                print("      -> No candidate terms passed cohesion thresholds. Skipping enum generation.")
+                global_enums_code = "# No strongly grouped enums qualified"
 
             if run_norm and global_enums_code and not global_enums_code.startswith("# Error"):
                 with open(norm_dir / "enums.py", "w") as f:
@@ -645,14 +780,16 @@ class SynthesisPipeline:
 
         # Finalization
         if run_norm:
-            with open(norm_dir / "__init__.py", "w") as f: f.write("# Normalized Schemas")
+            with open(norm_dir / "__init__.py", "w") as f:
+                f.write("# Normalized Schemas")
             try:
                 subprocess.run(["ruff", "format", str(norm_dir)], capture_output=True, text=True, check=False)
             except Exception as e:
                 log_error(f"[Synthesis {path_type}] Error running ruff on norm: {e}")
                 
         if run_raw:
-            with open(raw_dir / "__init__.py", "w") as f: f.write("# Raw Schemas")
+            with open(raw_dir / "__init__.py", "w") as f:
+                f.write("# Raw Schemas")
             try:
                 subprocess.run(["ruff", "format", str(raw_dir)], capture_output=True, text=True, check=False)
             except Exception as e:

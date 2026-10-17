@@ -1,8 +1,17 @@
 ORPHAN_SYNTHESIS_SYSTEM_PROMPT = """You are an Ontological Structuring Agent.
-Analyze the provided isolated terms and group them into logical Python `Enum` and `Literal` classes to standardize them as variable options.
-Consolidate terms that mean the same thing into a single Enum class if possible. Do not force associations and discard any words that are unable to be grouped.
-All Enum member names MUST be valid Python identifiers (e.g. `UPPER_SNAKE_CASE` or `snake_case` with only alphanumeric characters and underscores—no spaces, commas, or punctuation in variable names).
-Output the raw Python string to `source_code` and name the module `enums`."""
+Analyze the provided domain terms and synthesize a cohesive suite of reusable, standardized Python `Enum` and `Literal` classes.
+
+CRITICAL MODELING & ABSTRACTION RULES:
+1. **Lean into Slight Semantic Abstraction:** Do NOT mechanically transcribe hyper-specific, anecdotal, or idiosyncratic phrases verbatim (e.g., avoid creating overly specific options like `FOUR_HOURS_OF_SLEEP_IN_FORTY_EIGHT_HOURS` or `TAKING_MEDS_WITH_MY_PRISTIQ`). Instead, abstract them into canonical, generalizable domain concepts (e.g., `ACUTE_SLEEP_DEPRIVATION`, `MORNING_ADMINISTRATION`) that represent meaningful, reusable categories across general text.
+2. **Consolidate & Normalize Synonyms:** Consolidate terms sharing core conceptual roots or semantic intent into a single standardized Enum member or Literal option.
+3. **Filter Out Ungeneralizable Outliers:** Do not force artificial associations. If a term is an isolated conversational fragment, temporal trivia, or too idiosyncratic to represent a reusable discrete variable, discard it.
+4. **Valid Python Identifiers & Typing:**
+   - Define Enums inheriting from `(str, Enum)` for seamless serialization (e.g., `class SymptomSeverity(str, Enum):`).
+   - Class names MUST use `PascalCase`.
+   - All Enum member names MUST be valid Python identifiers in `UPPER_SNAKE_CASE` (alphanumeric and underscores only—no spaces, hyphens, or punctuation).
+   - Use clean, human-readable string values for members.
+5. **Self-Contained & Valid Output:** Output solely valid, executable Python code with all necessary imports (`from enum import Enum`, `from typing import Literal`). Do not wrap output in markdown code fences or conversational commentary.
+6. Set `module_name` to 'enums' and provide the raw Python code in `source_code`."""
 
 SCHEMA_SYNTHESIS_PROMPT = """You are an Expert Domain Modeling and Ontological Architect.
 
@@ -16,7 +25,7 @@ INPUT STRUCTURE:
 CRITICAL MODELING RULES:
 1. **Synthesize, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative (e.g., `ClinicalAssessment`, `TreatmentPlan`, `SomaticSymptomTracker`, `EducationalAccommodation`), and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
 2. **Model Real World Attributes:** Derive concrete attributes and fields directly from the details in `thematic_observations` (e.g., dosage, duration, severity, diagnostic status, coping responses).
-3. **Use Enums/Literals:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings.
+3. **Use Enums/Literals with Semantic Abstraction:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings. Lean into slight semantic abstractions (e.g., canonical severity levels, standardized coping mechanisms, clinical modalities) rather than verbatim episodic snippets that lack generalizability.
 4. **Field Descriptions & Optionality:** Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the clinical or domain meaning derived from `thematic_observations` (e.g., `dosage: Optional[str] = Field(default=None, description="Prescribed medication dosage and frequency")`).
 5. **Self-Contained & Valid:** Output solely valid, executable Python code with all necessary imports (`from pydantic import BaseModel, Field`, `from typing import Optional, List, Dict, Union`, `from enum import Enum`). Do not wrap output in markdown code fences or conversational commentary.
 6. **Strictly Isolated Domain:** This cluster is an independent, self-contained semantic module. Model only the concepts and workflows substantiated by the provided data."""

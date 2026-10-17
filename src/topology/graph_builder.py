@@ -7,7 +7,7 @@ from scipy import stats
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from collections import defaultdict
-from src.topology.schemas import NodeMetrics, CommunityPartition, StructuralCluster, ThemeInheritance, TopologyResult, HubPartition
+from src.topology.schemas import NodeMetrics, CommunityPartition, ThemeInheritance, TopologyResult, HubPartition
 from src.topology.resolver import TargetResolver
 from src.topology.visualizer import TopologyVisualizer
 from src.topology.tabular_exporter import TopologyTabularExporter
@@ -90,7 +90,8 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
     """
     vitality = {}
     if len(ug) < 3:
-        for n in ug.nodes(): vitality[n] = 0.0
+        for n in ug.nodes():
+            vitality[n] = 0.0
         return vitality
         
     node_edge_themes = defaultdict(list)
@@ -112,7 +113,8 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
             primary_theme[node] = 'Unassigned'
         else:
             counts = defaultdict(int)
-            for th in themes: counts[th] += 1
+            for th in themes:
+                counts[th] += 1
             primary_theme[node] = max(counts.items(), key=lambda x: x[1])[0]
             
     theme_groups = defaultdict(list)
@@ -121,7 +123,8 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
         
     comms = [nodes for nodes in theme_groups.values() if len(nodes) > 0]
     if len(comms) < 2:
-        for n in ug.nodes(): vitality[n] = 0.0
+        for n in ug.nodes():
+            vitality[n] = 0.0
         return vitality
         
     try:
@@ -137,7 +140,8 @@ def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -
             else:
                 vitality[n] = 0.0
     except Exception:
-        for n in ug.nodes(): vitality[n] = 0.0
+        for n in ug.nodes():
+            vitality[n] = 0.0
         
     return vitality
 
@@ -228,8 +232,10 @@ class TopologyPipeline:
             obj = t.get('object')
             theme = t.get('theme_association')
             if theme and theme != "Other":
-                if subj: theme_sets[theme].add(str(subj).lower().strip())
-                if obj: theme_sets[theme].add(str(obj).lower().strip())
+                if subj:
+                    theme_sets[theme].add(str(subj).lower().strip())
+                if obj:
+                    theme_sets[theme].add(str(obj).lower().strip())
 
         # ---------------------------------------------------------------------
         # STAGE 3.1: Raw Overall Graph Evaluation, Modularity & Hub Identification
@@ -385,6 +391,8 @@ class TopologyPipeline:
             try:
                 node_list = list(ug.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                g_int = nx.relabel_nodes(ug, mapping)
                 weights_param = "weight" if self.enable_weighted_leiden else None
                 raw_coms = algorithms.leiden(g_int, weights=weights_param)
                 leiden_raw_comms = [[rev_mapping[x] for x in c] for c in raw_coms.communities]
@@ -398,8 +406,10 @@ class TopologyPipeline:
         for t in refined_triplets:
             th = t.get('theme_association', 'Unassigned')
             s, o = t.get('subject'), t.get('object')
-            if s: theme_groups[th].append(str(s).lower().strip())
-            if o: theme_groups[th].append(str(o).lower().strip())
+            if s:
+                theme_groups[th].append(str(s).lower().strip())
+            if o:
+                theme_groups[th].append(str(o).lower().strip())
         theme_comms = [list(set(nodes).intersection(set(ug.nodes()))) for nodes in theme_groups.values() if len(nodes) > 0]
         theme_comms = [c for c in theme_comms if len(c) > 0]
         theme_q = 0.0
@@ -493,9 +503,12 @@ class TopologyPipeline:
             is_boundary_blurring = self.enable_mod_vitality and (node in neg_mod_v_nodes)
 
             reasons = []
-            if is_thematic_bridge: reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {self.min_hub_degree})")
-            if is_workflow_chokepoint: reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > 0.02)")
-            if is_boundary_blurring: reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < -0.005)")
+            if is_thematic_bridge:
+                reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {self.min_hub_degree})")
+            if is_workflow_chokepoint:
+                reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > 0.02)")
+            if is_boundary_blurring:
+                reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < -0.005)")
 
             is_hub = (is_thematic_bridge or is_workflow_chokepoint or is_boundary_blurring)
             if is_hub:
@@ -713,6 +726,8 @@ class TopologyPipeline:
             try:
                 node_list = list(cluster_ug.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
+                rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                g_int = nx.relabel_nodes(cluster_ug, mapping)
                 weights_param = "weight" if self.enable_weighted_leiden else None
                 coms = algorithms.leiden(g_int, weights=weights_param)
                 comms_list = [[rev_mapping[x] for x in c] for c in coms.communities]
@@ -770,7 +785,6 @@ class TopologyPipeline:
             json.dump(core_diagnostics, f, indent=2)
 
         # 6. Separation Impact Report
-        raw_scale = raw_diagnostics["graph_scale"]
         raw_deg = raw_diagnostics["degree_distribution"]["total_degree"]
         raw_comp = raw_diagnostics["component_structure"]
         raw_mod = raw_diagnostics["baseline_modularity"]["leiden_raw_modularity"]
@@ -844,7 +858,8 @@ class TopologyPipeline:
         # Initial Core Community Map
         comm_map = {}
         for c in communities:
-            for n in c.nodes: comm_map[n] = c.community_id
+            for n in c.nodes:
+                comm_map[n] = c.community_id
 
         # Baseline Core Modularity Q (computed on pure dense core)
         final_q = 0.0
@@ -1350,6 +1365,7 @@ class TopologyPipeline:
                 node_list = list(ug_hubs.nodes())
                 mapping = {n: idx for idx, n in enumerate(node_list)}
                 rev_mapping = {idx: n for idx, n in enumerate(node_list)}
+                int_ug_hubs = nx.relabel_nodes(ug_hubs, mapping)
                 weights_param = "weight" if self.enable_weighted_leiden else None
                 coms = algorithms.leiden(int_ug_hubs, weights=weights_param)
                 for i, c_nodes in enumerate(coms.communities):

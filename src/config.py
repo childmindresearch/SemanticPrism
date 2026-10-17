@@ -6,7 +6,6 @@ Loads modular configuration files from the `configs/` directory.
 To modify system behavior, please edit the respective `.yaml` files in `configs/`.
 """
 
-import os
 import yaml
 from pathlib import Path
 from dotenv import load_dotenv

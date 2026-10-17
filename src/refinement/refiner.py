@@ -22,7 +22,7 @@ except Exception:
 try:
     from sklearn.preprocessing import normalize
     from sklearn.cluster import AgglomerativeClustering
-    from sklearn.metrics.pairwise import cosine_distances, cosine_similarity
+    from sklearn.metrics.pairwise import cosine_distances
     from sklearn.manifold import trustworthiness
 except Exception:
     normalize = None
@@ -51,10 +51,10 @@ try:
 except Exception:
     plt = None
 
-from src.agents.refinement_agents import lift_agent
-from src.agents.vram_manager import purge_vram
-from src.extraction.schemas import RawTriple  # Stage 1 schema
-from src.refinement import prompts
+from src.agents.refinement_agents import lift_agent  # noqa: E402
+from src.agents.vram_manager import purge_vram  # noqa: E402
+from src.extraction.schemas import RawTriple  # Stage 1 schema  # noqa: E402
+from src.refinement import prompts  # noqa: E402
 
 class PipelineRunContext:
     """Stores global state safely for the pipeline."""

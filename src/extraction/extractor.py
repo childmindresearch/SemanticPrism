@@ -67,7 +67,15 @@ def load_input_documents() -> List[dict]:
             
     else:
         # Default: Directory of txt files
-        input_dir = Path(settings.get('directories', {}).get('inputs', 'inputs/testdocs'))
+        dir_cfg = ingestion_cfg.get('directory', {})
+        if isinstance(dir_cfg, str):
+            input_dir_val = dir_cfg
+        elif isinstance(dir_cfg, dict):
+            input_dir_val = dir_cfg.get('path', dir_cfg.get('inputs', 'inputs/testdocs'))
+        else:
+            input_dir_val = settings.get('directories', {}).get('inputs', 'inputs/testdocs')
+
+        input_dir = Path(input_dir_val)
         print(f"Loading input documents from Directory: {input_dir}")
         input_dir.mkdir(parents=True, exist_ok=True)
         txt_files = sorted(list(input_dir.glob("*.txt")))
@@ -198,7 +206,7 @@ class ExtractionPipeline:
                     content = text_parts[0].content
                     if "```" in content:
                         lines = content.splitlines()
-                        cleaned = [l for l in lines if not l.strip().startswith("```")]
+                        cleaned = [line for line in lines if not line.strip().startswith("```")]
                         content = "\n".join(cleaned)
                     return content.strip()
                     

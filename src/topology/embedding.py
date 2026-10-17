@@ -20,12 +20,10 @@ Provides:
 """
 
 import json
-import math
-import sys
 import re
 from pathlib import Path
 from collections import defaultdict
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, Optional
 
 import numpy as np
 from sklearn.decomposition import PCA
@@ -416,7 +414,7 @@ class ClusterEmbeddingVisualizer:
             elif status_badge == "Integrated Sub-Domain":
                 synth_guidance = f"🔗 Model {nucleus_str} with explicit typed references or foreign keys to {neighbors[0]['target_label']} models."
             else:
-                synth_guidance = f"🔍 Keep fields loosely typed (`Optional[str] = None`). Discard low-scoring refugee concepts during prompt generation."
+                synth_guidance = "🔍 Keep fields loosely typed (`Optional[str] = None`). Discard low-scoring refugee concepts during prompt generation."
 
             src_rec["health_scorecard"] = {
                 "health_score": health_score,

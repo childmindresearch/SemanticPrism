@@ -18,6 +18,21 @@ synthesis:
   # Use 2 for small test datasets; 16+ for large production corpora.
   min_cluster_size: 12
 
+  # =========================================================================
+  # ENUM SEMANTIC CLUSTERING & COHESION FILTERING
+  # =========================================================================
+  # Controls vector-based grouping and cohesion filtering of orphan/low-density nodes
+  # before passing candidate terms to Enum synthesis (Phase 1).
+  enum_clustering:
+    enabled: true
+    # Maximum cosine distance between cluster members (0.48 distance ~ 0.52+ cosine similarity)
+    distance_threshold: 0.48
+    # Minimum cluster size to form a qualified Enum class (singletons discarded as noise)
+    min_cluster_size: 2
+    # Minimum average cosine similarity to cluster centroid to qualify as a strong cluster
+    min_cohesion_score: 0.55
+    # Maximum candidate clusters per LLM payload batch to prevent context window overflow
+    max_clusters_per_batch: 25
 
   # Maximum number of triplets sent to the LLM per schema generation target.
   # Subsets exceeding this cap are pruned based on PageRank and intra-community status.
@@ -43,12 +58,6 @@ synthesis:
 
   # Number of prominent, specific domain terms to provide in the payload (default: 12)
   top_domain_terms_count: 12
-
-  # Maximum concurrent LLM API calls during synthesis when use_async is enabled
-  max_async_calls: 1
-
-  # LLM context window token cap for Phase 3 schema consolidation
-  context_window_cap: 16384
 
   # Stop words and generic vocabulary filtered out when deriving top domain terms
   generic_exclusions:

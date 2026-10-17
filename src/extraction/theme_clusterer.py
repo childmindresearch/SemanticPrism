@@ -23,15 +23,14 @@ import json
 import math
 import hashlib
 from pathlib import Path
-from collections import defaultdict, Counter
-from typing import Dict, Any, List, Tuple, Optional
+from collections import defaultdict
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 import networkx as nx
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity
 import umap
 from cdlib import algorithms
 from sentence_transformers import SentenceTransformer
@@ -1589,7 +1588,6 @@ class ThemeClusteringEngine:
             formatted_lines = []
             for r_idx, t in enumerate(selected_th):
                 rank = t.get("rank_in_cluster", r_idx + 1)
-                sim = t.get("similarity_to_centroid", 0.0)
                 title = str(t.get("title", "")).strip()
                 desc = str(t.get("description", "")).strip()
                 reason = str(t.get("reasoning", "")).strip()

@@ -1,19 +1,12 @@
 import json
 import html
-import math
-import shutil
 from pathlib import Path
-from typing import Dict, Any, List, Tuple, Optional, Set
-from collections import defaultdict, Counter
+from typing import Dict, Any, List, Tuple, Optional
+from collections import Counter
 import networkx as nx
-import numpy as np
-from pyvis.network import Network
 
 from src.topology.schemas import (
     NodeMetrics,
-    CommunityPartition,
-    StructuralCluster,
-    ThemeInheritance,
     TopologyResult,
     HubPartition
 )
@@ -2274,7 +2267,6 @@ class TopologyVisualizer:
         output_path: Path
     ):
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        hubs_set = set(global_hubs)
         hub_dg = dg.subgraph(global_hubs).copy() if dg else nx.DiGraph()
         hub_ug = hub_dg.to_undirected()
 
@@ -3127,6 +3119,7 @@ class TopologyVisualizer:
                 f"Role: {'Global Hub' if is_hub else 'Entity'}<br>"
                 f"Partition: {cluster_name if c_id >= 0 else 'Unassigned'}<br>"
                 f"Total Degree: {deg} (In: {dg.in_degree(node)}, Out: {dg.out_degree(node)})<br>"
+                f"Degree Centrality: {cent:.4f}<br>"
                 f"P_i: {p_i:.4f}<br>"
                 f"Betweenness: {betw:.4f}"
             )

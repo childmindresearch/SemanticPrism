@@ -231,7 +231,7 @@ class Galaxy3DVisualizer:
                         community_theme_counts[node_to_cid[s]][th] += 1
                     elif o in node_to_cid:
                         community_theme_counts[node_to_cid[o]][th] += 1
-            except Exception as e:
+            except Exception:
                 pass
 
         # 3. Collect Concepts and Vectors
@@ -552,12 +552,6 @@ class Galaxy3DVisualizer:
 
         meta = galaxy_data["meta"]
         comms = galaxy_data["communities"]
-
-        # Community select options for UI dropdown
-        comm_options = "".join([
-            f'<option value="{c["community_id"]}">#{c["community_id"]}: {c["headline_theme"]} ({c["total_concepts"]})</option>'
-            for c in comms
-        ])
 
         html_template = f"""<!DOCTYPE html>
 <html lang="en">

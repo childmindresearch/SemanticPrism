@@ -4,7 +4,7 @@ import csv
 import re
 from pathlib import Path
 from collections import defaultdict, Counter
-from typing import Dict, Any, List, Tuple, Optional, Set
+from typing import Dict, Any, List, Tuple, Optional
 
 import numpy as np
 

@@ -10,12 +10,17 @@ pipeline:
   resume_mode: "skip" # Options: "skip" (resume existing stage runs) or "overwrite" (clear stage outputs)
 
 directories:
-  inputs: "inputs/testdocs"
-  outputs: "outputs"
+  outputs: "outputs"  # Root directory for pipeline stage artifacts, logs, and generated schemas
 
 ingestion:
-  source_type: "parquet"   # Options: "directory" (text files) or "parquet" (dataset file)
+  source_type: "parquet"   # Ingestion mode: "directory" (.txt files) or "parquet" (tabular dataset)
+
+  # Directory ingestion parameters (used when source_type is "directory")
+  directory:
+    path: "inputs/testdocs"  # Folder containing .txt files (filename is used as document ID)
+
+  # Parquet ingestion parameters (used when source_type is "parquet")
   parquet:
-    filename: "inputs/testdocs.parquet"
-    id_field: "unique_val"
-    text_field: "report"
+    filename: "inputs/testdocs.parquet"  # Path to the input .parquet dataset file
+    id_field: "unique_val"               # Column containing unique document IDs
+    text_field: "report"                 # Column containing the raw document text
