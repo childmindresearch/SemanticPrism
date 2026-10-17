@@ -105,7 +105,7 @@ Your objective is to comprehensively extract all factual assertions, clinical fi
   "triples": [
     {
       "subject": "patient",
-      "predicate": "was diagnosed with",
+      "predicate": "meets diagnostic criteria for",
       "object": "Separation Anxiety Disorder",
       "source_quote": "Patient meets diagnostic criteria for Attention-Deficit/Hyperactivity Disorder, Combined Presentation, and Separation Anxiety Disorder.",
       "theme_association": "Clinical Diagnoses"

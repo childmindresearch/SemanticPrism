@@ -75,6 +75,7 @@ pydantic_model = LoggingModel(resolved_model)
 synthesis_cap = settings.get('synthesis', {}).get('context_window_cap', 16384)
 model_settings = ModelSettings(
     # Avoid setting max_tokens for Ollama to prevent pydantic-ai from sending max_completion_tokens, which Ollama rejects
+    temperature=llm_config.get('temperature', 0.0),
     extra_body={"options": {"num_ctx": synthesis_cap}}
 )
 

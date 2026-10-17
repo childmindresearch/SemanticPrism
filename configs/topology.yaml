@@ -41,6 +41,13 @@ topology:
     # - Decrease (e.g. 0.90): Extract MORE hubs (top 10% workflow chokepoints).
     betweenness_percentile: 0.95
 
+    # Absolute shortest-path betweenness centrality score floor to qualify as a workflow chokepoint
+    min_betweenness_score: 0.02
+
+    # Modularity vitality thresholds (used when enable_modularity_vitality_pruning is true)
+    min_vitality_delta: -0.005             # Node removal must increase modularity Q by at least this amount (Delta Q < threshold)
+    min_vitality_degree: 3                 # Minimum graph degree required for vitality-based boundary blurring pruning
+
   # =========================================================================
   # COMMUNITY PATH CONFIGURATION (Leiden Modularity Optimization)
   # =========================================================================
@@ -59,6 +66,7 @@ topology:
     enable_weighted_leiden: true
     edge_weighting_mode: "hybrid"          # "frequency_only" or "hybrid" (combines frequency with cosine similarity)
     hybrid_semantic_alpha: 0.35            # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
+    min_cosine_floor: 0.1                  # Minimum floor for cosine similarity in hybrid edge weighting (mod = max(floor, cos_sim))
     
     # 3. Centroid-Driven Micro-Cluster Absorption
     enable_micro_cluster_absorption: true
@@ -114,6 +122,11 @@ topology:
 
     # Grounding Quality Safeguard
     min_fidelity_tier_1: 0.10    # Minimum average fidelity required to enter Tier 1
+
+    # Effective Degree Discount & Fallback Scoring Parameters
+    boundary_discount: 0.5       # Weight discount for cross-community boundary degree (eff_deg = deg_int + boundary_discount * deg_bound)
+    fallback_prototypicality: 0.30 # Default prototypicality cosine score when node embedding is absent
+    fallback_fidelity: 0.28      # Default contextual fidelity when node edge quotes are absent
 
     # Human Evaluation & Reporting Exports
     export_tier_csv: true        # Exports human-readable spreadsheet (community_architectural_tiers.csv)

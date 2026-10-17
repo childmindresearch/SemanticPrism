@@ -188,6 +188,14 @@ class ThemeClusteringEngine:
                 or 'title_desc_reasoning'
             )
 
+        # Resolve manifold graph and micro-cluster absorption parameters
+        self.manifold_edge_threshold = float(
+            ref_cfg.get('theme_manifold_edge_threshold', 0.35)
+        )
+        self.micro_cluster_ratio = float(
+            ref_cfg.get('theme_micro_cluster_ratio', 0.01)
+        )
+
         self._model = None
 
         # State cache for multi-phase orchestration
@@ -347,7 +355,7 @@ class ThemeClusteringEngine:
         for i in range(N):
             G.add_node(i)
 
-        edge_threshold = 0.35  # Cosine similarity lower-bound to enforce strict semantic grounding
+        edge_threshold = self.manifold_edge_threshold  # Cosine similarity lower-bound to enforce strict semantic grounding
         for i in range(N):
             for j_idx, dist in zip(indices[i][1:], distances[i][1:]):
                 sim = max(0.0, 1.0 - dist)
@@ -368,8 +376,8 @@ class ThemeClusteringEngine:
             print("   -> Sparse graph with 0 threshold-passing edges; treating each theme as its own community.")
             raw_communities = [[i] for i in range(N)]
 
-        # Micro-cluster absorption: Any community < 1% of N is merged into its nearest dominant centroid
-        min_cluster_size = max(1, min(5, int(N * 0.01))) if N >= 50 else 1
+        # Micro-cluster absorption: Any community below micro_cluster_ratio of N is merged into its nearest dominant centroid
+        min_cluster_size = max(1, min(5, int(N * self.micro_cluster_ratio))) if N >= 50 else 1
         major_raw_clusters = [list(c) for c in raw_communities if len(c) >= min_cluster_size]
         minor_raw_clusters = [list(c) for c in raw_communities if len(c) < min_cluster_size]
 

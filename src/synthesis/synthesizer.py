@@ -361,11 +361,16 @@ class SynthesisPipeline:
         print(f"      -> Target Composition: {len(targets)} qualified schema targets (global hubs routed to enums.py)")
 
         use_async = self.config.get('pipeline', {}).get('use_async', False)
-        max_async = self.config.get('synthesis', {}).get('max_async_calls', 1)
-        payload_mode = self.config.get('synthesis', {}).get('payload_values', 'raw_text')
-        max_sentences_per_target = self.config.get('synthesis', {}).get('max_sentences_per_target', 60)
-        top_domain_terms_count = self.config.get('synthesis', {}).get('top_domain_terms_count', 12)
-        min_sentence_length = self.config.get('synthesis', {}).get('min_sentence_length', 15)
+        synth_cfg = self.config.get('synthesis', {})
+        max_async = synth_cfg.get('max_async_calls', 1)
+        payload_mode = synth_cfg.get('payload_values', 'raw_text')
+        max_sentences_per_target = synth_cfg.get('max_sentences_per_target', 60)
+        top_domain_terms_count = synth_cfg.get('top_domain_terms_count', 12)
+        min_sentence_length = synth_cfg.get('min_sentence_length', 15)
+        domain_terms_idf_exponent = float(synth_cfg.get('domain_terms_idf_exponent', 1.5))
+        domain_terms_multi_word_boost = float(synth_cfg.get('domain_terms_multi_word_boost', 1.2))
+        observation_overlap_weight = float(synth_cfg.get('observation_overlap_weight', 0.25))
+        observation_overlap_max_cap = int(synth_cfg.get('observation_overlap_max_cap', 4))
 
         # Precompute global target counts to score community-specificity of terms (C-TF-IDF)
         global_target_counts = Counter()
@@ -401,8 +406,8 @@ class SynthesisPipeline:
                     continue
                 n_targets = global_target_counts.get(nk, 1)
                 deg = local_deg.get(nk, 0)
-                multi_word_boost = 1.2 if ' ' in nk else 1.0
-                score = ((deg + 1.0) / (n_targets ** 1.5)) * multi_word_boost
+                multi_word_boost = domain_terms_multi_word_boost if ' ' in nk else 1.0
+                score = ((deg + 1.0) / (n_targets ** domain_terms_idf_exponent)) * multi_word_boost
                 scored.append((score, deg, orig))
 
             scored.sort(key=lambda x: x[0], reverse=True)
@@ -455,7 +460,7 @@ class SynthesisPipeline:
                 avg_fid = sum(info['fidelities']) / len(info['fidelities'])
                 q_lower = q.lower()
                 node_overlap = sum(1 for n in target_nodes_norm if n in q_lower)
-                sentence_score = avg_fid * (1.0 + 0.25 * min(4, node_overlap))
+                sentence_score = avg_fid * (1.0 + observation_overlap_weight * min(observation_overlap_max_cap, node_overlap))
                 
                 # Format text item based on mode
                 if mode == "triples":

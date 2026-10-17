@@ -16,7 +16,8 @@ def load_json(filepath, required=True):
         return None
 
 def main():
-    print("=== SemanticPrism Stage 4: Synthesis Pipeline ===")
+    from src.agents.synthesis_agents import model_name as synth_model
+    print(f"=== SemanticPrism Stage 4: Synthesis Pipeline (Model: {synth_model}) ===")
     
     config = settings
 

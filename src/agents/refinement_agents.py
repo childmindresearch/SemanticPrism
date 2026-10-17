@@ -27,6 +27,7 @@ pydantic_model = f"ollama:{model_name}"
 refinement_cap = settings.get('refinement', {}).get('context_window_cap', 2048)
 model_settings = ModelSettings(
     max_tokens=refinement_cap,
+    temperature=llm_config.get('temperature', 0.0),
     extra_body={"options": {"num_ctx": refinement_cap}}
 )
 

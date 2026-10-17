@@ -54,7 +54,8 @@ def main():
         run_fidelity_only(pipeline, out_dir)
         return
 
-    print("=== SemanticPrism Stage 2: Refinement Pipeline (Vector Clustering & Taxonomic Lifting) ===")
+    from src.agents.refinement_agents import model_name as ref_model
+    print(f"=== SemanticPrism Stage 2: Refinement Pipeline (Model: {ref_model}) ===")
     resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
     print(f"Pipeline Resume Mode: {resume_mode}\n")
     

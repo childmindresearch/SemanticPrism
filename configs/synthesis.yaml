@@ -59,6 +59,16 @@ synthesis:
   # Number of prominent, specific domain terms to provide in the payload (default: 12)
   top_domain_terms_count: 8
 
+  # C-TF-IDF Domain Term Specificity Scoring Parameters
+  # score = ((deg + 1.0) / (n_targets ** domain_terms_idf_exponent)) * (domain_terms_multi_word_boost if ' ' in term else 1.0)
+  domain_terms_idf_exponent: 1.5           # Exponent penalizing terms appearing across multiple communities (C-TF-IDF specificity)
+  domain_terms_multi_word_boost: 1.2       # Multiplier boost for multi-word domain phrases over single words
+
+  # Thematic Observation Scoring Parameters
+  # sentence_score = avg_fid * (1.0 + observation_overlap_weight * min(observation_overlap_max_cap, node_overlap))
+  observation_overlap_weight: 0.25         # Weight multiplier per community entity mentioned in sentence quote
+  observation_overlap_max_cap: 4           # Maximum count cap on entity mentions contributing to sentence score bonus
+
   # Stop words and generic vocabulary filtered out when deriving top domain terms
   generic_exclusions:
     - person

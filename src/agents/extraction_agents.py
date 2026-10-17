@@ -35,6 +35,7 @@ def resolve_llm_config(sub_key: str) -> tuple[str, ModelSettings]:
     extraction_cap = stage_cfg.get('context_window_cap', 8192)
     model_settings = ModelSettings(
         max_tokens=extraction_cap,
+        temperature=llm_config.get('temperature', 0.0),
         extra_body={"options": {"num_ctx": extraction_cap}}
     )
     return pydantic_model, model_settings

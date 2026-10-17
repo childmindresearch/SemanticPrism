@@ -7,7 +7,7 @@
 
 llm:
   provider: "ollama"
-  model_name: "qwen2.5:7b"
+  model_name: "qwen2.5:14b"
   base_url: "http://127.0.0.1:11434/v1"
   temperature: 0.0
   manage_vram: true            # Purges model VRAM between stage transitions
@@ -16,14 +16,26 @@ llm:
 extraction:
   domain: "General Subjects"   # Context domain injected into extraction prompts
   max_async_calls: 2
-  theme_chunk_max_words: 3200
-  triple_chunk_max_words: 600
-  context_window_cap: 8192     # Max tokens per extraction prompt payload
+  theme_chunk_max_words: 2000
+  triple_chunk_max_words: 400
+  context_window_cap: 6000     # Max tokens per extraction prompt payload
+  # Stage-specific model override (optional)
+  # llm:
+  #   provider: "ollama"
+  #   model_name: "qwen2.5:14b"
+  #   base_url: "http://127.0.0.1:11434/v1"
+  #   temperature: 0.0
 
 # Stage 2 (Refinement) Token & Concurrency Parameters
 refinement:
   max_async_calls: 2
-  context_window_cap: 6000     # Max tokens per taxonomic lifting prompt payload
+  context_window_cap: 2000     # Max tokens per taxonomic lifting prompt payload
+  # Stage-specific model override (optional)
+  llm:
+    provider: "ollama"
+    model_name: "qwen2.5:14b"
+    base_url: "http://127.0.0.1:11434/v1"
+    temperature: 0.0
 
 # Stage 4 (Synthesis) Token & Concurrency Parameters
 synthesis:
@@ -32,6 +44,6 @@ synthesis:
   # Stage-specific model override (optional)
   llm:
     provider: "ollama"
-    model_name: "qwen2.5:7b"
+    model_name: "qwen2.5:14b"
     base_url: "http://127.0.0.1:11434/v1"
     temperature: 0.0

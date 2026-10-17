@@ -158,6 +158,9 @@ class TopologyPipeline:
         self.hub_p_thresh = self.hub_cfg.get('participation_threshold', 0.80)
         self.min_hub_degree = self.hub_cfg.get('min_hub_degree', 40)
         self.hub_betw_percentile = self.hub_cfg.get('betweenness_percentile', 0.95)
+        self.min_betweenness_score = float(self.hub_cfg.get('min_betweenness_score', 0.02))
+        self.min_vitality_delta = float(self.hub_cfg.get('min_vitality_delta', -0.005))
+        self.min_vitality_degree = int(self.hub_cfg.get('min_vitality_degree', 3))
         # Backward-compatibility aliases
         self.comm_p_thresh = self.hub_p_thresh
         self.comm_betw_percentile = self.hub_betw_percentile
@@ -174,6 +177,7 @@ class TopologyPipeline:
         self.enable_weighted_leiden = self.semantic_cfg.get('enable_weighted_leiden', True)
         self.edge_weighting_mode = self.semantic_cfg.get('edge_weighting_mode', 'hybrid')
         self.hybrid_semantic_alpha = float(self.semantic_cfg.get('hybrid_semantic_alpha', 0.35))
+        self.min_cosine_floor = float(self.semantic_cfg.get('min_cosine_floor', 0.1))
         self.enable_micro_cluster_absorption = self.semantic_cfg.get('enable_micro_cluster_absorption', True)
         self.min_absorption_similarity = float(self.semantic_cfg.get('min_absorption_similarity', 0.28))
         self.absorption_contrast_margin = float(self.semantic_cfg.get('absorption_contrast_margin', 0.05))
@@ -477,11 +481,11 @@ class TopologyPipeline:
 
         betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
         betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.hub_betw_percentile)))
-        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > 0.02])
+        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > self.min_betweenness_score])
 
         if self.enable_mod_vitality:
             mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1])
-            neg_mod_v_nodes = set([n for n, val in mod_v_sorted[:10] if val < -0.005 and dg.degree(n) >= 3])
+            neg_mod_v_nodes = set([n for n, val in mod_v_sorted[:10] if val < self.min_vitality_delta and dg.degree(n) >= self.min_vitality_degree])
         else:
             neg_mod_v_nodes = set()
 
@@ -506,9 +510,9 @@ class TopologyPipeline:
             if is_thematic_bridge:
                 reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {self.min_hub_degree})")
             if is_workflow_chokepoint:
-                reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > 0.02)")
+                reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > {self.min_betweenness_score})")
             if is_boundary_blurring:
-                reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < -0.005)")
+                reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < {self.min_vitality_delta})")
 
             is_hub = (is_thematic_bridge or is_workflow_chokepoint or is_boundary_blurring)
             if is_hub:
@@ -556,8 +560,10 @@ class TopologyPipeline:
                     "participation_threshold": self.hub_p_thresh,
                     "min_hub_degree": self.min_hub_degree,
                     "betweenness_percentile": self.hub_betw_percentile,
-                    "betweenness_min_score": 0.02,
-                    "enable_modularity_vitality": self.enable_mod_vitality
+                    "betweenness_min_score": self.min_betweenness_score,
+                    "enable_modularity_vitality": self.enable_mod_vitality,
+                    "min_vitality_delta": self.min_vitality_delta,
+                    "min_vitality_degree": self.min_vitality_degree
                 },
                 "hubs": global_hubs_registry
             }, f, indent=2)
@@ -654,7 +660,7 @@ class TopologyPipeline:
                     vv = concept_vecs.get(str(v).lower().strip())
                     if vu is not None and vv is not None:
                         cos_sim = float(np.dot(vu, vv))
-                        mod = max(0.1, cos_sim)
+                        mod = max(self.min_cosine_floor, cos_sim)
                         w = freq * ((1.0 - self.hybrid_semantic_alpha) + self.hybrid_semantic_alpha * mod)
                     else:
                         w = freq

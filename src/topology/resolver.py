@@ -288,6 +288,9 @@ class TargetResolver:
         max_t1 = int(tier_cfg.get('tier_1_max_entities', 8))
         p_t2 = float(tier_cfg.get('tier_2_percentile', 0.30))
         min_fid_t1 = float(tier_cfg.get('min_fidelity_tier_1', 0.10))
+        boundary_discount = float(tier_cfg.get('boundary_discount', 0.5))
+        fallback_proto = float(tier_cfg.get('fallback_prototypicality', 0.30))
+        fallback_fid = float(tier_cfg.get('fallback_fidelity', 0.28))
 
         target_nodes_norm = {str(n).lower().strip(): str(n) for n in target_nodes}
         node_internal_deg = Counter()
@@ -353,7 +356,7 @@ class TargetResolver:
         for n_k in target_nodes_norm.keys():
             deg_int = node_internal_deg[n_k]
             deg_bound = node_boundary_deg[n_k]
-            eff_deg = deg_int + 0.5 * deg_bound
+            eff_deg = deg_int + boundary_discount * deg_bound
             effective_degrees[n_k] = eff_deg
             if eff_deg > max_effective_deg:
                 max_effective_deg = eff_deg
@@ -363,13 +366,13 @@ class TargetResolver:
             if vec is not None and np.linalg.norm(centroid) > 0:
                 proto = float(np.dot(vec, centroid))
             else:
-                proto = 0.30
+                proto = fallback_proto
 
             eff_deg = effective_degrees[n_k]
             cent = eff_deg / max_effective_deg
 
             fids = node_fidelities.get(n_k, [])
-            fid = float(np.mean(fids)) if fids else 0.28
+            fid = float(np.mean(fids)) if fids else fallback_fid
 
             s_proto = max(0.001, proto) ** w_proto
             s_cent = cent ** w_cent

@@ -54,7 +54,11 @@ refinement:
 
   # Theme embedding model & payload format
   theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector model for theme clustering
-  theme_embedding_payload: "title_desc" # Payload format: "title_desc_reasoning", "title_desc", or "title"
+  theme_embedding_payload: "title_desc_reasoning" # Payload format: "title_desc_reasoning", "title_desc", or "title"
+
+  # Theme Topological Manifold & Micro-Cluster Parameters
+  theme_manifold_edge_threshold: 0.35           # Cosine similarity lower-bound to enforce strict semantic grounding in manifold graph
+  theme_micro_cluster_ratio: 0.01               # Ratio of corpus size N below which micro-clusters are absorbed into dominant centroids
 
   # Theme Consolidation Multi-Tier Confidence Thresholds
   theme_confidence_high_threshold: 0.40     # Cosine score >= 0.40 -> High Confidence
