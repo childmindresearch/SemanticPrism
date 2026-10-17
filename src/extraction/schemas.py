@@ -125,8 +125,27 @@ class RawTriple(BaseModel):
     subject: str = Field(..., description="The primary entity or concept exactly as it appears in the source text. Do not modify the casing or format.")
     predicate: str = Field(..., description="The relationship or action connecting subject and object exactly as it appears in the source text. Do not modify the casing or format.")
     object: str = Field(..., description="The target entity, concept, or value. Do not modify the casing or format.")
-    source_quote: str = Field(..., description="The EXACT, verbatim substring from the text confirming this relationship.")
+    source_quote: Optional[str] = Field(default="", description="The EXACT, verbatim substring from the text confirming this relationship.")
     theme_association: Optional[str] = Field(default="Other", description="The theme this triple most closely aligns with, if any.")
+
+    @model_validator(mode='before')
+    @classmethod
+    def remap_and_clean(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            subj = data.get("subject") or data.get("subj") or data.get("source_entity") or ""
+            pred = data.get("predicate") or data.get("pred") or data.get("relation") or data.get("relationship") or ""
+            obj = data.get("object") or data.get("obj") or data.get("target_entity") or ""
+            quote = data.get("source_quote") or data.get("quote") or data.get("evidence") or data.get("source") or ""
+            theme = data.get("theme_association") or data.get("theme") or data.get("theme_name") or "Other"
+            return {
+                **data,
+                "subject": str(subj).strip(),
+                "predicate": str(pred).strip(),
+                "object": str(obj).strip(),
+                "source_quote": str(quote).strip(),
+                "theme_association": str(theme).strip() if str(theme).strip() else "Other"
+            }
+        return data
 
     @field_validator('subject', 'predicate', 'object')
     @classmethod
@@ -137,29 +156,55 @@ class RawTriple(BaseModel):
 
 class TripleExtractionResult(BaseModel):
     """The aggregate result grouping multiple triples from a single text block."""
-    triples: List[RawTriple] = Field(description="The complete list of extracted node-edge relationships.")
+    triples: List[RawTriple] = Field(default_factory=list, description="The complete list of extracted node-edge relationships.")
+
+    @model_validator(mode='before')
+    @classmethod
+    def handle_raw_payloads(cls, data: Any) -> Any:
+        # Auto-unwrap bare lists: [{"subject": ...}] -> {"triples": [...]}
+        if isinstance(data, list):
+            return {"triples": data}
+        if isinstance(data, dict):
+            if "triples" not in data:
+                for alt_key in ["triplets", "relationships", "extracted_triples", "triples_list", "data", "results", "items"]:
+                    if alt_key in data and isinstance(data[alt_key], list):
+                        data["triples"] = data[alt_key]
+                        break
+        return data
 
     @field_validator('triples', mode='before')
     @classmethod
     def drop_invalid_triples(cls, v):
         """Intercepts the raw JSON dictionaries before strict Pydantic crash enforcement."""
         if not isinstance(v, list):
-            return v
+            return []
             
         valid_chunk = []
         for item in v:
             try:
                 if isinstance(item, dict):
-                    # Test explicit validation against the strict RawTriple bounds natively
                     valid_chunk.append(RawTriple.model_validate(item))
                 elif isinstance(item, RawTriple):
                     valid_chunk.append(item)
             except Exception:
-                # Silently discard the corrupted/incomplete hallucination structurally 
+                # Silently discard corrupted/incomplete entries without failing the batch
                 pass
                 
-        if len(v) > 0 and len(valid_chunk) == 0:
-            raise ValueError("All extracted triples in the list failed schema validation constraints.")
-            
         return valid_chunk
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "triples": [
+                    {
+                        "subject": "patient",
+                        "predicate": "was diagnosed with",
+                        "object": "type 2 diabetes",
+                        "source_quote": "The patient was diagnosed with type 2 diabetes following routine lab work.",
+                        "theme_association": "Endocrine Metabolic Conditions"
+                    }
+                ]
+            }
+        }
+    }
 

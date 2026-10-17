@@ -17,7 +17,7 @@ extraction:
   domain: "General Subjects"   # Context domain injected into extraction prompts
   max_async_calls: 2
   theme_chunk_max_words: 3200
-  triple_chunk_max_words: 800
+  triple_chunk_max_words: 600
   context_window_cap: 8192     # Max tokens per extraction prompt payload
 
 # Stage 2 (Refinement) Token & Concurrency Parameters

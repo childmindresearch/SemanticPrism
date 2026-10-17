@@ -91,7 +91,7 @@ triple_agent = Agent(
     output_type=schemas.TripleExtractionResult,
     system_prompt=prompts.TRIPLE_EXTRACTION_SYSTEM_PROMPT,
     model_settings=triple_settings,
-    retries=2
+    retries=1
 )
 
 # Agent 3b: Reformats failed/malformed JSON outputs to fit the desired schema.
@@ -100,7 +100,7 @@ triple_reformat_agent = Agent(
     output_type=schemas.TripleExtractionResult,
     system_prompt=prompts.TRIPLE_REFORMAT_SYSTEM_PROMPT,
     model_settings=triple_settings,
-    retries=2
+    retries=1
 )
 
 @triple_agent.system_prompt

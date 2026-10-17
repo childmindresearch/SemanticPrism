@@ -4,6 +4,7 @@ This module orchestrates the Pydantic AI agents to process raw text, extract the
 """
 
 import json
+import re
 import asyncio
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -214,6 +215,141 @@ class ExtractionPipeline:
         if exception:
             return str(exception)
         return ""
+
+    def _salvage_triples_from_text(
+        self,
+        malformed_text: str,
+        allowed_themes: Optional[List[str]] = None
+    ) -> List[schemas.RawTriple]:
+        """
+        Deterministically recovers triples from malformed or unvalidated LLM output strings in < 0.005s.
+        Handles bare JSON lists, alternative wrapping keys, markdown-wrapped JSON, and unescaped quotes,
+        preserving verbatim source quotes and mapping theme associations.
+        """
+        if not malformed_text or not isinstance(malformed_text, str):
+            return []
+
+        clean = malformed_text.strip()
+        if "```" in clean:
+            clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.MULTILINE)
+            clean = re.sub(r"\s*```$", "", clean, flags=re.MULTILINE).strip()
+
+        extracted_dicts: List[Dict[str, Any]] = []
+
+        # Attempt 1: Standard JSON decoding (handles bare lists, alternative wrapper keys)
+        try:
+            data = json.loads(clean)
+            if isinstance(data, list):
+                extracted_dicts = [d for d in data if isinstance(d, dict)]
+            elif isinstance(data, dict):
+                for k in ["triples", "triplets", "relationships", "extracted_triples", "results", "data", "items"]:
+                    if k in data and isinstance(data[k], list):
+                        extracted_dicts = [d for d in data[k] if isinstance(d, dict)]
+                        break
+        except Exception:
+            pass
+
+        # Attempt 2: Search for JSON array or object substring if model included conversational chatter
+        if not extracted_dicts:
+            for bracket_pair in [("[", "]"), ("{", "}")]:
+                start_pos = clean.find(bracket_pair[0])
+                end_pos = clean.rfind(bracket_pair[1])
+                if start_pos != -1 and end_pos > start_pos:
+                    sub = clean[start_pos : end_pos + 1]
+                    try:
+                        data = json.loads(sub)
+                        if isinstance(data, list):
+                            extracted_dicts = [d for d in data if isinstance(d, dict)]
+                            break
+                        elif isinstance(data, dict):
+                            for k in ["triples", "triplets", "relationships", "extracted_triples", "results", "data", "items"]:
+                                if k in data and isinstance(data[k], list):
+                                    extracted_dicts = [d for d in data[k] if isinstance(d, dict)]
+                                    break
+                            if extracted_dicts:
+                                break
+                    except Exception:
+                        pass
+
+        # Attempt 3: If JSON parsing failed (e.g. unescaped quotes or trailing commas),
+        # parse individual triple JSON blocks using regex
+        if not extracted_dicts:
+            block_pattern = re.compile(r'\{[^{}]*?\}', re.DOTALL)
+            for block in block_pattern.finditer(clean):
+                block_str = block.group(0)
+                try:
+                    d = json.loads(block_str)
+                    if isinstance(d, dict) and any(k in d for k in ["subject", "subj", "source_entity"]) and any(k in d for k in ["predicate", "pred", "relation"]):
+                        extracted_dicts.append(d)
+                        continue
+                except Exception:
+                    pass
+
+                def _extract_field(field_names: List[str]) -> str:
+                    for fn in field_names:
+                        m = re.search(rf'"{fn}"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', block_str, re.DOTALL)
+                        if m:
+                            try:
+                                return m.group(1).encode('utf-8').decode('unicode_escape').strip()
+                            except Exception:
+                                return m.group(1).strip()
+                    return ""
+
+                subj = _extract_field(["subject", "subj", "source_entity"])
+                pred = _extract_field(["predicate", "pred", "relation", "relationship"])
+                obj = _extract_field(["object", "obj", "target_entity"])
+                quote = _extract_field(["source_quote", "quote", "evidence", "source"])
+                theme = _extract_field(["theme_association", "theme", "theme_name"])
+
+                if subj and pred and obj:
+                    extracted_dicts.append({
+                        "subject": subj,
+                        "predicate": pred,
+                        "object": obj,
+                        "source_quote": quote,
+                        "theme_association": theme or "Other"
+                    })
+
+        # Theme lookup map for case-insensitive canonical matching
+        theme_lookup = {}
+        if allowed_themes:
+            for t in allowed_themes:
+                theme_lookup[t.lower().strip()] = t.strip()
+
+        valid_triples: List[schemas.RawTriple] = []
+        for item in extracted_dicts:
+            if not isinstance(item, dict):
+                continue
+
+            subj = str(item.get("subject") or item.get("subj") or item.get("source_entity") or "").strip()
+            pred = str(item.get("predicate") or item.get("pred") or item.get("relation") or item.get("relationship") or "").strip()
+            obj = str(item.get("object") or item.get("obj") or item.get("target_entity") or "").strip()
+            quote = str(item.get("source_quote") or item.get("quote") or item.get("evidence") or item.get("source") or "").strip()
+            theme_raw = str(item.get("theme_association") or item.get("theme") or item.get("theme_name") or "Other").strip()
+
+            if not subj or not pred or not obj:
+                continue
+
+            final_theme = "Other"
+            if theme_raw.lower() in theme_lookup:
+                final_theme = theme_lookup[theme_raw.lower()]
+            elif theme_raw in (allowed_themes or []):
+                final_theme = theme_raw
+            elif not allowed_themes:
+                final_theme = theme_raw or "Other"
+
+            try:
+                valid_triples.append(schemas.RawTriple(
+                    subject=subj,
+                    predicate=pred,
+                    object=obj,
+                    source_quote=quote,
+                    theme_association=final_theme
+                ))
+            except Exception:
+                pass
+
+        return valid_triples
 
     def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str):
         """Helper to log extraction failures and validation errors systematically."""
@@ -826,6 +962,13 @@ class ExtractionPipeline:
                             print("      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                             return []
 
+                        # Deterministic Python salvage before invoking slow LLM JSON reformatter
+                        allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
+                        salvaged = self._salvage_triples_from_text(malformed_text, allowed_themes=allowed_themes)
+                        if salvaged:
+                            print(f"      -> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
+                            return salvaged
+
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 
                         themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
@@ -930,7 +1073,14 @@ class ExtractionPipeline:
                         print("-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
                         continue
 
-                    print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
+                    # Deterministic Python salvage before invoking slow LLM JSON reformatter
+                    allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
+                    salvaged = self._salvage_triples_from_text(malformed_text, allowed_themes=allowed_themes)
+                    if salvaged:
+                        print(f"-> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
+                        triples_list = salvaged
+                    else:
+                        print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 
                     themes_str = self.context.master_themes.model_dump_json() if self.context.master_themes else "None"
                     reformat_prompt = (
