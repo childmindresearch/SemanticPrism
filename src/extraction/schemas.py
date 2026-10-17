@@ -132,11 +132,16 @@ class RawTriple(BaseModel):
     @classmethod
     def remap_and_clean(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            subj = data.get("subject") or data.get("subj") or data.get("source_entity") or ""
-            pred = data.get("predicate") or data.get("pred") or data.get("relation") or data.get("relationship") or ""
-            obj = data.get("object") or data.get("obj") or data.get("target_entity") or ""
-            quote = data.get("source_quote") or data.get("quote") or data.get("evidence") or data.get("source") or ""
-            theme = data.get("theme_association") or data.get("theme") or data.get("theme_name") or "Other"
+            subj = (data.get("subject") or data.get("subj") or data.get("source_entity") 
+                    or data.get("head") or data.get("source") or data.get("node1") or data.get("entity1") or "")
+            pred = (data.get("predicate") or data.get("pred") or data.get("relation") 
+                    or data.get("relationship") or data.get("edge") or data.get("action") or "")
+            obj = (data.get("object") or data.get("obj") or data.get("target_entity") 
+                   or data.get("tail") or data.get("target") or data.get("node2") or data.get("entity2") or "")
+            quote = (data.get("source_quote") or data.get("quote") or data.get("evidence") 
+                     or data.get("source") or data.get("source_text") or data.get("context") or "")
+            theme = (data.get("theme_association") or data.get("theme") or data.get("theme_name") 
+                     or data.get("category") or "Other")
             return {
                 **data,
                 "subject": str(subj).strip(),
@@ -165,8 +170,11 @@ class TripleExtractionResult(BaseModel):
         if isinstance(data, list):
             return {"triples": data}
         if isinstance(data, dict):
+            # If payload is a single triple dict, wrap into list
+            if any(k in data for k in ["subject", "subj", "source_entity", "head", "node1", "entity1"]) and any(k in data for k in ["predicate", "pred", "relation", "relationship", "edge"]):
+                return {"triples": [data]}
             if "triples" not in data:
-                for alt_key in ["triplets", "relationships", "extracted_triples", "triples_list", "data", "results", "items"]:
+                for alt_key in ["triplets", "relationships", "extracted_triples", "triples_list", "data", "results", "items", "response", "output"]:
                     if alt_key in data and isinstance(data[alt_key], list):
                         data["triples"] = data[alt_key]
                         break
@@ -187,9 +195,13 @@ class TripleExtractionResult(BaseModel):
                 elif isinstance(item, RawTriple):
                     valid_chunk.append(item)
             except Exception:
-                # Silently discard corrupted/incomplete entries without failing the batch
+                # Silently discard corrupted/incomplete individual entries
                 pass
                 
+        # If candidate triples were present but all failed, raise to trigger salvage
+        if len(v) > 0 and len(valid_chunk) == 0:
+            raise ValueError(f"All {len(v)} candidate triples failed schema validation bounds.")
+            
         return valid_chunk
 
     model_config = {

@@ -216,6 +216,26 @@ class ExtractionPipeline:
             return str(exception)
         return ""
 
+    def _extract_all_model_texts(self, messages) -> List[str]:
+        """Extracts text content or tool arguments from all ModelResponse messages in reverse order."""
+        from pydantic_ai.messages import ModelResponse, ToolCallPart, TextPart
+        texts = []
+        for msg in reversed(messages):
+            if isinstance(msg, ModelResponse):
+                for p in msg.parts:
+                    if isinstance(p, ToolCallPart):
+                        args = p.args
+                        texts.append(json.dumps(args, indent=2) if isinstance(args, dict) else str(args))
+                    elif isinstance(p, TextPart):
+                        content = p.content
+                        if "```" in content:
+                            lines = content.splitlines()
+                            cleaned = [line for line in lines if not line.strip().startswith("```")]
+                            content = "\n".join(cleaned)
+                        if content.strip():
+                            texts.append(content.strip())
+        return texts
+
     def _salvage_triples_from_text(
         self,
         malformed_text: str,
@@ -236,16 +256,19 @@ class ExtractionPipeline:
 
         extracted_dicts: List[Dict[str, Any]] = []
 
-        # Attempt 1: Standard JSON decoding (handles bare lists, alternative wrapper keys)
+        # Attempt 1: Standard JSON decoding (handles bare lists, alternative wrapper keys, single dicts)
         try:
             data = json.loads(clean)
             if isinstance(data, list):
                 extracted_dicts = [d for d in data if isinstance(d, dict)]
             elif isinstance(data, dict):
-                for k in ["triples", "triplets", "relationships", "extracted_triples", "results", "data", "items"]:
-                    if k in data and isinstance(data[k], list):
-                        extracted_dicts = [d for d in data[k] if isinstance(d, dict)]
-                        break
+                if any(k in data for k in ["subject", "subj", "source_entity", "head", "node1", "entity1"]) and any(k in data for k in ["predicate", "pred", "relation", "relationship", "edge"]):
+                    extracted_dicts = [data]
+                else:
+                    for k in ["triples", "triplets", "relationships", "extracted_triples", "results", "data", "items", "response", "output"]:
+                        if k in data and isinstance(data[k], list):
+                            extracted_dicts = [d for d in data[k] if isinstance(d, dict)]
+                            break
         except Exception:
             pass
 
@@ -295,11 +318,11 @@ class ExtractionPipeline:
                                 return m.group(1).strip()
                     return ""
 
-                subj = _extract_field(["subject", "subj", "source_entity"])
-                pred = _extract_field(["predicate", "pred", "relation", "relationship"])
-                obj = _extract_field(["object", "obj", "target_entity"])
-                quote = _extract_field(["source_quote", "quote", "evidence", "source"])
-                theme = _extract_field(["theme_association", "theme", "theme_name"])
+                subj = _extract_field(["subject", "subj", "source_entity", "head", "source", "node1", "entity1"])
+                pred = _extract_field(["predicate", "pred", "relation", "relationship", "edge", "action"])
+                obj = _extract_field(["object", "obj", "target_entity", "tail", "target", "node2", "entity2"])
+                quote = _extract_field(["source_quote", "quote", "evidence", "source", "source_text", "context"])
+                theme = _extract_field(["theme_association", "theme", "theme_name", "category"])
 
                 if subj and pred and obj:
                     extracted_dicts.append({
@@ -321,11 +344,15 @@ class ExtractionPipeline:
             if not isinstance(item, dict):
                 continue
 
-            subj = str(item.get("subject") or item.get("subj") or item.get("source_entity") or "").strip()
-            pred = str(item.get("predicate") or item.get("pred") or item.get("relation") or item.get("relationship") or "").strip()
-            obj = str(item.get("object") or item.get("obj") or item.get("target_entity") or "").strip()
-            quote = str(item.get("source_quote") or item.get("quote") or item.get("evidence") or item.get("source") or "").strip()
-            theme_raw = str(item.get("theme_association") or item.get("theme") or item.get("theme_name") or "Other").strip()
+            subj = str(item.get("subject") or item.get("subj") or item.get("source_entity") 
+                       or item.get("head") or item.get("source") or item.get("node1") or item.get("entity1") or "").strip()
+            pred = str(item.get("predicate") or item.get("pred") or item.get("relation") 
+                       or item.get("relationship") or item.get("edge") or item.get("action") or "").strip()
+            obj = str(item.get("object") or item.get("obj") or item.get("target_entity") 
+                      or item.get("tail") or item.get("target") or item.get("node2") or item.get("entity2") or "").strip()
+            quote = str(item.get("source_quote") or item.get("quote") or item.get("evidence") 
+                        or item.get("source") or item.get("source_text") or item.get("context") or "").strip()
+            theme_raw = str(item.get("theme_association") or item.get("theme") or item.get("theme_name") or item.get("category") or "Other").strip()
 
             if not subj or not pred or not obj:
                 continue
@@ -940,6 +967,14 @@ class ExtractionPipeline:
                 with capture_run_messages() as messages:
                     try:
                         result = await triple_agent.run(user_prompt, deps=deps)
+                        allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
+                        # If agent returned 0 triples, check if model output had valid triples that were missed
+                        if len(result.output.triples) == 0:
+                            for cand_text in self._extract_all_model_texts(messages):
+                                salvaged = self._salvage_triples_from_text(cand_text, allowed_themes=allowed_themes)
+                                if salvaged:
+                                    print(f"      -> Python salvage recovered {len(salvaged)} triples from payload for {source_doc} [{start_idx}-{end_idx}]")
+                                    return salvaged
                         print(f"      -> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(result.output.triples)} triples)")
                         return result.output.triples
                     except Exception as e:
@@ -964,10 +999,11 @@ class ExtractionPipeline:
 
                         # Deterministic Python salvage before invoking slow LLM JSON reformatter
                         allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
-                        salvaged = self._salvage_triples_from_text(malformed_text, allowed_themes=allowed_themes)
-                        if salvaged:
-                            print(f"      -> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
-                            return salvaged
+                        for cand_text in [malformed_text] + self._extract_all_model_texts(messages):
+                            salvaged = self._salvage_triples_from_text(cand_text, allowed_themes=allowed_themes)
+                            if salvaged:
+                                print(f"      -> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
+                                return salvaged
 
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 
@@ -1052,6 +1088,14 @@ class ExtractionPipeline:
                     # Execute extraction
                     triple_result = triple_agent.run_sync(user_prompt, deps=deps)
                     triples_list = triple_result.output.triples
+                    allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
+                    if len(triples_list) == 0:
+                        for cand_text in self._extract_all_model_texts(messages):
+                            salvaged = self._salvage_triples_from_text(cand_text, allowed_themes=allowed_themes)
+                            if salvaged:
+                                print(f"-> Python salvage recovered {len(salvaged)} triples from payload for {source_doc} [{start_idx}-{end_idx}]")
+                                triples_list = salvaged
+                                break
                     print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples)")
                 except Exception as e:
                     malformed_text = self._extract_malformed_text(messages, e)
@@ -1075,10 +1119,12 @@ class ExtractionPipeline:
 
                     # Deterministic Python salvage before invoking slow LLM JSON reformatter
                     allowed_themes = self.context.master_themes.master_themes if (self.context.master_themes and self.context.master_themes.master_themes) else []
-                    salvaged = self._salvage_triples_from_text(malformed_text, allowed_themes=allowed_themes)
-                    if salvaged:
-                        print(f"-> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
-                        triples_list = salvaged
+                    for cand_text in [malformed_text] + self._extract_all_model_texts(messages):
+                        salvaged = self._salvage_triples_from_text(cand_text, allowed_themes=allowed_themes)
+                        if salvaged:
+                            print(f"-> Python salvage instantly recovered {len(salvaged)} triples for {source_doc} [{start_idx}-{end_idx}] (bypassing LLM reformatter)!")
+                            triples_list = salvaged
+                            break
                     else:
                         print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
 

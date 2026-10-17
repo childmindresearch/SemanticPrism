@@ -16,7 +16,7 @@ synthesis:
   # Entity threshold for Synthesis schema creation.
   # Clusters with < min_cluster_size entities are routed directly to Enum synthesis (enums.py).
   # Use 2 for small test datasets; 16+ for large production corpora.
-  min_cluster_size: 12
+  min_cluster_size: 6
 
   # =========================================================================
   # ENUM SEMANTIC CLUSTERING & COHESION FILTERING

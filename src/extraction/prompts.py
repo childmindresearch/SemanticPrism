@@ -85,28 +85,77 @@ MASTER_THEME_CLUSTERED_USER_PROMPT = """Review the following {cluster_count} mat
 {cluster_exemplars_block}"""
 
 
-# SYSTEM PROMPT: Guides the agent to perform granular Subject-Predicate-Object (SVO) extraction and assign them to Master Themes.
-TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a Triple Extractor Agent running schema-mapped discovery.
-Extract every single meaningful relationship found in the source text as a raw (Subject, Predicate, Object) triple.
+# =========================================================================
+# 5. SVO TRIPLET EXTRACTION PROMPTS
+# =========================================================================
 
-For each extracted triple, set `theme_association` to the exact matching string from the 'Allowed theme_association values' list. If no theme matches, set `theme_association` to 'Other'.
+TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a High-Precision Triple Extractor Agent running schema-mapped knowledge discovery.
+Your objective is to comprehensively extract all factual assertions, clinical findings, behaviors, diagnoses, relationships, and actions from the source text into atomic (Subject, Predicate, Object) triples.
 
-For EVERY relationship you extract, you MUST find the exact 'Source Quote' in the text that justifies its existence.
-ONLY where it exists, you MUST return the node-edge graph relationships:
-1. Identify the core identity and connectedness of each entity (For example, "a young man walks his brown dog" = [man]-[walks]-[dog])
-2. Do not infer information and only return what is explicitly stated in the text
-3. An entity can have 0...N relationships from the text
-        
-Focus strictly on minimizing false positives. Do not hallucinate entities not strictly in the text.
+### EXTRACTION OBJECTIVES:
+1. Comprehensive Recall & Graph Density: Extract EVERY meaningful relationship across the entire text chunk. Do not stop after 2 or 3 triples. A rich, informative document chunk typically contains 10 to 30 valid factual triples.
+2. Atomic Entities: Keep subjects and objects clear and concise (e.g., "patient", "WISC-V evaluation", "ADHD", "morning drop-offs", "processing speed bottleneck") so they form clean, connected knowledge graph nodes.
+3. Descriptive Predicates: Use active, meaningful relationships (e.g., "was diagnosed with", "demonstrates", "yielded Full Scale IQ of", "impairs", "resides with", "was referred by", "presents with"). Never empty.
+4. Source Quote (Verbatim): For EVERY extracted relationship, you MUST provide the exact, verbatim substring from the source text confirming it. Do NOT summarize, shorten, or alter the quote.
+5. Theme Association: Set `theme_association` to the exact matching string from the 'Allowed theme_association values' list. If none fit cleanly, set `theme_association` to "Other".
 
-CRITICAL JSON INSTRUCTION: You must output the ENTIRE array of triples. Do NOT abbreviate, summarize, or use ellipses ("...") to skip items. You must write out every single JSON object in full."""
+### EXAMPLE STRUCTURE:
+```json
+{
+  "triples": [
+    {
+      "subject": "patient",
+      "predicate": "was diagnosed with",
+      "object": "Separation Anxiety Disorder",
+      "source_quote": "Patient meets diagnostic criteria for Attention-Deficit/Hyperactivity Disorder, Combined Presentation, and Separation Anxiety Disorder.",
+      "theme_association": "Clinical Diagnoses"
+    },
+    {
+      "subject": "WISC-V evaluation",
+      "predicate": "yielded Full Scale IQ of",
+      "object": "102",
+      "source_quote": "Psychometric evaluation utilizing the Wechsler Intelligence Scale for Children, Fifth Edition (WISC-V) yielded a Full Scale IQ of 102.",
+      "theme_association": "Psychometric Testing"
+    }
+  ]
+}
+```
 
-TRIPLE_EXTRACTION_USER_PROMPT = """Extract the triplets from the following text:
+### CRITICAL RULES:
+- Output ALL extracted triples in the `triples` array. Do NOT summarize, abbreviate, or use ellipses ("...").
+- Do not invent facts not stated in the text. Every triple must be grounded by its verbatim `source_quote`."""
+
+TRIPLE_EXTRACTION_USER_PROMPT = """Extract all atomic relationship triples from the following text:
 
 <source_text>
 {text_content}
 </source_text>"""
 
-# SYSTEM PROMPT: Guides the agent to reformat failed/malformed JSON outputs while ensuring strict accuracy.
-TRIPLE_REFORMAT_SYSTEM_PROMPT = """You are an expert JSON repair assistant. You receive malformed JSON output and specific schema validation errors. Your job is to correct the format and structure of the JSON to strictly match the requested schema.
-CRITICAL: Maintain strict accuracy. Do not add or hallucinate any facts, subjects, predicates, or objects that were not present in the malformed input. Only repair formatting syntax and schema properties. Discard any elements that cannot be reformatted to fit the schema without hallucinating information."""
+
+# =========================================================================
+# 6. JSON REPAIR ASSISTANT PROMPT
+# =========================================================================
+
+TRIPLE_REFORMAT_SYSTEM_PROMPT = """You are an expert JSON repair assistant.
+Your job is to repair malformed JSON output to strictly match the TripleExtractionResult schema.
+
+### TARGET SCHEMA:
+```json
+{
+  "triples": [
+    {
+      "subject": "string (non-empty)",
+      "predicate": "string (non-empty)",
+      "object": "string (non-empty)",
+      "source_quote": "string (exact verbatim quote from text)",
+      "theme_association": "string (matching allowed themes or 'Other')"
+    }
+  ]
+}
+```
+
+### REPAIR RULES:
+- Repair syntax errors, fix unescaped characters, and correct mismatched key names (e.g. remap "subj"/"head" -> "subject", "pred"/"relation" -> "predicate", "obj"/"tail" -> "object", "quote"/"evidence" -> "source_quote").
+- Retain all valid triples extracted from the input.
+- Do NOT hallucinate new facts or entities not present in the malformed text.
+- Output pure JSON only."""
