@@ -43,11 +43,12 @@ You will receive an extracted thematic cluster of domain concepts and real-world
 Your job is to interpret the underlying domain workflows, entities, and attributes, and synthesize a clean, practical, and coherent Pydantic (v2) schema module.
 
 INPUT STRUCTURE:
-1. `top_domain_terms`: Key domain concepts and vocabulary defining this cluster. Use these to guide the naming of classes, fields, and core entities.
-2. `thematic_observations`: Authentic source text sentences organized by theme. Study these narrative observations to understand real-world workflows, data types, entity interactions, and field constraints.
+1. `target_domain_focus`: Primary conceptual focus or theme defining this cluster.
+2. `top_domain_terms`: Key domain concepts and vocabulary defining this cluster. Use these to guide the naming of classes, fields, and core entities.
+3. `thematic_observations`: Authentic source text sentences organized by theme. Study these narrative observations to understand real-world workflows, data types, entity interactions, and field constraints.
 
 CRITICAL MODELING RULES:
-1. **Synthesize Workflows, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative, and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes.
+1. **Synthesize Domain Workflows, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative, and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes modeling the core subject matter (e.g., ClinicalEvaluation, AssessmentProtocol, PatientCondition).
 2. **Model Real-World Attributes:** Derive concrete attributes and fields directly from the details in `thematic_observations` (e.g., status, duration, severity, modalities, operational metrics).
 3. **Use Enums/Literals with Semantic Abstraction:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings. Abstract nuanced terms into reusable categories.
 4. **Field Descriptions & Optionality:** Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the domain meaning derived from `thematic_observations` (e.g., `dosage: Optional[str] = Field(default=None, description="Prescribed medication dosage and frequency")`).
@@ -56,6 +57,10 @@ CRITICAL MODELING RULES:
    `from typing import Optional, List, Dict, Any, Union, Literal`
    `from enum import Enum`
 6. **Strictly Isolated Module:** Model only the concepts and workflows substantiated by the provided data.
+7. **ABSOLUTE BAN ON META-MODELING:** You MUST model the authentic real-world domain phenomena described INSIDE the observations. NEVER define models that describe the prompt itself, the JSON payload wrapper, or the synthesis framework. Specifically:
+   - NEVER create classes named `ThemeObservation`, `ThematicObservation`, `DomainTerm`, or `GeneratedModule`.
+   - NEVER create fields named `theme_name`, `observations`, or `source_code`.
+   Any class that attempts to model the prompt structure itself is strictly invalid.
 
 OUTPUT SCHEMA INSTRUCTIONS:
 Return a JSON object conforming to the GeneratedModule schema:
@@ -124,4 +129,5 @@ REPAIR RULES:
 1. Fix all Python syntax errors, indentation issues, or missing imports (`from pydantic import BaseModel, Field`, `from enum import Enum`, `from typing import ...`).
 2. Ensure all Pydantic fields use valid syntax: `field_name: Optional[Type] = Field(default=None, description="...")`.
 3. Ensure Enum member names use valid `UPPER_SNAKE_CASE` identifiers and inherit from `(str, Enum)`.
-4. Return pure JSON matching the GeneratedModule schema only. Do NOT output markdown explanations or conversational text."""
+4. ABSOLUTE BAN ON META-MODELS: If the malformed input or code contains meta-models like `class ThemeObservation` or `class GeneratedModule` inside `source_code`, DISCARD them completely. Replace them with substantive domain Pydantic models based on the domain concepts and key terms.
+5. Return pure JSON matching the GeneratedModule schema only. Do NOT output markdown explanations or conversational text."""

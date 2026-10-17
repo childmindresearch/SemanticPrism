@@ -122,6 +122,14 @@ def clean_python_code(code: str) -> str:
         return line
 
     code = '\n'.join(fix_line(line_str) for line_str in code.splitlines())
+    
+    # Strip any accidental meta-modeling classes that mirror the prompt/JSON wrapper
+    code = re.sub(
+        r'(?m)^class\s+(ThemeObservation|ThematicObservation|GeneratedModule)\s*\([^)]*\):.*?(?=(?:\nclass\s+|\n[A-Za-z0-9_]+\s*=|\Z))',
+        '',
+        code,
+        flags=re.DOTALL
+    )
     return code.strip()
 
 class SynthesisPipeline:
@@ -486,8 +494,16 @@ class SynthesisPipeline:
             top_terms = extract_top_domain_terms(target_nodes, subset, top_k=top_domain_terms_count)
             observations = extract_thematic_observations(subset, target_nodes, max_sentences=max_sentences_per_target, mode=mode)
 
+            theme_counts = Counter(
+                tr.get('theme_association') for tr in subset 
+                if tr.get('theme_association') and tr.get('theme_association') != 'Other'
+            )
+            primary_theme = theme_counts.most_common(1)[0][0] if theme_counts else ""
+            domain_focus = primary_theme if primary_theme else (f"Domain Focus: {', '.join(top_terms[:3])}" if top_terms else f"Community #{target_id}")
+
             payload_dict = {
                 "community_id": target_id,
+                "target_domain_focus": domain_focus,
                 "top_domain_terms": top_terms,
                 "thematic_observations": observations
             }
@@ -523,7 +539,9 @@ class SynthesisPipeline:
                                 f"The parsing validation error that occurred was:\n{str(e)}\n\n"
                                 f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
                                 f"The output must consist strictly of the Pydantic GeneratedModule schema (with 'module_name' and 'source_code') "
-                                f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. Focus strictly on fixing the validation error."
+                                f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. "
+                                f"IMPORTANT: Do NOT generate meta-models representing the prompt envelope (e.g. NEVER output 'class ThemeObservation' or 'class GeneratedModule'). "
+                                f"Synthesize authentic domain models reflecting the key terms and observations."
                             )
                             try:
                                 res = await schema_reformat_agent.run(reformat_prompt)
@@ -592,7 +610,9 @@ class SynthesisPipeline:
                             f"The parsing validation error that occurred was:\n{str(e)}\n\n"
                             f"Please correct and repair this Python code so it strictly maps to the schemas.GeneratedModule structure. "
                             f"The output must consist strictly of the Pydantic GeneratedModule schema (with 'module_name' and 'source_code') "
-                            f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. Focus strictly on fixing the validation error."
+                            f"and must contain no conversational text, notes, markdown code blocks, or other extraneous words. "
+                            f"IMPORTANT: Do NOT generate meta-models representing the prompt envelope (e.g. NEVER output 'class ThemeObservation' or 'class GeneratedModule'). "
+                            f"Synthesize authentic domain models reflecting the key terms and observations."
                         )
                         try:
                             res = schema_reformat_agent.run_sync(reformat_prompt)
