@@ -42,7 +42,7 @@ synthesis:
 
   # Maximum number of triplets sent to the LLM per schema generation target.
   # Subsets exceeding this cap are pruned based on PageRank and intra-community status.
-  max_triplets_per_target: 1800
+  max_triplets_per_target: 1200
 
   # Controls whether to save the full text payloads sent to the LLM during Stage 4 Synthesis.
   # When true, payloads are saved to the directory specified in payload_output_dir.
@@ -63,7 +63,7 @@ synthesis:
   min_sentence_length: 15
 
   # Number of prominent, specific domain terms to provide in the payload (default: 12)
-  top_domain_terms_count: 8
+  top_domain_terms_count: 5
 
   # C-TF-IDF Domain Term Specificity Scoring Parameters
   # score = ((deg + 1.0) / (n_targets ** domain_terms_idf_exponent)) * (domain_terms_multi_word_boost if ' ' in term else 1.0)

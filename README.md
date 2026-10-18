@@ -1,8 +1,8 @@
 # SemanticPrism
 
-SemanticPrism is an automated pipeline that transforms unstructured domain knowledge (such as clinical reports or technical documentation) into structured, deployable Python ontologies (Pydantic models).
+SemanticPrism is an automated knowledge engineering pipeline that transforms unstructured domain text (such as clinical reports or technical documentation) into strictly typed, production-ready Python ontologies (Pydantic v2 BaseModel classes and Enum definitions).
 
-Instead of generating schemas in a single LLM prompt—which often leads to hallucinations and overlapping concepts—SemanticPrism extracts atomic facts, groups them with vector clustering, maps them into mathematical graph networks, and uses topological boundaries to synthesize clean, modular data models.
+Rather than generating models through a single monolithic prompt—which risks hallucination and tangled cross-domain concepts—SemanticPrism enforces a strict decoupling between non-deterministic LLM operations (extraction, taxonomic reasoning, code synthesis) and deterministic mathematical/graph-theoretic operations (vector embeddings, spherical clustering, core-periphery separation, and Leiden community detection).
 
 ---
 
@@ -78,7 +78,8 @@ Encodes extracted entities and relations into vector embeddings, groups them int
 Builds a directed network graph from refined triplets, executes a 3-stage core-separation pipeline, and derives fine-grained thematic partitions:
 - **Stage 3.1: Raw Graph Evaluation & Hub Identification**: Computes baseline metrics, degree distributions, and isolates systemic routers via participation coefficients and betweenness centrality.
 - **Stage 3.2: Core-Periphery Separation**: Extracts the Hub Backbone Network to eliminate cross-domain modularity blur, doubling modularity $Q$ on the dense clustering substrate.
-- **Stage 3.3: Community Discovery & Architectural Tiers**: Discovers fine-grained Leiden modules and derives hybrid geometric-topological architectural tiers (Nucleus, Mechanics, Modifiers) via degree-weighted Fréchet mean centroids and sentence grounding fidelity.
+- **Stage 3.3: Community Discovery & Agglomeration**: Discovers fine-grained Leiden modules, derives architectural tiers (Nucleus, Mechanics, Modifiers), and executes multi-pass semantic agglomeration to merge high-cosine-similarity centroids into macro-domains.
+- **Interactive Visual Suite**: Generates self-contained HTML dashboards (`cluster_3d_galaxy_visualization.html`, `stage_04_llm_payload_gallery.html`, `isolated_communities_only.html`) with in-page toggles to compare raw Leiden baseline partitions against agglomerated macro-domains.
 
 ### Stage 4: Synthesis
 Translates graph partitions and low-density nodes into deployable Python code:
@@ -95,7 +96,7 @@ Pipeline behavior is configured via modular YAML files:
 - **[configs/llm.yaml](configs/llm.yaml)**: Local Ollama model name, API endpoints, temperature, and context window limits.
 - **[configs/io.yaml](configs/io.yaml)**: Ingestion source (`directory` vs. `parquet`), input/output paths, and resume modes (`skip` vs. `overwrite`).
 - **[configs/refinement.yaml](configs/refinement.yaml)**: Embedding models, taxonomic lifting toggles, target theme count guidance, and clustering thresholds.
-- **[configs/topology.yaml](configs/topology.yaml)**: Hub extraction thresholds, Leiden modularity resolution, architectural tier scoring weights, and tabular CSV export toggles.
+- **[configs/topology.yaml](configs/topology.yaml)**: Hub extraction thresholds, Leiden modularity resolution, agglomeration similarity thresholds (macro-domain fusion), architectural tier scoring weights, and tabular CSV export toggles.
 - **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster sizes, hub target caps, and payload options.
 
 ---
