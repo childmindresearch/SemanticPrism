@@ -14,7 +14,34 @@
 
 topology:
   # ----------------------------------------------------------------------------
-  # SECTION 0: PIPELINE EXECUTION & TABULAR DIAGNOSTIC REPORTS
+  # SECTION 0: TUNING PARADIGM & MACRO DIALS
+  # ----------------------------------------------------------------------------
+  # Options:
+  #   - "macro_dials": Self-calibrates the 50+ granular parameters below based on
+  #                    dataset scale (|V|, |E|), edge density, and dynamic convergence.
+  #   - "manual":      Uses the explicit granular parameters defined in Sections 1-5 verbatim.
+  tuning_mode: "macro_dials"           # "macro_dials" (adaptive) or "manual" (explicit)
+
+  macro_dials:
+    # 1. Domain Granularity Intent (Target Schema Breadth & Count)
+    #    "macro":    3-5 broad overarching schemas (e.g. lower resolution, eager agglomeration)
+    #    "balanced": 5-8 cohesive domain schemas (recommended)
+    #    "granular": 8-15 specialized micro-schemas
+    domain_granularity: "balanced"
+
+    # 2. Core Separation Profile (Strictness of Global Hub Pruning)
+    #    "conservative": Prunes only extreme statistical outliers (Z > 2.5); preserves more bridges
+    #    "balanced":     Uses automatic knee detection on composite bridge prominence (recommended)
+    #    "aggressive":   Aggressively strips shared cross-cutting terms into enums.py
+    core_separation_profile: "balanced"
+
+    # 3. Dynamic Scale Auto-Detection
+    #    true: Automatically scales absorption thresholds, min cluster floors, and
+    #          agglomeration convergence based on graph size |V| and edge density rho.
+    auto_scale_detection: true
+
+  # ----------------------------------------------------------------------------
+  # SECTION 0.1: PIPELINE EXECUTION & TABULAR DIAGNOSTIC REPORTS
   # ----------------------------------------------------------------------------
   execution_mode: "community"          # Target pipeline mode: "community"
   export_tabular_reports: true         # Generate CSV diagnostics (complete graph, hubs, subgraphs, communities)
@@ -63,7 +90,7 @@ topology:
     # Leiden Modularity Resolution Density Parameter (gamma)
     # Higher values (> 1.0) produce smaller, more cohesive sub-communities;
     # Lower values (< 1.0) produce larger, macro-thematic communities.
-    leiden_resolution: 1.0
+    leiden_resolution: 0.8
 
 
   # ----------------------------------------------------------------------------
@@ -82,7 +109,7 @@ topology:
     #   w_eff = (1 - alpha) * w_freq + alpha * max(min_cosine_floor, cos_sim(u, v))
     enable_weighted_leiden: true
     edge_weighting_mode: "hybrid"      # "hybrid" (frequency + cosine similarity) or "frequency_only"
-    hybrid_semantic_alpha: 0.35        # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
+    hybrid_semantic_alpha: 0.50        # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
     min_cosine_floor: 0.1              # Baseline floor to prevent zero-weight edges for non-aligned pairs
 
     # --- 3.3 Guarded Pendant Leaf Attachment (Pass 2 Noise Defense) ---
@@ -93,7 +120,7 @@ topology:
     # --- 3.4 Centroid-Driven Micro-Cluster Absorption ---
     # Absorbs small fragmented micro-clusters into high-affinity neighboring macro-communities:
     enable_micro_cluster_absorption: true
-    absorption_size_threshold: 12      # Maximum node count for candidate micro-clusters (size < threshold)
+    absorption_size_threshold: 20      # Maximum node count for candidate micro-clusters (size < threshold)
     min_absorption_similarity: 0.28    # Guardrail tau_min: Minimum centroid cosine similarity for absorption
     absorption_contrast_margin: 0.05   # Required margin over second-best candidate: sim(best) - sim(second) >= delta
     freeze_centroids_pre_absorption: true # Keep target community centroids fixed during absorption to avoid drift
@@ -113,12 +140,12 @@ topology:
     # --- 3.7 Hierarchical Community Agglomeration ---
     # Iteratively consolidates redundant or split communities with near-identical centroids:
     enable_community_agglomeration: true
-    agglomeration_similarity_threshold: 0.85 # Centroid cosine similarity cutoff for merging communities
-    max_agglomeration_passes: 25       # Iterative convergence ceiling
+    agglomeration_similarity_threshold: 0.75 # Centroid cosine similarity cutoff for merging communities
+    max_agglomeration_passes: 5       # Iterative convergence ceiling
     center_agglomeration_embeddings: true # Subtract corpus mean vector mu to eliminate anisotropic baseline shift
 
     # --- 3.8 Disjoint Triplet Payload Partitioning ---
-    triplet_payload_mode: "include_boundary"     # "include_boundary" or "strictly_intra_only"
+    triplet_payload_mode: "strictly_intra_only" # "include_boundary" or "strictly_intra_only"
     exclude_hub_triplets_from_communities: false # Exclude any triplet containing a global hub node
 
 

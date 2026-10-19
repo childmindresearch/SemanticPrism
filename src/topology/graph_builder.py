@@ -88,6 +88,10 @@ class TopologyPipeline:
         self.full_config = config
         self.config = config.get('topology', {})
         
+        # Paradigm Config: "macro_dials" (adaptive self-tuning) vs "manual" (explicit YAML parameters)
+        self.tuning_mode = self.config.get('tuning_mode', 'macro_dials')
+        self.macro_dials_cfg = self.config.get('macro_dials', {})
+        
         # Global Hub Pruning Config (Stages 3.1 & 3.2 - Universal Evaluation)
         self.hub_cfg = self.config.get('hub_pruning', {})
         self.hub_p_thresh = float(self.hub_cfg.get('participation_threshold', 0.80))
@@ -100,7 +104,7 @@ class TopologyPipeline:
 
         # Path 1 Config (Approach A: Community Path)
         self.comm_cfg = self.config.get('community_path', {})
-        self.leiden_res = self.comm_cfg.get('leiden_resolution', 1.0)
+        self.leiden_res = self.comm_cfg.get('leiden_resolution', 0.8)
 
         # Semantic Community Enhancement Config (Stage 3 Topology Refinement Integration)
         self.semantic_cfg = self.config.get('semantic_clustering', {})
@@ -108,14 +112,14 @@ class TopologyPipeline:
         self.quarantine_true_isolates = self.semantic_cfg.get('quarantine_true_isolates', True)
         self.enable_weighted_leiden = self.semantic_cfg.get('enable_weighted_leiden', True)
         self.edge_weighting_mode = self.semantic_cfg.get('edge_weighting_mode', 'hybrid')
-        self.hybrid_semantic_alpha = float(self.semantic_cfg.get('hybrid_semantic_alpha', 0.35))
+        self.hybrid_semantic_alpha = float(self.semantic_cfg.get('hybrid_semantic_alpha', 0.50))
         self.min_cosine_floor = float(self.semantic_cfg.get('min_cosine_floor', 0.1))
         self.enable_guarded_leaf_attachment = bool(self.semantic_cfg.get('enable_guarded_leaf_attachment', True))
         self.min_leaf_attachment_similarity = float(self.semantic_cfg.get('min_leaf_attachment_similarity', 0.45))
         self.enable_micro_cluster_absorption = self.semantic_cfg.get('enable_micro_cluster_absorption', True)
         self.min_absorption_similarity = float(self.semantic_cfg.get('min_absorption_similarity', 0.28))
         self.absorption_contrast_margin = float(self.semantic_cfg.get('absorption_contrast_margin', 0.05))
-        self.absorption_size_threshold = int(self.semantic_cfg.get('absorption_size_threshold', 12))
+        self.absorption_size_threshold = int(self.semantic_cfg.get('absorption_size_threshold', 20))
         self.freeze_centroids_pre_absorption = self.semantic_cfg.get('freeze_centroids_pre_absorption', True)
         self.enable_singleton_harvesting = self.semantic_cfg.get('enable_singleton_harvesting', True)
         self.singleton_harvesting_threshold = float(self.semantic_cfg.get('singleton_harvesting_threshold', 0.40))
@@ -124,8 +128,8 @@ class TopologyPipeline:
         self.refugee_margin_delta = float(self.semantic_cfg.get('refugee_margin_delta', 0.06))
         self.require_structural_neighbor = self.semantic_cfg.get('require_structural_neighbor', True)
         self.enable_community_agglomeration = bool(self.semantic_cfg.get('enable_community_agglomeration', True))
-        self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.85))
-        self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 25))
+        self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.75))
+        self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 5))
         self.center_agglomeration_embeddings = bool(self.semantic_cfg.get('center_agglomeration_embeddings', True))
 
         # Dedicated Visualization Engine
@@ -134,6 +138,80 @@ class TopologyPipeline:
         # Tabular CSV Exporter & Top Hubs Export Target
         self.top_n_hubs_export = self.config.get('top_n_hubs_export', 30) or 30
         self.tabular_exporter = TopologyTabularExporter(config=self.config)
+
+    def _apply_macro_dials_calibration(self, dg: nx.DiGraph, ug: nx.Graph):
+        """
+        Dynamically calibrates pipeline hyperparameters from intrinsic graph properties
+        when tuning_mode == 'macro_dials'. If tuning_mode == 'manual', leaves all
+        granular YAML parameters untouched.
+        """
+        if getattr(self, "tuning_mode", "manual") != "macro_dials":
+            return
+
+        macro_cfg = getattr(self, "macro_dials_cfg", {})
+        granularity = str(macro_cfg.get("domain_granularity", "balanced")).lower()
+        separation = str(macro_cfg.get("core_separation_profile", "balanced")).lower()
+        auto_scale = bool(macro_cfg.get("auto_scale_detection", True))
+
+        num_nodes = len(dg)
+        num_edges = dg.number_of_edges()
+        density = (2.0 * num_edges) / (num_nodes * (num_nodes - 1)) if num_nodes > 1 else 0.0
+
+        # 1. Granularity Intent (Target Schema Breadth & Count)
+        if granularity == "macro":
+            base_leiden_res = 0.55
+            self.agglomeration_similarity_threshold = 0.70
+            self.max_agglomeration_passes = 20
+        elif granularity == "granular":
+            base_leiden_res = 1.05
+            self.agglomeration_similarity_threshold = 0.80
+            self.max_agglomeration_passes = 5
+        else:  # "balanced"
+            base_leiden_res = 0.75
+            self.agglomeration_similarity_threshold = 0.74
+            self.max_agglomeration_passes = 15
+
+        # 2. Dynamic Scale Auto-Detection
+        if auto_scale:
+            if num_nodes < 50:
+                # Small/toy dataset (e.g. 5-30 nodes): preserve connectivity, never prune hubs
+                self.min_hub_degree = max(3, int(0.7 * num_nodes))
+                self.max_global_hubs = 0
+                self.absorption_size_threshold = max(2, int(0.15 * num_nodes))
+                self.leiden_res = max(0.4, base_leiden_res * 0.8)
+                self.hybrid_semantic_alpha = 0.60
+            elif num_nodes < 500:
+                # Mid-sized dataset
+                self.min_hub_degree = max(8, int(0.04 * num_nodes))
+                self.max_global_hubs = 5
+                self.absorption_size_threshold = max(5, int(0.03 * num_nodes))
+                self.leiden_res = base_leiden_res
+                self.hybrid_semantic_alpha = 0.50
+            else:
+                # Large complex dataset (e.g. 5,000+ nodes)
+                self.min_hub_degree = max(25, int(math.sqrt(num_nodes)))
+                self.max_global_hubs = 10
+                self.absorption_size_threshold = max(15, min(25, int(0.003 * num_nodes + 15)))
+                self.leiden_res = base_leiden_res
+                density_factor = min(1.0, max(0.0, math.sqrt(density * 50)))
+                self.hybrid_semantic_alpha = round(0.55 - 0.20 * density_factor, 2)
+        else:
+            self.leiden_res = base_leiden_res
+
+        # 3. Core Separation Profile (Strictness of Hub Pruning)
+        if separation == "conservative":
+            self.hub_p_thresh = 0.85
+            self.max_global_hubs = min(self.max_global_hubs, 5)
+        elif separation == "aggressive":
+            self.hub_p_thresh = 0.68
+            self.max_global_hubs = max(self.max_global_hubs, 15)
+        else:  # "balanced"
+            self.hub_p_thresh = 0.75
+
+        print(f"   ==> [Macro Dials Auto-Calibration] Active Mode: '{granularity}' granularity, '{separation}' separation (Auto-Scale: {auto_scale})")
+        print(f"       -> Graph Profile: {num_nodes} nodes, {num_edges} edges, Density: {density:.6f}")
+        print(f"       -> Calibrated Hyperparameters: leiden_res={self.leiden_res:.2f}, hub_deg_floor={self.min_hub_degree}, hub_p_thresh={self.hub_p_thresh:.2f}, max_hubs={self.max_global_hubs}")
+        print(f"       -> Calibrated Clustering: absorption_size={self.absorption_size_threshold}, agglomeration_tau={self.agglomeration_similarity_threshold:.2f} (max passes: {self.max_agglomeration_passes}), alpha={self.hybrid_semantic_alpha:.2f}")
 
     def execute(self, refined_triplets: List[Dict[str, Any]]) -> Dict[str, TopologyResult]:
         print("=== SemanticPrism Stage 3: Topology Pipeline (Rebuilt 3-Stage Architecture) ===")
@@ -171,6 +249,9 @@ class TopologyPipeline:
             else:
                 ug.add_edge(u, v, **data)
                 ug[u][v]['weight'] = w
+
+        # Dynamically calibrate pipeline hyperparameters if macro_dials enabled
+        self._apply_macro_dials_calibration(dg, ug)
 
         # ---------------------------------------------------------------------
         # STAGE 3.1: Raw Overall Graph Evaluation, Modularity & Hub Identification
@@ -393,7 +474,9 @@ class TopologyPipeline:
                 "leiden_raw_modularity": leiden_raw_q,
                 "leiden_raw_community_count": leiden_raw_comms_count,
                 "semantic_theme_modularity": theme_q
-            }
+            },
+            "tuning_mode": getattr(self, "tuning_mode", "manual"),
+            "macro_dials": getattr(self, "macro_dials_cfg", {}) if getattr(self, "tuning_mode", "manual") == "macro_dials" else None
         }
 
         with open(out_dir / "raw_graph_diagnostics.json", "w") as f:
