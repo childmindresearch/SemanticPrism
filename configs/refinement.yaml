@@ -1,79 +1,95 @@
-# =========================================================================
+# ==============================================================================
 # STAGE 2: VECTOR CLUSTERING & TAXONOMIC LIFTING CONFIGURATION
-# =========================================================================
-# Controls vector embeddings, dimension-aware HDBSCAN clustering, and
-# taxonomic hypernym lifting thresholds.
-# =========================================================================
+# ==============================================================================
+# Governs vector embeddings, empirical theme harmonization, dimension-aware
+# UMAP/HDBSCAN clustering, and taxonomic hypernym abstraction:
+#
+#   Section 0: Global Embedding & Execution Environment
+#   Section 1: Master Theme Clustering & Synthesis (Stage 1.8 Theme Harmonization)
+#   Section 2: SVO Taxonomic Lifting Controls (Stage 2 Abstraction Toggles)
+#   Section 3: Dimension-Aware Calibration Matrix (Stage 2 SVO Clustering)
+#   Section 4: Evaluation & Diagnostic Quality Exports (Stage 2 Quality Control)
+# ==============================================================================
 
 refinement:
+  # ----------------------------------------------------------------------------
+  # SECTION 0: GLOBAL EMBEDDING & EXECUTION ENVIRONMENT
+  # ----------------------------------------------------------------------------
+  # SentenceTransformers vector model for SVO hypernym clustering and contextual vectors
+  embedding_model: "all-MiniLM-L6-v2"  # e.g., "all-MiniLM-L6-v2" (384d), "BAAI/bge-large-en-v1.5" (1024d)
+  batch_size: 128                      # GPU/CPU embedding batch size (default: 128)
+  vector_cache_dir: "outputs/02_refinement/cache" # Cache directory for .npy embeddings and _meta.json
 
-  # =========================================================================
-  # TAXONOMIC LIFTING & VECTOR CLUSTERING TOGGLES
-  # =========================================================================
-  # Controls SentenceTransformers vector clustering and LLM hypernym resolution.
-  # Can be toggled independently for subjects, predicates, and objects.
-  enable_taxonomic_lifting: true
-  lift_subjects: true
-  lift_predicates: false
-  lift_objects: true
 
-  embedding_model: "all-MiniLM-L6-v2"  # "BAAI/bge-large-en-v1.5" // SentenceTransformers vector embedding model for triplet hypernym lifting
+  # ----------------------------------------------------------------------------
+  # SECTION 1: MASTER THEME CLUSTERING & SYNTHESIS (Stage 1.8 Theme Harmonization)
+  # ----------------------------------------------------------------------------
+  # Governs how raw extracted themes (all_themes.json) are partitioned into
+  # master domains prior to LLM synthesis. Runs immediately after Stage 1.
+  # ----------------------------------------------------------------------------
+  # --- Clustering Mode & Target Cluster Count ---
+  #   - "dynamic": Self-calibrating approach (Adaptive k-NN graph + Leiden community detection).
+  #                Automatically determines optimal natural master domains based on modularity.
+  #   - "fixed":   Variance-minimizing Ward Hierarchical clustering (partitions strictly into target K).
+  theme_clustering_mode: "dynamic"     # Selection: "dynamic" (Recommended) or "fixed"
+  target_master_theme_count: 8         # Target number of master clusters for the 'fixed' option (Ward K)
 
-  # =========================================================================
-  # MASTER THEME CLUSTERING & SYNTHESIS SPECIFICATION
-  # =========================================================================
-  # Governs how raw extracted themes (all_themes.json) are partitioned into 
-  # master domains prior to LLM synthesis.
-  #
-  # Clustering Mode Options:
-  #   - "dynamic": Primary self-calibrating approach (Adaptive k-NN + Leiden community detection).
-  #                Automatically determines the optimal number of natural master domains 
-  #                based on corpus graph modularity without forcing an arbitrary count.
-  #   - "fixed":   Variance-minimizing Ward Hierarchical clustering.
-  #                Strictly partitions all themes into exactly 'target_master_theme_count' clusters.
-  theme_clustering_mode: "dynamic"          # Selection: "dynamic" (Recommended) or "fixed"
-
-  # Target cluster count K (used exclusively when theme_clustering_mode is set to "fixed")
-  target_master_theme_count: 8              # Target number of master clusters for the 'fixed' option (Ward K)
-
-  # Master Theme Synthesis Strategy
-  #   - "map_reduce":   Two-Stage Map-Reduce (Recommended for large corpora). Deep per-cluster analysis 
+  # --- Master Theme Synthesis Strategy ---
+  #   - "map_reduce":   Two-Stage Map-Reduce (Recommended for large corpora). Deep per-cluster analysis
   #                     followed by global contrastive harmonization with empirical anchor themes.
   #   - "single_stage": Traditional single-prompt synthesis using top N centroid exemplars.
-  master_synthesis_strategy: "map_reduce"       # Selection: "map_reduce" (Recommended) or "single_stage"
+  master_synthesis_strategy: "map_reduce" # Selection: "map_reduce" (Recommended) or "single_stage"
 
-  # Map Stage Parameters (Per-Cluster Specialist LLM — used when master_synthesis_strategy is 'map_reduce')
-  theme_map_max_themes_per_cluster: 150         # Maximum cap of member themes passed per cluster in map stage
-  theme_map_payload_format: "title_desc"        # Field length control: "title_desc" (recommended), "title", or "title_desc_reasoning"
+  # --- Map Stage Parameters (Per-Cluster Specialist LLM — used in 'map_reduce') ---
+  theme_map_max_themes_per_cluster: 150 # Maximum cap of member themes passed per cluster in map stage
+  theme_map_payload_format: "title_desc" # Field length control: "title_desc" (recommended), "title", or "title_desc_reasoning"
 
-  # Reduce Stage Parameters (Global Harmonization LLM — used when master_synthesis_strategy is 'map_reduce')
-  reduce_anchor_theme_count: 5                  # Top N closest centroid themes passed as grounding context in reduce prompt
+  # --- Reduce Stage Parameters (Global Harmonization LLM — used in 'map_reduce') ---
+  reduce_anchor_theme_count: 5         # Top N closest centroid themes passed as grounding context in reduce prompt
 
-  # Legacy Single-Stage Fallback Parameters (used exclusively when master_synthesis_strategy is 'single_stage')
-  theme_exemplars_per_cluster: 10               # Number of top exemplar themes per cluster sent to single-stage LLM prompt
+  # --- Legacy Single-Stage Fallback Parameters (used exclusively in 'single_stage') ---
+  theme_exemplars_per_cluster: 10      # Number of top exemplar themes per cluster sent to single-stage LLM prompt
 
-  # Theme embedding model & payload format
+  # --- Theme Embedding Model & Payload Format ---
   theme_embedding_model: "all-MiniLM-L6-v2"        # SentenceTransformers vector model for theme clustering
   theme_embedding_payload: "title_desc_reasoning" # Payload format: "title_desc_reasoning", "title_desc", or "title"
 
-  # Theme Topological Manifold & Micro-Cluster Parameters
-  theme_manifold_edge_threshold: 0.35           # Cosine similarity lower-bound to enforce strict semantic grounding in manifold graph
-  theme_micro_cluster_ratio: 0.01               # Ratio of corpus size N below which micro-clusters are absorbed into dominant centroids
+  # --- Theme Topological Manifold & Micro-Cluster Safeguards ---
+  theme_manifold_edge_threshold: 0.35  # Cosine similarity lower-bound to enforce strict semantic grounding in manifold graph
+  theme_micro_cluster_ratio: 0.01      # Ratio of corpus size N below which micro-clusters are absorbed into dominant centroids
 
-  # Theme Consolidation Multi-Tier Confidence Thresholds
-  theme_confidence_high_threshold: 0.40     # Cosine score >= 0.40 -> High Confidence
-  theme_confidence_medium_threshold: 0.25   # 0.25 <= Cosine score < 0.40 -> Medium Confidence
-  theme_confidence_low_threshold: 0.15      # 0.15 <= Cosine score < 0.25 -> Low Confidence
-  
-  # =========================================================================
-  # TWO-TIER VECTOR CLUSTERING & CACHING
-  # =========================================================================
-  vector_cache_dir: "outputs/02_refinement/cache" # Cache directory for .npy embeddings and _meta.json
-  print_centroid_vector: true                     # Include centroid_vector in cluster JSON output
-  plot_trustworthiness: true                      # Generates UMAP Trustworthiness vs n_components .jpg evaluation charts
+  # --- Theme Consolidation Multi-Tier Confidence Thresholds ---
+  theme_confidence_high_threshold: 0.40   # Cosine score >= 0.40 -> High Confidence
+  theme_confidence_medium_threshold: 0.25 # 0.25 <= Cosine score < 0.40 -> Medium Confidence
+  theme_confidence_low_threshold: 0.15    # 0.15 <= Cosine score < 0.25 -> Low Confidence
 
-  # Dimension-Aware Dynamic Parameter Calibration Matrix
-  # (Sourced directly by resolve_clustering_params in refiner.py)
+
+  # ----------------------------------------------------------------------------
+  # SECTION 2: SVO TAXONOMIC LIFTING CONTROLS (Stage 2 Hypernym Resolution)
+  # ----------------------------------------------------------------------------
+  # Controls whether extracted SVO components undergo semantic vector clustering
+  # and LLM taxonomic abstraction into canonical hypernyms.
+  # Can be toggled independently for subjects, predicates, and objects.
+  enable_taxonomic_lifting: true       # Master switch for taxonomic lifting pipeline
+  lift_subjects: true                  # Abstract entity subjects into canonical hypernyms
+  lift_predicates: false               # Abstract relational predicates into canonical hypernyms
+  lift_objects: true                   # Abstract entity objects into canonical hypernyms
+
+
+  # ----------------------------------------------------------------------------
+  # SECTION 3: DIMENSION-AWARE CALIBRATION MATRIX (Stage 2 Vector Clustering)
+  # ----------------------------------------------------------------------------
+  # Sourced directly by resolve_clustering_params() in refiner.py.
+  # Dynamically adapts UMAP dimensionality reduction, HDBSCAN cluster extraction,
+  # and macro-agglomeration linkage based on the embedding dimensionality D:
+  #
+  #   - Tier A: Low-Dimensional Space  (D <= 512, e.g. MiniLM 384d)
+  #             Dense local geometry; uses EOM and higher tau thresholds.
+  #   - Tier B: Mid-Dimensional Space  (512 < D <= 768, e.g. MPNet 768d)
+  #             Balanced geometry; standard parameters and intermediate thresholds.
+  #   - Tier C: High-Dimensional Space (D > 768, e.g. BGE-Large 1024d)
+  #             Sparse hypersphere; uses leaf selection, complete linkage, and lower tau.
+  # ----------------------------------------------------------------------------
   calibration:
     # Tier A: Low-Dimensional Space (D <= 512, e.g. MiniLM 384d)
     low_dim:
@@ -84,8 +100,8 @@ refinement:
       hdbscan_selection: "eom"
       macro_linkage: "average"
       entity:
-        rescue_tau: 0.32
-        tau_macro: 0.48
+        rescue_tau: 0.32               # Cosine similarity floor to rescue HDBSCAN noise (-1) to nearest cluster
+        tau_macro: 0.48                # Hierarchical macro-agglomeration merge distance threshold
       predicate:
         rescue_tau: 0.28
         tau_macro: 0.38
@@ -120,3 +136,9 @@ refinement:
         tau_macro: 0.18
 
 
+  # ----------------------------------------------------------------------------
+  # SECTION 4: EVALUATION & DIAGNOSTIC QUALITY EXPORTS (Stage 2 Quality Control)
+  # ----------------------------------------------------------------------------
+  # Governs output diagnostics, mathematical verification, and manifold validation:
+  print_centroid_vector: true          # Include L2 Spherical Fréchet Mean vector in cluster JSON output
+  plot_trustworthiness: true           # Generate UMAP Trustworthiness (T_k) vs n_components diagnostic charts (.jpg)

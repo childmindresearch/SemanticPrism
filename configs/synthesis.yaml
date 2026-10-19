@@ -1,75 +1,61 @@
-# =========================================================================
+# ==============================================================================
 # STAGE 4: PYDANTIC SCHEMA SYNTHESIS CONFIGURATION
-# =========================================================================
-# Controls target qualification, PageRank triplet payload
-# pruning, and schema execution modes.
-# =========================================================================
+# ==============================================================================
+# Governs target qualification, enum & literal vector clustering,
+# C-TF-IDF domain term extraction, quote scoring, and schema generation:
+#
+#   Section 0: Pipeline Execution & Target Qualification
+#   Section 1: Phase 1 Enum & Literal Vector Clustering (enums.py)
+#   Section 2: Phase 2 LLM Prompt Payload Structure & Logging
+#   Section 3: C-TF-IDF Domain Term Specificity Scoring (Phase 2 Terms)
+#   Section 4: Thematic Observation Evidence Scoring (Phase 2 Context Quotes)
+# ==============================================================================
 
 synthesis:
-  # Stage 4 Synthesis Path Execution Mode
-  execution_mode: "community"
-
-  # Stage 4 Schema Pass Execution Mode
-  # Options: "normalized" (taxonomically lifted triplets from refined_triplets.json), "raw" (original_triplets.json), "both"
-  schema_pass_mode: "raw"
-
-  # Entity threshold for Synthesis schema creation.
-  # Clusters with < min_cluster_size entities are routed directly to Enum synthesis (enums.py).
-  # Use 2 for small test datasets; 15+ for large production corpora.
-  min_cluster_size: 15
+  # ----------------------------------------------------------------------------
+  # SECTION 0: PIPELINE EXECUTION & TARGET QUALIFICATION
+  # ----------------------------------------------------------------------------
+  execution_mode: "community"          # Stage 4 Synthesis Path Execution Mode: "community"
+  schema_pass_mode: "raw"              # Options: "raw" (original_triplets.json), "normalized" (refined_triplets.json), or "both"
+  min_cluster_size: 15                 # Entity threshold for schema creation (targets < min_cluster_size route to enums.py)
+  max_triplets_per_target: 1200        # Maximum triplets per schema target (PageRank intra-community cap)
 
 
-
-  # =========================================================================
-  # ENUM SEMANTIC CLUSTERING & COHESION FILTERING
-  # =========================================================================
-  # Controls vector-based grouping and cohesion filtering of orphan/low-density nodes
-  # before passing candidate terms to Enum synthesis (Phase 1).
+  # ----------------------------------------------------------------------------
+  # SECTION 1: PHASE 1 ENUM & LITERAL VECTOR CLUSTERING (enums.py)
+  # ----------------------------------------------------------------------------
+  # Governs vector-based semantic grouping and cohesion filtering of orphan/low-density
+  # nodes and systemic hubs before passing candidate terms to Enum synthesis.
+  # ----------------------------------------------------------------------------
   enum_clustering:
-    enabled: true
-    # Maximum cosine distance between cluster members (0.48 distance ~ 0.52+ cosine similarity)
-    distance_threshold: 0.48
-    # Minimum cluster size to form a qualified Enum class (singletons discarded as noise)
-    min_cluster_size: 4
-    # Minimum average cosine similarity to cluster centroid to qualify as a strong cluster
-    min_cohesion_score: 0.55
-    # Maximum candidate clusters per LLM payload batch to prevent context window overflow
-    max_clusters_per_batch: 25
+    enabled: true                      # Enable vector-based clustering of orphan concepts into discrete enums
+    distance_threshold: 0.48           # Maximum cosine distance between cluster members (0.48 dist ~ 0.52+ cosine sim)
+    min_cluster_size: 4                # Minimum cluster size to form a qualified Enum class (singletons discarded as noise)
+    min_cohesion_score: 0.55           # Minimum average cosine similarity to cluster centroid to qualify
+    max_clusters_per_batch: 25         # Maximum candidate clusters per LLM prompt payload batch
 
-  # Maximum number of triplets sent to the LLM per schema generation target.
-  # Subsets exceeding this cap are pruned based on PageRank and intra-community status.
-  max_triplets_per_target: 1200
 
-  # Controls whether to save the full text payloads sent to the LLM during Stage 4 Synthesis.
-  # When true, payloads are saved to the directory specified in payload_output_dir.
-  save_llm_payloads: true
-  payload_output_dir: "outputs/payload_text/stage_04_synthesis"
+  # ----------------------------------------------------------------------------
+  # SECTION 2: PHASE 2 LLM PROMPT PAYLOAD STRUCTURE & LOGGING
+  # ----------------------------------------------------------------------------
+  # Specifies the item structure of Phase 2 schema synthesis payloads sent to the LLM:
+  #   - "raw_text": {'text': source_quote, 'theme_association': ...}
+  #   - "triples":  {'text': 'subject predicate object.', 'theme_association': ...}
+  #   - "both":     {'triple': 'subject predicate object.', 'text': source_quote, 'theme_association': ...}
+  payload_values: "raw_text"           # Selection: "raw_text" (recommended), "triples", or "both"
+  save_llm_payloads: true              # Save rendered text payloads sent to LLM for full auditability
+  payload_output_dir: "outputs/payload_text/stage_04_synthesis" # Output directory for payload text logs
 
-  # Specifies the item structure of Phase 2 schema synthesis payloads sent to the LLM.
-  # Options:
-  #   "triples"  - {'text': 'subject predicate object.', 'theme_association': ...}
-  #   "raw_text" - {'text': source_quote, 'theme_association': ...}
-  #   "both"     - {'triple': 'subject predicate object.', 'text': source_quote, 'theme_association': ...}
-  payload_values: "raw_text"
 
-  # Maximum number of curated source text sentences per community target payload (default: 60)
-  max_sentences_per_target: 200
-
-  # Minimum character length for source text quotes to be considered valid observations
-  min_sentence_length: 15
-
-  # Number of prominent, specific domain terms to provide in the payload (default: 12)
-  top_domain_terms_count: 5
-
-  # C-TF-IDF Domain Term Specificity Scoring Parameters
-  # score = ((deg + 1.0) / (n_targets ** domain_terms_idf_exponent)) * (domain_terms_multi_word_boost if ' ' in term else 1.0)
-  domain_terms_idf_exponent: 1.5           # Exponent penalizing terms appearing across multiple communities (C-TF-IDF specificity)
-  domain_terms_multi_word_boost: 1.2       # Multiplier boost for multi-word domain phrases over single words
-
-  # Thematic Observation Scoring Parameters
-  # sentence_score = avg_fid * (1.0 + observation_overlap_weight * min(observation_overlap_max_cap, node_overlap))
-  observation_overlap_weight: 0.25         # Weight multiplier per community entity mentioned in sentence quote
-  observation_overlap_max_cap: 4           # Maximum count cap on entity mentions contributing to sentence score bonus
+  # ----------------------------------------------------------------------------
+  # SECTION 3: C-TF-IDF DOMAIN TERM SPECIFICITY SCORING (Phase 2 Terms)
+  # ----------------------------------------------------------------------------
+  # Governs the extraction of high-prominence, community-specific domain terms:
+  # Score = ((deg + 1.0) / (n_targets ** idf_exponent)) * multi_word_boost
+  # ----------------------------------------------------------------------------
+  top_domain_terms_count: 5            # Number of prominent, specific domain terms to provide in the payload (default: 5)
+  domain_terms_idf_exponent: 1.5       # Exponent penalizing terms appearing across multiple communities (C-TF-IDF specificity)
+  domain_terms_multi_word_boost: 1.2   # Multiplier boost for multi-word domain phrases over single words
 
   # Stop words and generic vocabulary filtered out when deriving top domain terms
   generic_exclusions:
@@ -125,3 +111,15 @@ synthesis:
     - category
     - categories
     - cat
+
+
+  # ----------------------------------------------------------------------------
+  # SECTION 4: THEMATIC OBSERVATION EVIDENCE SCORING (Phase 2 Context Quotes)
+  # ----------------------------------------------------------------------------
+  # Governs the ranking and curation of source sentence quotes grounding community schemas:
+  # Score = avg_fid * (1.0 + overlap_weight * min(overlap_max_cap, node_overlap))
+  # ----------------------------------------------------------------------------
+  max_sentences_per_target: 200        # Maximum curated source text sentences per community target payload
+  min_sentence_length: 15              # Minimum character length for source text quotes to be considered valid
+  observation_overlap_weight: 0.25     # Weight multiplier per community entity mentioned in sentence quote
+  observation_overlap_max_cap: 4       # Maximum count cap on entity mentions contributing to sentence score bonus

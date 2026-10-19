@@ -1,169 +1,184 @@
-# =========================================================================
-# STAGE 3: GRAPH TOPOLOGY CONFIGURATION (Core-Separation & Community Architecture)
-# =========================================================================
-# Controls graph partitioning, community workflow discovery,
-# architectural tier partitioning, and HTML canvas visual rendering.
-# =========================================================================
+# ==============================================================================
+# STAGE 3: GRAPH ARCHITECTURE & TOPOLOGY CONFIGURATION
+# ==============================================================================
+# Governs graph partitioning, community workflow discovery, architectural tier
+# partitioning, and HTML canvas visual rendering:
+#
+#   Section 0: Pipeline Execution & Tabular Diagnostic Reports
+#   Section 1: Global Hub & Chokepoint Pruning (Stage 3.1: Core Separation)
+#   Section 2: Community Modularity Optimization Baseline (Stage 3.2: Partitioning)
+#   Section 3: Semantic Community Refinement & Strict Isolation (Stage 3.2: Boundary Refinement)
+#   Section 4: Architectural Tier Partitioning (Stage 3.3: Nucleus / Mechanics / Nuance)
+#   Section 5: 3D Galaxy Visualization & Manifold De-Biasing (Stage 3.4: Hyper-Space Projection)
+# ==============================================================================
 
 topology:
-  # Execution Mode for Stage 3 Topology Pipeline
-  execution_mode: "community"
-  # Export tabular CSV diagnostic reports (Complete graph, Top N Hubs, Pruned Subgraph, Communities)
-  export_tabular_reports: true
-  top_n_hubs_export: 30       # Minimum top hubs to export in registry (union of top N by degree and all flagged hubs; default 30)
+  # ----------------------------------------------------------------------------
+  # SECTION 0: PIPELINE EXECUTION & TABULAR DIAGNOSTIC REPORTS
+  # ----------------------------------------------------------------------------
+  execution_mode: "community"          # Target pipeline mode: "community"
+  export_tabular_reports: true         # Generate CSV diagnostics (complete graph, hubs, subgraphs, communities)
+  top_n_hubs_export: 30                # Minimum hub count exported to global hub registry CSV (default: 30)
 
 
-  # =========================================================================
-  # GLOBAL HUB PRUNING CONFIGURATION (Stage 3.1 & Stage 3.2 Universal Pruning)
-  # =========================================================================
-  # Evaluated on the complete graph before Stage 3.3 community partitioning.
-  # Concepts meeting these thresholds are identified as systemic hubs,
-  # pruned in Stage 3.2 to decouple modular communities, and routed to enums.py.
+  # ----------------------------------------------------------------------------
+  # SECTION 1: GLOBAL HUB & CHOKEPOINT PRUNING (Stage 3.1: Core Separation)
+  # ----------------------------------------------------------------------------
+  # Evaluated on the complete raw graph before modular community partitioning.
+  # Concepts meeting these criteria are identified as systemic nexus points,
+  # pruned from the core graph to decouple distinct thematic communities, and
+  # exported to enums.py / global hub registries.
+  # ----------------------------------------------------------------------------
   hub_pruning:
-    # Participation Coefficient (P_i) cutoff for extracting cross-community hub nodes.
-    # Value range: 0.0 to 1.0 (Measures how evenly a concept bridges different themes).
-    # - Increase (e.g. 0.8): Extract FEWER hubs (only concepts spanning many themes evenly).
-    # - Decrease (e.g. 0.5): Extract MORE hubs (includes moderately connected concepts).
-    participation_threshold: 0.70
+    # --- Topological Dispersion (Qualitative Cross-Thematic Bridging) ---
+    # Participation Coefficient: P_i = 1 - sum_{s=1}^{M} (k_is / k_i)^2
+    # Measures how uniformly connections are distributed across different modules:
+    #   - 0.0: Perfectly intra-community (all edges within a single theme).
+    #   - 1.0: Uniformly dispersed across all themes (no modular loyalty).
+    participation_threshold: 0.70      # Cutoff for cross-community bridge extraction (range: [0.0, 1.0])
 
-    # Minimum total node degree required to qualify as a global hub.
-    # Prevents low-degree peripheral concepts from being classified as structural hubs.
-    min_hub_degree: 30
+    # --- Structural Prominence & Dynamic Degree Floor (Quantitative Volume) ---
+    # Prevents low-degree peripheral nodes from being classified as global hubs.
+    # When enable_dynamic_hub_degree is true, the effective degree threshold adapts
+    # to the empirical degree distribution: k_thresh = max(floor, min(min_degree, quantile(deg, percentile)))
+    min_hub_degree: 30                 # Upper target degree ceiling for hub classification
+    enable_dynamic_hub_degree: true    # Adaptively calculate degree threshold from empirical distribution
+    dynamic_hub_percentile: 0.95       # Degree percentile cutoff (0.95 = top 5% most connected nodes in graph)
+    min_hub_degree_floor: 15           # Hard absolute minimum degree floor regardless of percentile
 
-    # Dynamic Degree Floor: Dynamically scales min_hub_degree based on the graph's degree distribution.
-    # When enabled, calculates the percentile degree floor and clamps between min_hub_degree_floor and min_hub_degree.
-    enable_dynamic_hub_degree: true
-    dynamic_hub_percentile: 0.95           # Degree percentile cutoff (e.g. 0.95 = top 5% degree in graph)
-    min_hub_degree_floor: 15               # Absolute minimum degree floor to qualify as a global hub
-
-    # Shortest-path betweenness percentile cutoff for extracting workflow chokepoints.
-    # Value range: 0.0 to 1.0 (e.g. 0.95 extracts concepts in top 1 - 0.95 = 5% betweenness).
-    # - Increase (e.g. 0.98): Extract FEWER hubs (only top 2% critical workflow chokepoints).
-    # - Decrease (e.g. 0.90): Extract MORE hubs (top 10% workflow chokepoints).
-    betweenness_percentile: 0.95
-
-    # Absolute shortest-path betweenness centrality score floor to qualify as a workflow chokepoint
-    min_betweenness_score: 0.02
+    # --- Workflow Chokepoints (Shortest-Path Betweenness Centrality) ---
+    # Extracts bottleneck nodes that control information flow across geodesic paths:
+    betweenness_percentile: 0.95       # Centrality percentile cutoff (0.95 = top 5% betweenness in graph)
+    min_betweenness_score: 0.02        # Hard absolute minimum betweenness score floor
 
 
-  # =========================================================================
-  # COMMUNITY PATH CONFIGURATION (Leiden Modularity Optimization)
-  # =========================================================================
+  # ----------------------------------------------------------------------------
+  # SECTION 2: COMMUNITY MODULARITY OPTIMIZATION BASELINE (Stage 3.2: Partitioning)
+  # ----------------------------------------------------------------------------
   community_path:
-    leiden_resolution: 1.0        # Leiden modularity resolution density parameter
+    # Leiden Modularity Resolution Density Parameter (gamma)
+    # Higher values (> 1.0) produce smaller, more cohesive sub-communities;
+    # Lower values (< 1.0) produce larger, macro-thematic communities.
+    leiden_resolution: 1.0
 
-  # =========================================================================
-  # SEMANTIC COMMUNITY ENHANCEMENT & STRICT SEPARATION CONFIGURATION
-  # =========================================================================
+
+  # ----------------------------------------------------------------------------
+  # SECTION 3: SEMANTIC COMMUNITY REFINEMENT & STRICT ISOLATION (Stage 3.2)
+  # ----------------------------------------------------------------------------
+  # Governs semantic-structural edge weighting, post-Leiden boundary refinement,
+  # orphan recovery, and disjoint triplet partitioning.
+  # ----------------------------------------------------------------------------
   semantic_clustering:
-    # 1. Strict Quarantine Safeguards
-    quarantine_global_hubs: true           # Immutable invariant: Hubs pruned in 3.1/3.2 can NEVER enter communities
-    quarantine_true_isolates: true         # Degree-0 nodes connected ONLY to global hubs stay in enums, never absorbed
-    
-    # 2. Weighted Leiden Modularity
-    enable_weighted_leiden: true
-    edge_weighting_mode: "hybrid"          # "frequency_only" or "hybrid" (combines frequency with cosine similarity)
-    hybrid_semantic_alpha: 0.35            # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
-    min_cosine_floor: 0.1                  # Minimum floor for cosine similarity in hybrid edge weighting (mod = max(floor, cos_sim))
-    
-    # 3. Guarded Pendant Leaf Attachment (Pass 2 Noise Defense)
-    enable_guarded_leaf_attachment: true   # Filter degree-1 pendant leaves before attaching to core communities
-    min_leaf_attachment_similarity: 0.45   # Minimum cosine similarity to community centroid to reattach a degree-1 leaf
-    
-    # 4. Centroid-Driven Micro-Cluster Absorption
-    enable_micro_cluster_absorption: true
-    min_absorption_similarity: 0.28        # Guardrail tau_min: Only absorb if cosine similarity to nearest centroid >= 0.28
-    absorption_contrast_margin: 0.05       # Contrast margin: sim(best) - sim(second) >= 0.05 (Enhancement 1)
-    absorption_size_threshold: 12          # Communities with fewer nodes than this threshold are candidates for absorption
-    freeze_centroids_pre_absorption: true  # Prevent centroid drift during absorption
-    
-    # 5. Semantic Singleton Harvesting (Enhancement 2: High-Affinity Orphan Recovery)
-    enable_singleton_harvesting: true      # High-confidence scan of unattached singletons/dyads
-    singleton_harvesting_threshold: 0.40   # Strict high-confidence threshold (tau_harvest >= 0.40)
-    singleton_contrast_margin: 0.05        # Contrast margin over second-best community (delta >= 0.05)
-    
-    # 6. Guarded Semantic Refugee Realignment
-    enable_refugee_realignment: true
-    refugee_margin_delta: 0.06             # sim(foreign) - sim(home) must exceed 0.06 to trigger reassignment (lowered from 0.20)
-    require_structural_neighbor: true      # Must have at least 1 graph edge to candidate foreign community
-    
-    # 7. Hierarchical Community Agglomeration (Cross-Community Consolidation)
-    enable_community_agglomeration: true   # Merges communities with high centroid similarity before finalization
-    agglomeration_similarity_threshold: 0.85 # Merge communities if centroid cosine similarity >= 0.85
-    max_agglomeration_passes: 25           # Maximum iterative merging rounds (safety ceiling until convergence)
-    center_agglomeration_embeddings: true  # Centers embeddings by subtracting corpus mean vector μ to prevent anisotropic centroid collapse
-    
-    # 8. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
-    triplet_payload_mode: "include_boundary" # include_boundary or strictly_intra_only Strictly pure intra-community triplets only (subj in C AND obj in C)
-    exclude_hub_triplets_from_communities: false # Any triplet containing a global hub is completely excluded
-    
+    # --- 3.1 Strict Quarantine Safeguards ---
+    quarantine_global_hubs: true       # Immutable invariant: Pruned hubs NEVER re-enter communities
+    quarantine_true_isolates: true     # Degree-0 concepts (connected only to global hubs) remain in enums
 
-  # =========================================================================
-  # ARCHITECTURAL TIER PARTITIONING (Hybrid Geometric-Topological Scoring)
-  # =========================================================================
-  # Computes topological tiering for offline diagnostics, 3D visualization,
-  # and human-readable spreadsheet exports (community_architectural_tiers.csv):
+    # --- 3.2 Hybrid Semantic-Structural Edge Weighting ---
+    # Modulates graph edge weights for Leiden modularity:
+    #   w_eff = (1 - alpha) * w_freq + alpha * max(min_cosine_floor, cos_sim(u, v))
+    enable_weighted_leiden: true
+    edge_weighting_mode: "hybrid"      # "hybrid" (frequency + cosine similarity) or "frequency_only"
+    hybrid_semantic_alpha: 0.35        # Weight assigned to cosine similarity (0.0 = pure frequency, 1.0 = pure cosine)
+    min_cosine_floor: 0.1              # Baseline floor to prevent zero-weight edges for non-aligned pairs
+
+    # --- 3.3 Guarded Pendant Leaf Attachment (Pass 2 Noise Defense) ---
+    # Re-attaches degree-1 pendant leaves to their primary community core if semantic affinity is verified:
+    enable_guarded_leaf_attachment: true
+    min_leaf_attachment_similarity: 0.45 # Minimum cosine similarity to community centroid to reattach
+
+    # --- 3.4 Centroid-Driven Micro-Cluster Absorption ---
+    # Absorbs small fragmented micro-clusters into high-affinity neighboring macro-communities:
+    enable_micro_cluster_absorption: true
+    absorption_size_threshold: 12      # Maximum node count for candidate micro-clusters (size < threshold)
+    min_absorption_similarity: 0.28    # Guardrail tau_min: Minimum centroid cosine similarity for absorption
+    absorption_contrast_margin: 0.05   # Required margin over second-best candidate: sim(best) - sim(second) >= delta
+    freeze_centroids_pre_absorption: true # Keep target community centroids fixed during absorption to avoid drift
+
+    # --- 3.5 Semantic Singleton Harvesting (High-Affinity Orphan Recovery) ---
+    # Recovers isolated concepts/dyads that share strong thematic alignment with an established core:
+    enable_singleton_harvesting: true
+    singleton_harvesting_threshold: 0.40 # High-confidence cosine similarity threshold (tau_harvest >= 0.40)
+    singleton_contrast_margin: 0.05    # Required contrast margin over second-best community (delta >= 0.05)
+
+    # --- 3.6 Guarded Semantic Refugee Realignment ---
+    # Reassigns misclassified boundary nodes that exhibit stronger semantic affinity to a structural neighbor:
+    enable_refugee_realignment: true
+    refugee_margin_delta: 0.06         # Required excess affinity: sim(foreign) - sim(home) >= 0.06
+    require_structural_neighbor: true  # Node must possess at least 1 structural graph edge to foreign community
+
+    # --- 3.7 Hierarchical Community Agglomeration ---
+    # Iteratively consolidates redundant or split communities with near-identical centroids:
+    enable_community_agglomeration: true
+    agglomeration_similarity_threshold: 0.85 # Centroid cosine similarity cutoff for merging communities
+    max_agglomeration_passes: 25       # Iterative convergence ceiling
+    center_agglomeration_embeddings: true # Subtract corpus mean vector mu to eliminate anisotropic baseline shift
+
+    # --- 3.8 Disjoint Triplet Payload Partitioning ---
+    triplet_payload_mode: "include_boundary"     # "include_boundary" or "strictly_intra_only"
+    exclude_hub_triplets_from_communities: false # Exclude any triplet containing a global hub node
+
+
+  # ----------------------------------------------------------------------------
+  # SECTION 4: ARCHITECTURAL TIER PARTITIONING (Stage 3.3)
+  # ----------------------------------------------------------------------------
+  # Stratifies community members into 3 structural-semantic tiers:
   #   - Tier 1: Thematic Nucleus (Core Invariants)
   #   - Tier 2: Relational Mechanics (Domain Spokes)
-  #   - Tier 3: Contextual Modifiers (Peripheral nuances)
+  #   - Tier 3: Contextual Modifiers (Peripheral nuances & leaves)
+  # Composite Score: S_u = (max(0, P_u))^w_proto * (D_u)^w_cent * (Gamma_u)^w_fid
+  # ----------------------------------------------------------------------------
   architectural_tiers:
     enabled: true
 
-    # Composite Score Formulation:
-    # S_u = (max(0, P_u))^w_proto * (D_u)^w_cent * (Gamma_u)^w_fid
+    # --- Tri-Partite Scoring Weights ---
     weights:
-      prototypicality: 0.40      # Weight for cosine similarity to community centroid
-      centrality: 0.40           # Weight for normalized internal community degree
-      fidelity: 0.20             # Weight for contextual grounding to source quotes
+      prototypicality: 0.40            # Weight for cosine similarity to community centroid (w_proto)
+      centrality: 0.40                 # Weight for normalized internal community degree (w_cent)
+      fidelity: 0.20                   # Weight for evidence grounding from source text quotes (w_fid)
 
-    # Dynamic Percentile Cutoffs & Entity Bounds
-    tier_1_percentile: 0.80      # Top 20% scoring concepts qualify for Tier 1
-    tier_1_min_entities: 2       # Minimum entity count guaranteed for Tier 1
-    tier_1_max_entities: 8       # Maximum cap for Tier 1 entities
-    tier_2_percentile: 0.30      # Next 50% (30th to 80th percentile) form Tier 2
-    # Tier 3 captures the remaining bottom 30% and all degree-1 leaves
+    # --- Dynamic Percentile Thresholds & Entity Bounds ---
+    tier_1_percentile: 0.80            # Top 20% scoring concepts qualify for Tier 1 Nucleus
+    tier_1_min_entities: 2             # Minimum entity count guaranteed for Tier 1
+    tier_1_max_entities: 8             # Maximum entity cap for Tier 1 Nucleus
+    tier_2_percentile: 0.30            # Concepts from 30th to 80th percentile form Tier 2 Mechanics
+    # Concepts below 30th percentile and degree-1 leaves automatically assigned to Tier 3
 
-    # Grounding Quality Safeguard
-    min_fidelity_tier_1: 0.10    # Minimum average fidelity required to enter Tier 1
+    # --- Grounding Quality Safeguard ---
+    min_fidelity_tier_1: 0.10          # Minimum evidence fidelity required to enter Tier 1
 
-    # Effective Degree Discount & Fallback Scoring Parameters
-    boundary_discount: 0.5       # Weight discount for cross-community boundary degree (eff_deg = deg_int + boundary_discount * deg_bound)
-    fallback_prototypicality: 0.30 # Default prototypicality cosine score when node embedding is absent
-    fallback_fidelity: 0.28      # Default contextual fidelity when node edge quotes are absent
+    # --- Degree Discount & Fallback Scoring Parameters ---
+    boundary_discount: 0.5             # Weight discount for cross-community edges: deg_eff = deg_int + discount * deg_bound
+    fallback_prototypicality: 0.30     # Default prototypicality when node embedding is missing
+    fallback_fidelity: 0.28            # Default fidelity score when edge quote evidence is missing
 
-    # Human Evaluation & Reporting Exports
-    export_tier_csv: true        # Exports human-readable spreadsheet (community_architectural_tiers.csv)
-    export_diagnostics: true     # Exports summary stats (tier_partitioning_diagnostics.json)
+    # --- Human Evaluation & Reporting Exports ---
+    export_tier_csv: true              # Export human-readable spreadsheet (community_architectural_tiers.csv)
+    export_diagnostics: true           # Export diagnostic summary stats (tier_partitioning_diagnostics.json)
 
-  # =========================================================================
-  # 3D GALAXY VISUALIZATION & EMBEDDING DE-BIASING
-  # =========================================================================
-  # Governs the 3D hyper-space galaxy projection (UMAP-3D & PCA-3D), cluster centroid
-  # positioning, density hull boundaries, and cross-border refugee detection.
+
+  # ----------------------------------------------------------------------------
+  # SECTION 5: 3D GALAXY VISUALIZATION & MANIFOLD DE-BIASING (Stage 3.4)
+  # ----------------------------------------------------------------------------
+  # Governs interactive 3D UMAP/PCA hyper-space galaxy projections, centroid
+  # anchoring, density hull shells, and cross-border refugee visual analytics.
+  # ----------------------------------------------------------------------------
   galaxy_3d:
-    # Vector de-biasing pre-processor (All-but-the-Top representation post-processing).
-    # - true (default): Removes the global anisotropic background component (corpus mean vector μ
-    #   and dominant principal components), centering the representation space and maximizing
-    #   inter-cluster geometric separation across manifolds.
-    # - false: Uses raw SentenceTransformer embeddings directly without de-biasing
-    #   (preserves the standard raw vector cone where clusters share a global baseline direction).
+    # Vector de-biasing pre-processor (All-but-the-Top manifold centering):
+    #   - true: Centers vector space by subtracting corpus mean vector mu and dominant
+    #           anisotropic principal components, eliminating the high-dimensional cone effect.
+    #   - false: Uses raw SentenceTransformer vectors directly.
     debias_embeddings: true
 
     # Weighting strategy for calculating 3D community centroid positions:
-    # - "core_tiers" (default): Computes centroids using only Tier 1 (Nuclei) and Tier 2 (Mechanics)
-    #   weighted by their composite architectural score. Prevents peripheral modifiers and
-    #   generic low-degree concepts from pulling the cluster centroid back to the global center of mass.
-    # - "tier_1_only": Anchors centroids strictly to Tier 1 Thematic Nuclei (falls back to Tier 2
-    #   if no Tier 1 concepts exist in small communities).
-    # - "uniform": Standard arithmetic mean across all community concepts (unweighted, equal
-    #   weight across Tier 1, Tier 2, and Tier 3 modifiers).
+    #   - "core_tiers" (default): Weighted average of Tier 1 (Nuclei) and Tier 2 (Mechanics)
+    #     concepts by their architectural score. Prevents peripheral leaves from distorting center.
+    #   - "tier_1_only": Anchors centroids strictly to Tier 1 Thematic Nuclei.
+    #   - "uniform": Standard arithmetic mean across all community concepts.
     centroid_weighting: "core_tiers"
 
-    # Percentile cutoff (integer from 50 to 95) for community density hull radii (R_p):
-    # - 75 (default): Tight cohesive shells enclosing the core 75% of core community members;
-    #   outlying modifiers orbit outside the hull as peripheral contextual nuance.
-    # - 85: Standard statistical boundary enclosing the majority of community members.
-    # - 95: Expansive boundary enclosing nearly all concepts including distant edge modifiers.
+    # Statistical boundary radius percentile (R_p) for cohesive density hulls:
+    #   - 75 (default): Tight cohesive shell enclosing the core 75% of community concepts;
+    #     peripheral modifiers orbit outside the hull as contextual nuance.
+    #   - 85: Intermediate boundary enclosing most community concepts.
+    #   - 95: Expansive boundary enclosing nearly all concepts including distant edge modifiers.
     density_hull_percentile: 75
-
-
