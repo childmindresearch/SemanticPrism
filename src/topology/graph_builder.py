@@ -90,13 +90,13 @@ class TopologyPipeline:
         
         # Global Hub Pruning Config (Stages 3.1 & 3.2 - Universal Evaluation)
         self.hub_cfg = self.config.get('hub_pruning', {})
-        self.hub_p_thresh = float(self.hub_cfg.get('participation_threshold', 0.70))
+        self.hub_p_thresh = float(self.hub_cfg.get('participation_threshold', 0.80))
         self.min_hub_degree = int(self.hub_cfg.get('min_hub_degree', 30))
-        self.enable_dynamic_hub_degree = bool(self.hub_cfg.get('enable_dynamic_hub_degree', True))
-        self.dynamic_hub_percentile = float(self.hub_cfg.get('dynamic_hub_percentile', 0.95))
-        self.min_hub_degree_floor = int(self.hub_cfg.get('min_hub_degree_floor', 15))
-        self.hub_betw_percentile = float(self.hub_cfg.get('betweenness_percentile', 0.95))
-        self.min_betweenness_score = float(self.hub_cfg.get('min_betweenness_score', 0.02))
+        pct = self.hub_cfg.get('dynamic_hub_percentile', 0.98)
+        self.dynamic_hub_percentile = float(pct) if pct is not None else None
+        self.max_global_hubs = int(self.hub_cfg.get('max_global_hubs', 10))
+        self.hub_betw_percentile = float(self.hub_cfg.get('betweenness_percentile', 0.98))
+        self.min_betweenness_score = float(self.hub_cfg.get('min_betweenness_score', 0.05))
 
         # Path 1 Config (Approach A: Community Path)
         self.comm_cfg = self.config.get('community_path', {})
@@ -406,20 +406,53 @@ class TopologyPipeline:
         participation = _calculate_participation_coefficient(dg, refined_triplets)
         mod_vitality = {n: 0.0 for n in dg.nodes()}
 
-        betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
-        betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.hub_betw_percentile)))
-        top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > self.min_betweenness_score])
-
-        min_top_hubs = getattr(self, "top_n_hubs_export", 30) or 30
-
-        # Determine effective minimum hub degree (dynamic scaling if enabled)
-        if self.enable_dynamic_hub_degree and len(dg) > 0:
+        # Determine effective minimum hub degree:
+        # Hubs must have at least min_hub_degree. If dynamic percentile is configured,
+        # it dynamically scales UP on dense graphs to the top percentile.
+        if self.dynamic_hub_percentile is not None and len(dg) > 0:
             all_degs = [dg.degree(n) for n in dg.nodes()]
-            deg_cutoff = float(np.percentile(all_degs, self.dynamic_hub_percentile * 100))
-            effective_min_hub_deg = max(self.min_hub_degree_floor, min(self.min_hub_degree, int(deg_cutoff)))
+            deg_cutoff = int(np.percentile(all_degs, self.dynamic_hub_percentile * 100))
+            effective_min_hub_deg = max(self.min_hub_degree, deg_cutoff)
         else:
             effective_min_hub_deg = self.min_hub_degree
 
+        # Workflow chokepoints: Must meet betweenness cutoff AND satisfy effective_min_hub_deg
+        betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
+        betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.hub_betw_percentile)))
+        top_betweenness_nodes = set([
+            n for n, score in betweenness_sorted[:betw_cutoff]
+            if score >= self.min_betweenness_score and dg.degree(n) >= effective_min_hub_deg
+        ])
+
+        min_top_hubs = getattr(self, "top_n_hubs_export", 30) or 30
+
+        # Step 1: Identify all candidate hubs based on criteria
+        candidate_hubs = []
+        for node in dg.nodes():
+            p_val = participation.get(node, 0.0)
+            b_val = betweenness.get(node, 0.0)
+            deg_val = dg.degree(node)
+
+            is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= effective_min_hub_deg)
+            is_workflow_chokepoint = (node in top_betweenness_nodes)
+
+            if is_thematic_bridge or is_workflow_chokepoint:
+                # Rank priority: (participation * degree) with betweenness bonus
+                priority = (p_val * deg_val) + (b_val * 10.0)
+                candidate_hubs.append({
+                    "node": node,
+                    "priority": priority,
+                    "is_thematic_bridge": is_thematic_bridge,
+                    "is_workflow_chokepoint": is_workflow_chokepoint
+                })
+
+        # Step 2: Enforce max_global_hubs safety ceiling (capped at top N)
+        candidate_hubs.sort(key=lambda x: x["priority"], reverse=True)
+        capped_hubs = candidate_hubs[:self.max_global_hubs]
+        flagged_hubs_set = set(x["node"] for x in capped_hubs)
+        excess_candidates = set(x["node"] for x in candidate_hubs[self.max_global_hubs:])
+
+        # Step 3: Populate node candidates registry
         global_hubs = []
         global_hubs_set = set()
         node_candidates = {}
@@ -431,21 +464,21 @@ class TopologyPipeline:
             deg_val = dg.degree(node)
             mv_val = mod_vitality.get(node, 0.0)
 
-            is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= effective_min_hub_deg)
-            is_workflow_chokepoint = (node in top_betweenness_nodes)
-
+            is_hub = (node in flagged_hubs_set)
             reasons = []
-            if is_thematic_bridge:
-                reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {effective_min_hub_deg})")
-            if is_workflow_chokepoint:
-                reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > {self.min_betweenness_score})")
-
-            is_hub = (is_thematic_bridge or is_workflow_chokepoint)
             if is_hub:
                 global_hubs.append(node)
                 global_hubs_set.add(node)
+                cand = next(c for c in capped_hubs if c["node"] == node)
+                if cand["is_thematic_bridge"]:
+                    reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {effective_min_hub_deg})")
+                if cand["is_workflow_chokepoint"]:
+                    reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} >= {self.min_betweenness_score}, Deg={deg_val} >= {effective_min_hub_deg})")
             else:
-                reasons = [f"Retained Core Concept (P_i={p_val:.3f} < {self.hub_p_thresh})"]
+                if node in excess_candidates:
+                    reasons = [f"Retained Core Concept (Capped by max_global_hubs={self.max_global_hubs})"]
+                else:
+                    reasons = [f"Retained Core Concept (P_i={p_val:.3f} < {self.hub_p_thresh} or Deg={deg_val} < {effective_min_hub_deg})"]
 
             node_candidates[node] = {
                 "node_id": node,
@@ -486,9 +519,8 @@ class TopologyPipeline:
                     "participation_threshold": self.hub_p_thresh,
                     "min_hub_degree": self.min_hub_degree,
                     "effective_min_hub_degree": effective_min_hub_deg,
-                    "enable_dynamic_hub_degree": self.enable_dynamic_hub_degree,
                     "dynamic_hub_percentile": self.dynamic_hub_percentile,
-                    "min_hub_degree_floor": self.min_hub_degree_floor,
+                    "max_global_hubs": self.max_global_hubs,
                     "betweenness_percentile": self.hub_betw_percentile,
                     "betweenness_min_score": self.min_betweenness_score
                 },

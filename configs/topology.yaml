@@ -35,21 +35,25 @@ topology:
     # Measures how uniformly connections are distributed across different modules:
     #   - 0.0: Perfectly intra-community (all edges within a single theme).
     #   - 1.0: Uniformly dispersed across all themes (no modular loyalty).
-    participation_threshold: 0.70      # Cutoff for cross-community bridge extraction (range: [0.0, 1.0])
+    participation_threshold: 0.80      # Min P_i cutoff for cross-community bridge extraction (range: [0.0, 1.0])
 
-    # --- Structural Prominence & Dynamic Degree Floor (Quantitative Volume) ---
-    # Prevents low-degree peripheral nodes from being classified as global hubs.
-    # When enable_dynamic_hub_degree is true, the effective degree threshold adapts
-    # to the empirical degree distribution: k_thresh = max(floor, min(min_degree, quantile(deg, percentile)))
-    min_hub_degree: 30                 # Upper target degree ceiling for hub classification
-    enable_dynamic_hub_degree: true    # Adaptively calculate degree threshold from empirical distribution
-    dynamic_hub_percentile: 0.95       # Degree percentile cutoff (0.95 = top 5% most connected nodes in graph)
-    min_hub_degree_floor: 15           # Hard absolute minimum degree floor regardless of percentile
+    # --- Structural Degree Prominence (Quantitative Volume) ---
+    # A concept must have at least this total degree to qualify as a global hub.
+    # On dense graphs, adaptively scales UP to the top (1 - p) percentile:
+    # Formula: effective_degree = max(min_hub_degree, quantile(degrees, dynamic_hub_percentile))
+    min_hub_degree: 30                 # Baseline minimum total degree required (hard floor)
+    dynamic_hub_percentile: 0.98       # Degree percentile cutoff (0.98 = top 2% most connected nodes; set null to disable)
+
+    # --- Maximum Hub Safety Ceiling ---
+    # Caps the total number of extracted hubs to prevent shattering the community graph.
+    # Candidates are ranked by composite prominence (P_i * degree) and capped:
+    max_global_hubs: 10                # Safety cap: extracts at most top 10 global hubs (default: 10)
 
     # --- Workflow Chokepoints (Shortest-Path Betweenness Centrality) ---
-    # Extracts bottleneck nodes that control information flow across geodesic paths:
-    betweenness_percentile: 0.95       # Centrality percentile cutoff (0.95 = top 5% betweenness in graph)
-    min_betweenness_score: 0.02        # Hard absolute minimum betweenness score floor
+    # Extracts bottleneck nodes that control information flow across geodesic paths
+    # (Node must ALSO satisfy degree >= min_hub_degree to prevent pruning local bridges):
+    betweenness_percentile: 0.98       # Centrality percentile cutoff (0.98 = top 2% betweenness in graph)
+    min_betweenness_score: 0.05        # Hard absolute minimum betweenness score floor
 
 
   # ----------------------------------------------------------------------------
