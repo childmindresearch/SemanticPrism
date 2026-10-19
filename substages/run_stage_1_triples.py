@@ -23,7 +23,14 @@ async def main_async():
     # Initialize the core pipeline state tracker
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
-    pipeline.clear_stage_logs("triples")
+    # Determine resume mode settings
+    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
+    print(f"Pipeline Resume Mode: {resume_mode}\n")
+    
+    if resume_mode != 'skip':
+        pipeline.clear_stage_logs("triples")
+    else:
+        print("-> Resume mode active ('skip'): Preserving existing stage error logs.\n")
     
     if pipeline.context.master_themes and pipeline.context.master_themes.master_themes:
         print(f"Loaded {len(pipeline.context.master_themes.master_themes)} Master Themes into context for triple extraction:")
@@ -53,10 +60,7 @@ async def main_async():
             print("-> Proceeding to Triple Aggregation from disk state...\n")
     else:
         print(f"Found {len(documents)} document(s) to process. Beginning triple extraction...\n")
-    
-    # Determine resume mode settings
-    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
-    print(f"Pipeline Resume Mode: {resume_mode}\n")
+
     
     # Phase 3: Global Triple Extraction
     print(f"=== Phase 3: Global Triple Extraction (Model: {triple_model}) ===")

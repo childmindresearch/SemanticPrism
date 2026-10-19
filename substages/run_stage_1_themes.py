@@ -23,8 +23,15 @@ async def main_async():
     # Initialize the core pipeline state tracker
     context = PipelineRunContext()
     pipeline = ExtractionPipeline(context)
-    pipeline.clear_stage_logs("themes")
-    pipeline.clear_stage_logs("master")
+    # Determine resume mode settings
+    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
+    print(f"Pipeline Resume Mode: {resume_mode}\n")
+    
+    if resume_mode != 'skip':
+        pipeline.clear_stage_logs("themes")
+        pipeline.clear_stage_logs("master")
+    else:
+        print("-> Resume mode active ('skip'): Preserving existing stage error logs.\n")
     
     # Load documents based on ingestion settings
     try:
@@ -47,10 +54,7 @@ async def main_async():
             print("-> Proceeding to Theme Aggregation & Master Synthesis/Mapping from disk state...\n")
     else:
         print(f"Found {len(documents)} document(s) to process. Beginning theme extraction...\n")
-    
-    # Determine resume mode settings
-    resume_mode = settings.get('pipeline', {}).get('resume_mode', 'skip')
-    print(f"Pipeline Resume Mode: {resume_mode}\n")
+
     
     # Phase 1: Global Theme Discovery
     print(f"=== Phase 1: Global Theme Discovery (Model: {theme_model}) ===")

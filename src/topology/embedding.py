@@ -99,6 +99,14 @@ class ClusterEmbeddingVisualizer:
         vocab_map = {str(term).lower().strip(): idx for idx, term in enumerate(vocab_list)}
         embedding_matrix = np.load(concept_npy)
 
+        g_cfg = self.config.get("topology", {}).get("galaxy_3d", {}) if "topology" in self.config else self.config.get("galaxy_3d", {})
+        debias_enabled = bool(g_cfg.get("debias_embeddings", True))
+        if debias_enabled and len(embedding_matrix) > 0:
+            mean_vec = np.mean(embedding_matrix, axis=0)
+            diff = embedding_matrix - mean_vec
+            norms = np.linalg.norm(diff, axis=1, keepdims=True)
+            embedding_matrix = diff / np.maximum(norms, 1e-9)
+
         # 2. Load Community Architectural Tiers and/or Partitions
         comm_dir = base_dir / "03_paths" / "community"
         tiers_json = comm_dir / "community_architectural_tiers.json"

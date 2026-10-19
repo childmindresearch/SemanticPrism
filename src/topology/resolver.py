@@ -56,6 +56,8 @@ class TargetResolver:
         synth_cfg = config.get('synthesis', {}) if config else {}
         enable_target_agglom = synth_cfg.get('enable_target_agglomeration', True)
         target_agglom_sim = float(synth_cfg.get('target_agglomeration_similarity', 0.85))
+        center_targets = synth_cfg.get('center_target_embeddings', True)
+        max_target_passes = int(synth_cfg.get('max_target_agglomeration_passes', 25))
 
         if enable_target_agglom and len(targets) > 1:
             all_target_nodes_pool = set()
@@ -65,6 +67,11 @@ class TargetResolver:
             m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
             c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
             concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_target_nodes_pool), cache_dir=c_dir, model_name=m_name)
+
+            if center_targets and concept_vecs:
+                concept_vecs_agglom, _ = TargetResolver.center_concept_embeddings(concept_vecs)
+            else:
+                concept_vecs_agglom = concept_vecs
 
             # Check if precomputed centroid diagnostics are available as fallback or fast-path similarity matrix
             diag_sims = {}
@@ -88,14 +95,14 @@ class TargetResolver:
                 if "source_ids" not in m:
                     m["source_ids"] = {m["id"]}
 
-            while True:
+            for pass_idx in range(max_target_passes):
                 best_pair = None
                 best_sim = target_agglom_sim
 
-                if concept_vecs:
+                if concept_vecs_agglom:
                     target_centroids = {}
                     for idx, t in enumerate(merged_targets):
-                        vecs = [concept_vecs[n.lower().strip()] for n in t.get("nodes", []) if n.lower().strip() in concept_vecs]
+                        vecs = [concept_vecs_agglom[n.lower().strip()] for n in t.get("nodes", []) if n.lower().strip() in concept_vecs_agglom]
                         if vecs:
                             c_sum = np.sum(vecs, axis=0)
                             c_norm = np.linalg.norm(c_sum)
@@ -339,6 +346,35 @@ class TargetResolver:
                 print(f"      -> Warning: SentenceTransformer encoding error: {e}")
 
         return node_map
+
+    @staticmethod
+    def center_concept_embeddings(
+        concept_vecs: Dict[str, np.ndarray],
+        mean_vec: Optional[np.ndarray] = None
+    ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
+        """
+        Centers concept embeddings by subtracting the corpus mean vector μ and L2-normalizing:
+            v_centered = (v - μ) / ||v - μ||_2
+        This removes the dominant anisotropic background component (common to models like BGE-Large and MiniLM),
+        preventing multi-node community centroids from collapsing into the common corpus mean (~0.99 similarity).
+
+        Returns:
+            Tuple of (centered_concept_vecs_dict, corpus_mean_vec)
+        """
+        if not concept_vecs:
+            return {}, np.zeros(0)
+
+        if mean_vec is None:
+            all_arr = np.array(list(concept_vecs.values()))
+            mean_vec = np.mean(all_arr, axis=0)
+
+        centered_dict = {}
+        for k, v in concept_vecs.items():
+            diff = v - mean_vec
+            norm = np.linalg.norm(diff)
+            centered_dict[k] = diff / norm if norm > 1e-9 else diff
+
+        return centered_dict, mean_vec
 
     @staticmethod
     def compute_architectural_tiers(

@@ -99,6 +99,7 @@ topology:
     enable_community_agglomeration: true   # Merges communities with high centroid similarity before finalization
     agglomeration_similarity_threshold: 0.85 # Merge communities if centroid cosine similarity >= 0.85
     max_agglomeration_passes: 25           # Maximum iterative merging rounds (safety ceiling until convergence)
+    center_agglomeration_embeddings: true  # Centers embeddings by subtracting corpus mean vector μ to prevent anisotropic centroid collapse
     
     # 8. Pure Disjoint Triplet Partitioning (Zero Content Re-Use)
     triplet_payload_mode: "include_boundary" # include_boundary or strictly_intra_only Strictly pure intra-community triplets only (subj in C AND obj in C)

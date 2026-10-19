@@ -197,6 +197,7 @@ class TopologyPipeline:
         self.enable_community_agglomeration = bool(self.semantic_cfg.get('enable_community_agglomeration', True))
         self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.85))
         self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 25))
+        self.center_agglomeration_embeddings = bool(self.semantic_cfg.get('center_agglomeration_embeddings', True))
         self.triplet_payload_mode = self.semantic_cfg.get('triplet_payload_mode', 'strictly_intra_only')
         self.exclude_hub_triplets = self.semantic_cfg.get('exclude_hub_triplets_from_communities', True)
 
@@ -1244,6 +1245,11 @@ class TopologyPipeline:
             c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
             concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
 
+            if self.center_agglomeration_embeddings and concept_vecs:
+                concept_vecs_agglom, _ = TargetResolver.center_concept_embeddings(concept_vecs)
+            else:
+                concept_vecs_agglom = concept_vecs
+
             for pass_idx in range(self.max_agglomeration_passes):
                 active_comms = [c for c in communities if len(c.nodes) > 0]
                 if len(active_comms) < 2:
@@ -1251,7 +1257,7 @@ class TopologyPipeline:
 
                 cent_map = {}
                 for c in active_comms:
-                    vecs = [concept_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs]
+                    vecs = [concept_vecs_agglom[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs_agglom]
                     if vecs:
                         c_sum = np.sum(vecs, axis=0)
                         c_norm = np.linalg.norm(c_sum)
@@ -1307,6 +1313,7 @@ class TopologyPipeline:
                     "enabled": self.enable_community_agglomeration,
                     "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
                     "max_agglomeration_passes": self.max_agglomeration_passes,
+                    "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
                     "total_merges": len(agglomeration_records),
                     "merges": agglomeration_records
                 }, f, indent=2)

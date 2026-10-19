@@ -215,16 +215,20 @@ class ExtractionPipeline:
             return str(exception)
         return ""
 
-    def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str):
+    def _log_extraction_error(self, phase: str, source_doc: str, start_idx: int, end_idx: int, error: Exception, malformed: str, chunk_text: Optional[str] = None):
         """Helper to log extraction failures and validation errors systematically."""
         error_record = {
             "phase": phase,
             "source_document": source_doc,
             "start_word": start_idx,
             "end_word": end_idx,
+            "error_type": type(error).__name__,
             "error_message": str(error),
             "malformed_output": malformed
         }
+        if chunk_text is not None:
+            error_record["chunk_text"] = chunk_text
+
         self.log_dir.mkdir(parents=True, exist_ok=True)
         with open(self.log_dir / "stage_01_triple_extraction_errors.json", "a") as f:
             f.write(json.dumps(error_record) + "\n")
@@ -289,7 +293,9 @@ class ExtractionPipeline:
                         "source_document": source_doc,
                         "start_word": start_idx,
                         "end_word": end_idx,
-                        "error": str(e)
+                        "error_type": type(e).__name__,
+                        "error": str(e),
+                        "chunk_text": chunk
                     }
                     with open(self.log_dir / "stage_01_theme_discovery_errors.json", "a") as f:
                         f.write(json.dumps(error_record) + "\n")
@@ -342,7 +348,9 @@ class ExtractionPipeline:
                     "source_document": source_doc,
                     "start_word": start_idx,
                     "end_word": end_idx,
-                    "error": str(e)
+                    "error_type": type(e).__name__,
+                    "error": str(e),
+                    "chunk_text": chunk
                 }
                 with open(self.log_dir / "stage_01_theme_discovery_errors.json", "a") as f:
                     f.write(json.dumps(error_record) + "\n")
@@ -808,7 +816,7 @@ class ExtractionPipeline:
                         return result.output.triples
                     except Exception as e:
                         malformed_text = self._extract_malformed_text(messages, e)
-                        self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+                        self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text, chunk_text=chunk)
 
                         from pydantic_ai.messages import ModelResponse
                         from pydantic_ai.exceptions import UnexpectedModelBehavior
@@ -819,11 +827,11 @@ class ExtractionPipeline:
                         is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
 
                         if not is_model_error and (not has_response or not malformed_text or is_traceback):
-                            print("      -> Extraction failed due to a connection/system/traceback error. Raising immediately.")
-                            raise e
+                            print(f"      -> Extraction failed for {source_doc} [{start_idx}-{end_idx}] due to connection/timeout/system error: {e}. Logging details and skipping this chunk.")
+                            return []
 
                         if is_model_error and (not has_response or not malformed_text or is_traceback):
-                            print("      -> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                            print(f"      -> Extraction failed for {source_doc} [{start_idx}-{end_idx}] due to a validation/model behavior error. Logging details and skipping this chunk.")
                             return []
 
                         print(f"      -> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
@@ -840,7 +848,7 @@ class ExtractionPipeline:
                             print(f"      -> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
                             return ref_result.output.triples
                         except Exception as reformat_err:
-                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                            self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text, chunk_text=chunk)
                             print(f"      -> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
                             return []
 
@@ -912,7 +920,7 @@ class ExtractionPipeline:
                     print(f"-> Initial extraction successful for {source_doc} [{start_idx}-{end_idx}] (extracted {len(triples_list)} triples)")
                 except Exception as e:
                     malformed_text = self._extract_malformed_text(messages, e)
-                    self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text)
+                    self._log_extraction_error("initial_triple_extraction_failed", source_doc, start_idx, end_idx, e, malformed_text, chunk_text=chunk)
 
                     from pydantic_ai.messages import ModelResponse
                     from pydantic_ai.exceptions import UnexpectedModelBehavior
@@ -923,11 +931,11 @@ class ExtractionPipeline:
                     is_model_error = isinstance(e, (UnexpectedModelBehavior, ValidationError, ValueError))
 
                     if not is_model_error and (not has_response or not malformed_text or is_traceback):
-                        print("-> Extraction failed due to a connection/system/traceback error. Raising immediately.")
-                        raise e
+                        print(f"-> Extraction failed for {source_doc} [{start_idx}-{end_idx}] due to connection/timeout/system error: {e}. Logging details and skipping this chunk.")
+                        continue
 
                     if is_model_error and (not has_response or not malformed_text or is_traceback):
-                        print("-> Extraction failed due to a validation/model behavior error. Logging and skipping this chunk.")
+                        print(f"-> Extraction failed for {source_doc} [{start_idx}-{end_idx}] due to a validation/model behavior error. Logging details and skipping this chunk.")
                         continue
 
                     print(f"-> Initial extraction failed after standard retry. Retrying with custom JSON reformatter (Model: {triple_model})...")
@@ -944,7 +952,7 @@ class ExtractionPipeline:
                         print(f"-> Custom reformatting successful for {source_doc} [{start_idx}-{end_idx}] (recovered {len(ref_result.output.triples)} triples)!")
                         triples_list = ref_result.output.triples
                     except Exception as reformat_err:
-                        self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text)
+                        self._log_extraction_error("triple_reformat_failed", source_doc, start_idx, end_idx, reformat_err, malformed_text, chunk_text=chunk)
                         print(f"-> Custom reformatting failed for {source_doc} [{start_idx}-{end_idx}]: {reformat_err}")
             
             # Update state with new entities and save triplets
