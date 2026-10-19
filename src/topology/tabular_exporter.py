@@ -80,7 +80,10 @@ class TopologyTabularExporter:
 
         raw_density = raw_scale.get("density", 0.0)
         core_density = core_scale.get("density", 0.0)
-        cluster_density = round(cluster_edges / (cluster_nodes * (cluster_nodes - 1)), 6) if cluster_nodes > 1 else 0.0
+        cluster_density = core_scale.get(
+            "cluster_subgraph_density",
+            round(2.0 * cluster_edges / (cluster_nodes * (cluster_nodes - 1)), 6) if cluster_nodes > 1 else 0.0
+        )
 
         raw_q = mod_enh.get("raw_modularity_q", raw_mod.get("leiden_raw_modularity", 0.0))
         core_q = mod_enh.get("core_modularity_q", core_mod.get("core_leiden_modularity", 0.0))

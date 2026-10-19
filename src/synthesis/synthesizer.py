@@ -280,6 +280,9 @@ class SynthesisPipeline:
                     cache_dir=cache_dir,
                     model_name=model_name
                 )
+                topo_cfg = self.config.get('topology', {}) if 'topology' in self.config else self.config
+                if topo_cfg.get('center_agglomeration_embeddings', True) and concept_embeddings:
+                    concept_embeddings, _ = TargetResolver.center_concept_embeddings(concept_embeddings)
 
                 qualified_clusters = cluster_enum_candidates(all_enum_nodes, concept_embeddings, self.config)
                 retained_terms = sum(c["member_count"] for c in qualified_clusters)
@@ -554,9 +557,9 @@ class SynthesisPipeline:
                             except Exception as reformat_err:
                                 log_detailed_synthesis_error(reformat_err, last_llm_responses.get(), pass_name, f"{target_type} {target_id}", i)
 
-            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {})
-            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
-            strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {}) if 'topology' in self.config else self.config.get('semantic_clustering', {})
+            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', False)
+            strictly_intra = sem_cfg.get('triplet_payload_mode', 'include_boundary') == 'strictly_intra_only'
             raw_hubs_norm = {str(h).lower().strip() for h in targets_data.get("global_hubs", [])}
 
             async def run_phase2_async():
@@ -606,9 +609,9 @@ class SynthesisPipeline:
 
             asyncio.run(run_phase2_async())
         else:
-            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {})
-            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
-            strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+            sem_cfg = self.config.get('topology', {}).get('semantic_clustering', {}) if 'topology' in self.config else self.config.get('semantic_clustering', {})
+            exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', False)
+            strictly_intra = sem_cfg.get('triplet_payload_mode', 'include_boundary') == 'strictly_intra_only'
             raw_hubs_norm = {str(h).lower().strip() for h in targets_data.get("global_hubs", [])}
 
             def run_single_pass_sync(subset, is_normalized, i, target_type, target_id, target_nodes, merged_from=None):

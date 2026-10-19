@@ -7,7 +7,7 @@ from scipy import stats
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from collections import defaultdict
-from src.topology.schemas import NodeMetrics, CommunityPartition, ThemeInheritance, TopologyResult, HubPartition
+from src.topology.schemas import NodeMetrics, CommunityPartition, TopologyResult, HubPartition
 from src.topology.resolver import TargetResolver
 from src.topology.visualizer import TopologyVisualizer
 from src.topology.tabular_exporter import TopologyTabularExporter
@@ -79,79 +79,14 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
         return {}
     if len(dg) > 500:
         k_sample = min(100, max(50, int(len(dg) * 0.1)))
-        return nx.betweenness_centrality(dg, k=k_sample)
+        return nx.betweenness_centrality(dg, k=k_sample, seed=42)
     return nx.betweenness_centrality(dg)
-
-
-def _calculate_modularity_vitality(ug: nx.Graph, refined_triplets: List[dict]) -> Dict[str, float]:
-    r"""
-    Computes Delta Q(v) = Q(G) - Q(G \ v) for each node v in ug relative to primary theme partition.
-    Negative value means removing node v INCREASES modularity Q (node blurs primary theme boundaries).
-    """
-    vitality = {}
-    if len(ug) < 3:
-        for n in ug.nodes():
-            vitality[n] = 0.0
-        return vitality
-        
-    node_edge_themes = defaultdict(list)
-    for t in refined_triplets:
-        subj = t.get('subject')
-        obj = t.get('object')
-        theme = t.get('theme_association', 'Other')
-        if not theme or theme == 'Other':
-            theme = 'Unassigned'
-        if subj:
-            node_edge_themes[str(subj).lower().strip()].append(theme)
-        if obj:
-            node_edge_themes[str(obj).lower().strip()].append(theme)
-            
-    primary_theme = {}
-    for node in ug.nodes():
-        themes = node_edge_themes.get(node, [])
-        if not themes:
-            primary_theme[node] = 'Unassigned'
-        else:
-            counts = defaultdict(int)
-            for th in themes:
-                counts[th] += 1
-            primary_theme[node] = max(counts.items(), key=lambda x: x[1])[0]
-            
-    theme_groups = defaultdict(list)
-    for node, p_th in primary_theme.items():
-        theme_groups[p_th].append(node)
-        
-    comms = [nodes for nodes in theme_groups.values() if len(nodes) > 0]
-    if len(comms) < 2:
-        for n in ug.nodes():
-            vitality[n] = 0.0
-        return vitality
-        
-    try:
-        base_q = nx.community.modularity(ug, comms)
-        for n in ug.nodes():
-            sub_g = ug.copy()
-            sub_g.remove_node(n)
-            sub_comms = [[x for x in comm if x != n] for comm in comms]
-            sub_comms = [c for c in sub_comms if len(c) > 0]
-            if len(sub_comms) >= 2 and len(sub_g.edges()) > 0:
-                sub_q = nx.community.modularity(sub_g, sub_comms)
-                vitality[n] = float(base_q - sub_q)
-            else:
-                vitality[n] = 0.0
-    except Exception:
-        for n in ug.nodes():
-            vitality[n] = 0.0
-        
-    return vitality
 
 
 class TopologyPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.full_config = config
         self.config = config.get('topology', {})
-        self.mode = self.config.get('execution_mode', 'community')
-        self.inheritance_threshold = self.config.get('inheritance_overlap_threshold', 0.4)
         
         # Global Hub Pruning Config (Stages 3.1 & 3.2 - Universal Evaluation)
         self.hub_cfg = self.config.get('hub_pruning', {})
@@ -162,16 +97,10 @@ class TopologyPipeline:
         self.min_hub_degree_floor = int(self.hub_cfg.get('min_hub_degree_floor', 15))
         self.hub_betw_percentile = float(self.hub_cfg.get('betweenness_percentile', 0.95))
         self.min_betweenness_score = float(self.hub_cfg.get('min_betweenness_score', 0.02))
-        self.min_vitality_delta = float(self.hub_cfg.get('min_vitality_delta', -0.005))
-        self.min_vitality_degree = int(self.hub_cfg.get('min_vitality_degree', 3))
-        # Backward-compatibility aliases
-        self.comm_p_thresh = self.hub_p_thresh
-        self.comm_betw_percentile = self.hub_betw_percentile
 
         # Path 1 Config (Approach A: Community Path)
         self.comm_cfg = self.config.get('community_path', {})
         self.leiden_res = self.comm_cfg.get('leiden_resolution', 1.0)
-        self.enable_mod_vitality = self.config.get('enable_modularity_vitality_pruning', False)
 
         # Semantic Community Enhancement Config (Stage 3 Topology Refinement Integration)
         self.semantic_cfg = self.config.get('semantic_clustering', {})
@@ -198,8 +127,6 @@ class TopologyPipeline:
         self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.85))
         self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 25))
         self.center_agglomeration_embeddings = bool(self.semantic_cfg.get('center_agglomeration_embeddings', True))
-        self.triplet_payload_mode = self.semantic_cfg.get('triplet_payload_mode', 'strictly_intra_only')
-        self.exclude_hub_triplets = self.semantic_cfg.get('exclude_hub_triplets_from_communities', True)
 
         # Dedicated Visualization Engine
         self.visualizer = TopologyVisualizer(config=config)
@@ -236,19 +163,14 @@ class TopologyPipeline:
             else:
                 dg.add_edge(subj_norm, obj_norm, predicate=pred, weight=1)
                 
-        ug = dg.to_undirected()
-
-        # Build Theme Sets from refined triplets
-        theme_sets = defaultdict(set)
-        for t in refined_triplets:
-            subj = t.get('subject')
-            obj = t.get('object')
-            theme = t.get('theme_association')
-            if theme and theme != "Other":
-                if subj:
-                    theme_sets[theme].add(str(subj).lower().strip())
-                if obj:
-                    theme_sets[theme].add(str(obj).lower().strip())
+        ug = nx.Graph()
+        for u, v, data in dg.edges(data=True):
+            w = data.get('weight', 1)
+            if ug.has_edge(u, v):
+                ug[u][v]['weight'] = ug[u][v].get('weight', 1) + w
+            else:
+                ug.add_edge(u, v, **data)
+                ug[u][v]['weight'] = w
 
         # ---------------------------------------------------------------------
         # STAGE 3.1: Raw Overall Graph Evaluation, Modularity & Hub Identification
@@ -257,8 +179,7 @@ class TopologyPipeline:
             dg=dg,
             ug=ug,
             refined_triplets=refined_triplets,
-            normalized_triplets=normalized_triplets,
-            theme_sets=theme_sets
+            normalized_triplets=normalized_triplets
         )
 
         # ---------------------------------------------------------------------
@@ -288,7 +209,6 @@ class TopologyPipeline:
             hub_partitions=hub_partitions,
             orphans=orphans,
             attachable_leaves=attachable_leaves,
-            theme_sets=theme_sets,
             node_metrics=node_metrics,
             refined_triplets=refined_triplets
         )
@@ -364,7 +284,7 @@ class TopologyPipeline:
     # =========================================================================
     def _stage_3_1_raw_graph_evaluation(
         self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict],
-        normalized_triplets: List[dict], theme_sets: Dict[str, set]
+        normalized_triplets: List[dict]
     ) -> Tuple[Dict[str, Any], List[str], List[Dict[str, Any]], Dict[str, NodeMetrics]]:
         print("   ==> [Stage 3.1] Overall Graph Evaluation, Modularity & Hub Identification...")
         out_dir = Path("outputs/03_topology/01_raw_graph_evaluation")
@@ -484,20 +404,11 @@ class TopologyPipeline:
         degree_cent = nx.degree_centrality(dg) if len(dg) > 0 else {}
         betweenness = _calculate_betweenness(dg)
         participation = _calculate_participation_coefficient(dg, refined_triplets)
-        if self.enable_mod_vitality:
-            mod_vitality = _calculate_modularity_vitality(ug, refined_triplets)
-        else:
-            mod_vitality = {n: 0.0 for n in dg.nodes()}
+        mod_vitality = {n: 0.0 for n in dg.nodes()}
 
         betweenness_sorted = sorted(betweenness.items(), key=lambda x: x[1], reverse=True)
         betw_cutoff = max(1, int(len(betweenness_sorted) * (1.0 - self.hub_betw_percentile)))
         top_betweenness_nodes = set([n for n, score in betweenness_sorted[:betw_cutoff] if score > self.min_betweenness_score])
-
-        if self.enable_mod_vitality:
-            mod_v_sorted = sorted(mod_vitality.items(), key=lambda x: x[1])
-            neg_mod_v_nodes = set([n for n, val in mod_v_sorted[:10] if val < self.min_vitality_delta and dg.degree(n) >= self.min_vitality_degree])
-        else:
-            neg_mod_v_nodes = set()
 
         min_top_hubs = getattr(self, "top_n_hubs_export", 30) or 30
 
@@ -518,21 +429,17 @@ class TopologyPipeline:
             b_val = betweenness.get(node, 0.0)
             pr_val = pagerank.get(node, 0.0)
             deg_val = dg.degree(node)
-            mv_val = mod_vitality.get(node, 0.0)
 
             is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= effective_min_hub_deg)
             is_workflow_chokepoint = (node in top_betweenness_nodes)
-            is_boundary_blurring = self.enable_mod_vitality and (node in neg_mod_v_nodes)
 
             reasons = []
             if is_thematic_bridge:
                 reasons.append(f"Thematic Dispersion (P_i={p_val:.3f} >= {self.hub_p_thresh}, Deg={deg_val} >= {effective_min_hub_deg})")
             if is_workflow_chokepoint:
                 reasons.append(f"Workflow Chokepoint (Betweenness={b_val:.4f} > {self.min_betweenness_score})")
-            if is_boundary_blurring:
-                reasons.append(f"Boundary Blurring (Delta Q={mv_val:.4f} < {self.min_vitality_delta})")
 
-            is_hub = (is_thematic_bridge or is_workflow_chokepoint or is_boundary_blurring)
+            is_hub = (is_thematic_bridge or is_workflow_chokepoint)
             if is_hub:
                 global_hubs.append(node)
                 global_hubs_set.add(node)
@@ -582,10 +489,7 @@ class TopologyPipeline:
                     "dynamic_hub_percentile": self.dynamic_hub_percentile,
                     "min_hub_degree_floor": self.min_hub_degree_floor,
                     "betweenness_percentile": self.hub_betw_percentile,
-                    "betweenness_min_score": self.min_betweenness_score,
-                    "enable_modularity_vitality": self.enable_mod_vitality,
-                    "min_vitality_delta": self.min_vitality_delta,
-                    "min_vitality_degree": self.min_vitality_degree
+                    "betweenness_min_score": self.min_betweenness_score
                 },
                 "hubs": global_hubs_registry
             }, f, indent=2)
@@ -778,13 +682,18 @@ class TopologyPipeline:
         cluster_assortativity = round(float(nx.degree_assortativity_coefficient(cluster_ug)), 4) if len(cluster_ug) > 1 else 0.0
         cluster_transitivity = round(float(nx.transitivity(cluster_ug)), 4) if len(cluster_ug) > 0 else 0.0
 
+        cluster_sub_nodes = len(cluster_ug)
+        cluster_sub_edges = cluster_ug.number_of_edges()
+        cluster_sub_density = round(float(nx.density(cluster_ug)), 6) if cluster_sub_nodes > 1 else 0.0
+
         core_diagnostics = {
             "graph_scale": {
                 "num_nodes": core_nodes,
                 "num_edges": core_edges,
                 "density": core_density,
-                "cluster_subgraph_nodes": len(cluster_ug),
-                "cluster_subgraph_edges": cluster_ug.number_of_edges()
+                "cluster_subgraph_nodes": cluster_sub_nodes,
+                "cluster_subgraph_edges": cluster_sub_edges,
+                "cluster_subgraph_density": cluster_sub_density
             },
             "degree_distribution": core_deg_stats,
             "cluster_degree_distribution": cluster_deg_stats,
@@ -857,7 +766,7 @@ class TopologyPipeline:
         self, dg: nx.DiGraph, core_dg: nx.DiGraph, cluster_ug: nx.Graph,
         global_hubs: List[str], hub_partitions: List[HubPartition], orphans: List[str],
         attachable_leaves: Dict[str, str],
-        theme_sets: Dict[str, set], node_metrics: Dict[str, NodeMetrics], refined_triplets: List[dict]
+        node_metrics: Dict[str, NodeMetrics], refined_triplets: List[dict]
     ) -> TopologyResult:
         print("   ==> [Stage 3.3 - Path 1] Executing Community Path (Leiden Modularity)...")
         path_out_dir = Path("outputs/03_topology/03_paths/community")
@@ -897,22 +806,26 @@ class TopologyPipeline:
         except Exception:
             pass
 
+        # Unified Concept Embedding Ingestion & Debiasing (One-time load across all passes)
+        ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
+        m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
+        c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
+        all_stage_nodes = set(cluster_ug.nodes()) | set(attachable_leaves.keys()) | set(attachable_leaves.values()) | set(orphans)
+        for c in communities:
+            all_stage_nodes.update(c.nodes)
+        concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_stage_nodes), cache_dir=c_dir, model_name=m_name)
+        if self.center_agglomeration_embeddings and concept_vecs:
+            concept_vecs, _ = TargetResolver.center_concept_embeddings(concept_vecs)
+
         # Pass 2: Two-Pass Leaf Reattachment
         # Re-attach degree-1 pendant leaves to their unique core neighbor's community
         comm_lookup = {c.community_id: c for c in communities}
         reattached_leaf_count = 0
         segregated_leaf_count = 0
 
-        leaf_vecs = {}
+        leaf_vecs = concept_vecs
         core_centroids = {}
         if self.enable_guarded_leaf_attachment and attachable_leaves:
-            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
-            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-            all_leaf_terms = list(attachable_leaves.keys()) + list(attachable_leaves.values())
-            for c in communities:
-                all_leaf_terms.extend(c.nodes)
-            leaf_vecs = TargetResolver._get_or_load_concept_embeddings(all_leaf_terms, cache_dir=c_dir, model_name=m_name)
             for c in communities:
                 c_vecs = [leaf_vecs[n.lower().strip()] for n in c.nodes if n.lower().strip() in leaf_vecs]
                 if c_vecs:
@@ -974,15 +887,6 @@ class TopologyPipeline:
                 minor_comms = [c for c in communities if c not in major_comms]
 
             if major_comms and minor_comms:
-                # Load concept embeddings for all active nodes
-                all_active_nodes = set()
-                for c in communities:
-                    all_active_nodes.update(c.nodes)
-                ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
-                m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-                c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-                concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
-
                 # 3. Compute and Freeze Major Fréchet Centroids
                 major_centroids = {}
                 for mc in major_comms:
@@ -1068,10 +972,7 @@ class TopologyPipeline:
                         harvest_centroids[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
 
             if harvest_centroids:
-                ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
-                m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-                c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-                orphan_vecs = TargetResolver._get_or_load_concept_embeddings(orphans, cache_dir=c_dir, model_name=m_name)
+                orphan_vecs = concept_vecs
 
                 remaining_orphans = []
                 harvested_count = 0
@@ -1138,14 +1039,6 @@ class TopologyPipeline:
             if self.quarantine_true_isolates:
                 immutable_quarantine.update(orphans)
             immutable_quarantine_norm = {str(x).lower().strip() for x in immutable_quarantine}
-
-            all_active_nodes = set()
-            for c in communities:
-                all_active_nodes.update(c.nodes)
-            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
-            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
 
             active_centroids = {}
             for c in communities:
@@ -1216,17 +1109,15 @@ class TopologyPipeline:
 
         # Snapshot Baseline Pre-Agglomeration Communities
         baseline_communities = [
-            CommunityPartition(community_id=c.community_id, nodes=list(c.nodes))
+            CommunityPartition(community_id=c.community_id, nodes=list(c.nodes), merged_from=[c.community_id])
             for c in communities
         ]
         baseline_result = TopologyResult(
             global_hubs=list(global_hubs),
             hub_partitions=hub_partitions,
             communities=baseline_communities,
-            structural_clusters=[],
             orphans=list(orphans),
-            node_metrics=node_metrics,
-            theme_inheritance=[]
+            node_metrics=node_metrics
         )
         self.baseline_community_result = baseline_result
         with open(path_out_dir / "topology_partitions_baseline.json", "w", encoding="utf-8") as f:
@@ -1235,20 +1126,17 @@ class TopologyPipeline:
         # -------------------------------------------------------------
         # Pass 5: Semantic Community Agglomeration (Hierarchical Centroid Merging)
         # -------------------------------------------------------------
+        for c in communities:
+            if not getattr(c, "merged_from", None):
+                c.merged_from = [c.community_id]
+
         agglomeration_records = []
         if self.enable_community_agglomeration and len(communities) > 1:
-            all_active_nodes = set()
-            for c in communities:
-                all_active_nodes.update(c.nodes)
-            ref_cfg = self.full_config.get('refinement', {}) if hasattr(self, 'full_config') and self.full_config else {}
-            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_active_nodes), cache_dir=c_dir, model_name=m_name)
+            concept_vecs_agglom = concept_vecs
 
-            if self.center_agglomeration_embeddings and concept_vecs:
-                concept_vecs_agglom, _ = TargetResolver.center_concept_embeddings(concept_vecs)
-            else:
-                concept_vecs_agglom = concept_vecs
+            overall_max_sim = -1.0
+            overall_closest_pair = None
+            initial_pairwise_sims = []
 
             for pass_idx in range(self.max_agglomeration_passes):
                 active_comms = [c for c in communities if len(c.nodes) > 0]
@@ -1265,6 +1153,8 @@ class TopologyPipeline:
 
                 best_pair = None
                 best_sim = self.agglomeration_similarity_threshold
+                pass_max_sim = -1.0
+                pass_closest_pair = None
 
                 c_ids = list(cent_map.keys())
                 for i_idx in range(len(c_ids)):
@@ -1272,9 +1162,18 @@ class TopologyPipeline:
                         cid_a = c_ids[i_idx]
                         cid_b = c_ids[j_idx]
                         sim = float(np.dot(cent_map[cid_a], cent_map[cid_b]))
+                        if pass_idx == 0:
+                            initial_pairwise_sims.append((cid_a, cid_b, sim))
+                        if sim > pass_max_sim:
+                            pass_max_sim = sim
+                            pass_closest_pair = (cid_a, cid_b, sim)
                         if sim > best_sim:
                             best_sim = sim
                             best_pair = (cid_a, cid_b, sim)
+
+                if pass_closest_pair and pass_max_sim > overall_max_sim:
+                    overall_max_sim = pass_max_sim
+                    overall_closest_pair = pass_closest_pair
 
                 if not best_pair:
                     break
@@ -1294,6 +1193,11 @@ class TopologyPipeline:
                 for n in absorbed_nodes:
                     comm_map[n] = cid_a
 
+                # Preserve and extend merge lineage
+                a_m = comm_a.merged_from if getattr(comm_a, "merged_from", None) else [cid_a]
+                b_m = comm_b.merged_from if getattr(comm_b, "merged_from", None) else [cid_b]
+                comm_a.merged_from = sorted(list(set(a_m + b_m)))
+
                 communities = [c for c in communities if c.community_id != cid_b]
                 comm_lookup.pop(cid_b, None)
 
@@ -1307,7 +1211,11 @@ class TopologyPipeline:
 
             if agglomeration_records:
                 print(f"      -> Community Agglomeration: {len(agglomeration_records)} community merges completed (tau >= {self.agglomeration_similarity_threshold})")
+            else:
+                closest_str = f" (closest pair: Comm #{overall_closest_pair[0]} & Comm #{overall_closest_pair[1]} at sim={overall_closest_pair[2]:.4f})" if overall_closest_pair else ""
+                print(f"      -> Community Agglomeration: 0 community merges completed (tau >= {self.agglomeration_similarity_threshold}){closest_str}")
 
+            initial_pairwise_sims.sort(key=lambda x: x[2], reverse=True)
             with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
                 json.dump({
                     "enabled": self.enable_community_agglomeration,
@@ -1315,6 +1223,16 @@ class TopologyPipeline:
                     "max_agglomeration_passes": self.max_agglomeration_passes,
                     "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
                     "total_merges": len(agglomeration_records),
+                    "max_observed_similarity": round(overall_max_sim, 4) if overall_max_sim >= -1.0 else None,
+                    "closest_unmerged_pair": {
+                        "community_a": overall_closest_pair[0],
+                        "community_b": overall_closest_pair[1],
+                        "similarity": round(overall_closest_pair[2], 4)
+                    } if overall_closest_pair and not agglomeration_records else None,
+                    "top_candidate_pairs": [
+                        {"community_a": a, "community_b": b, "similarity": round(s, 4)}
+                        for a, b, s in initial_pairwise_sims[:5]
+                    ] if initial_pairwise_sims else [],
                     "merges": agglomeration_records
                 }, f, indent=2)
 
@@ -1327,6 +1245,8 @@ class TopologyPipeline:
             old_to_new_cid[c.community_id] = new_idx
             c.community_id = new_idx
             c.nodes = sorted(list(set(c.nodes)))
+            if not getattr(c, "merged_from", None):
+                c.merged_from = [new_idx]
 
         # Update comm_map with normalized community IDs
         comm_map = {}
@@ -1337,7 +1257,13 @@ class TopologyPipeline:
         # Recalculate Final Core Modularity Q on finalized partitions
         if len(communities) >= 2:
             try:
-                final_q = round(float(nx.community.modularity(cluster_ug, [c.nodes for c in communities if set(c.nodes).issubset(set(cluster_ug.nodes()))])), 4)
+                core_partitions = [
+                    list(set(c.nodes) & set(cluster_ug.nodes()))
+                    for c in communities
+                    if (set(c.nodes) & set(cluster_ug.nodes()))
+                ]
+                if len(core_partitions) >= 2:
+                    final_q = round(float(nx.community.modularity(cluster_ug, core_partitions)), 4)
             except Exception:
                 pass
 
@@ -1427,15 +1353,12 @@ class TopologyPipeline:
                 "highways": highways_list
             }, f, indent=2)
 
-        theme_inheritance = self._calculate_theme_inheritance(theme_sets)
         result = TopologyResult(
             global_hubs=global_hubs,
             hub_partitions=hub_partitions,
             communities=communities,
-            structural_clusters=[],
             orphans=orphans,
-            node_metrics=node_metrics,
-            theme_inheritance=theme_inheritance
+            node_metrics=node_metrics
         )
 
         with open(path_out_dir / "topology_partitions.json", "w") as f:
@@ -1493,20 +1416,6 @@ class TopologyPipeline:
             )
         return node_metrics
 
-    def _calculate_theme_inheritance(self, theme_sets: Dict[str, set]) -> List[ThemeInheritance]:
-        theme_inheritance = []
-        for child_theme, child_nodes in theme_sets.items():
-            for parent_theme, parent_nodes in theme_sets.items():
-                if child_theme == parent_theme or not child_nodes:
-                    continue
-                overlap = len(child_nodes.intersection(parent_nodes)) / len(child_nodes)
-                if overlap >= self.inheritance_threshold:
-                    theme_inheritance.append(ThemeInheritance(
-                        parent_theme=parent_theme,
-                        child_theme=child_theme,
-                        overlap_score=overlap
-                    ))
-        return theme_inheritance
 
     def _partition_hub_network(self, dg: nx.DiGraph, global_hubs: List[str]) -> List[HubPartition]:
         if not global_hubs:

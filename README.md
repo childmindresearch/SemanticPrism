@@ -81,6 +81,29 @@ Builds a directed network graph from refined triplets, executes a 3-stage core-s
 - **Stage 3.3: Community Discovery & Agglomeration**: Discovers fine-grained Leiden modules, derives architectural tiers (Nucleus, Mechanics, Modifiers), and executes multi-pass semantic agglomeration to merge high-cosine-similarity centroids into macro-domains.
 - **Interactive Visual Suite**: Generates self-contained HTML dashboards (`cluster_3d_galaxy_visualization.html`, `stage_04_llm_payload_gallery.html`, `isolated_communities_only.html`) with in-page toggles to compare raw Leiden baseline partitions against agglomerated macro-domains.
 
+#### Mathematical & Geometric Foundation
+SemanticPrism replaces ad-hoc graph clustering with a mathematically rigorous, 4-step geometric and topological pipeline:
+
+1. **Hyperspherical Representation & Debiasing ($\mathbb{S}^{D-1}$)**
+   * **$L_2$ Normalization:** All embeddings satisfy $\|e_v\|_2 = 1.0$, rendering dot products identical to cosine similarity: $\langle u, v \rangle = \cos(\theta_{uv})$.
+   * **All-but-the-Top Centering:** Removes corpus mean anisotropy ($\hat{v} = \frac{v - \mu}{\|v - \mu\|_2}$), preventing multi-concept centroids from collapsing into the global background cone.
+   * **Spherical Fréchet Centroids:** Computes true centers of mass on the hypersphere: $\mu_C = \frac{\sum_{v \in C} \hat{v}}{\|\sum_{v \in C} \hat{v}\|_2}$.
+
+2. **Topological Core-Separation & Hub Quarantining**
+   * **Reciprocal Edge Evidence:** Sums bidirectional statement support: $w(u, v) = w_{\text{dir}}(u, v) + w_{\text{dir}}(v, u)$.
+   * **Systemic Hub Extraction:** Prunes high-degree routers using **Participation Coefficients** ($P_i = 1 - \sum_m (k_{im}/k_i)^2 \ge 0.70$) and deterministic **Betweenness Centrality** ($C_B(v)$). Hubs are strictly quarantined to `enums.py`, decoupling modular community structure.
+
+3. **Multi-Pass Community Optimization & Agglomeration**
+   * **Hybrid Leiden Modularity:** Maximizes modularity $Q$ on the dense core ($d > 1$) with strictly positive hybrid weights: $w_{\text{hybrid}} = w \cdot [(1 - \alpha) + \alpha \max(\text{floor}, \cos \theta)]$.
+   * **Guarded Absorption & Harvesting:** Reattaches degree-1 leaves and singletons based on centroid affinity and contrast margins ($\Delta_{\text{contrast}} \ge 0.05$).
+   * **Hierarchical Agglomeration:** Iteratively merges communities with high centroid cosine similarity ($\tau_{\text{agglom}} \ge 0.85$) into cohesive macro-domains.
+
+4. **Architectural Tier Partitioning (Synthesis Grounding)**
+   * Computes a Cobb-Douglas composite score for every entity $u \in C$:
+     $$S_u = \left[\max(0.001, P_u)\right]^{0.40} \cdot \left[D_u\right]^{0.40} \cdot \left[\Gamma_u\right]^{0.20}$$
+     *(where $P_u$ is centroid prototypicality, $D_u$ is internal degree centrality, and $\Gamma_u$ is source fidelity)*.
+   * Stratifies entities into **Tier 1: Thematic Nuclei** (BaseModel classes), **Tier 2: Relational Mechanics** (domain fields), and **Tier 3: Contextual Modifiers** (metadata nuances).
+
 ### Stage 4: Synthesis
 Translates graph partitions and low-density nodes into deployable Python code:
 - Generates Python `Enum` classes for orphan and boundary entities (`enums.py`).

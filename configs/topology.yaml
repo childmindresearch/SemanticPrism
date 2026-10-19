@@ -8,11 +8,6 @@
 topology:
   # Execution Mode for Stage 3 Topology Pipeline
   execution_mode: "community"
-  # For Extracted THEMES: Threshold for discovering child -> parent theme inheritance links based on shared concepts.
-  # Value range: 0.0 to 1.0 (e.g., 0.3 means a child theme must share >= 30% of its entities with a parent theme).
-  # - Increase (e.g. 0.5): Stricter matching -> creates FEWER theme hierarchy links.
-  # - Decrease (e.g. 0.1): Looser matching -> creates MORE theme hierarchy links.
-  inheritance_overlap_threshold: 0.4
   # Export tabular CSV diagnostic reports (Complete graph, Top N Hubs, Pruned Subgraph, Communities)
   export_tabular_reports: true
   top_n_hubs_export: 30       # Minimum top hubs to export in registry (union of top N by degree and all flagged hubs; default 30)
@@ -50,9 +45,6 @@ topology:
     # Absolute shortest-path betweenness centrality score floor to qualify as a workflow chokepoint
     min_betweenness_score: 0.02
 
-    # Modularity vitality thresholds (used when enable_modularity_vitality_pruning is true)
-    min_vitality_delta: -0.005             # Node removal must increase modularity Q by at least this amount (Delta Q < threshold)
-    min_vitality_degree: 3                 # Minimum graph degree required for vitality-based boundary blurring pruning
 
   # =========================================================================
   # COMMUNITY PATH CONFIGURATION (Leiden Modularity Optimization)
@@ -105,11 +97,6 @@ topology:
     triplet_payload_mode: "include_boundary" # include_boundary or strictly_intra_only Strictly pure intra-community triplets only (subj in C AND obj in C)
     exclude_hub_triplets_from_communities: false # Any triplet containing a global hub is completely excluded
     
-    # 9. Multi-Tier Confidence Thresholds
-    confidence_thresholds:
-      high: 0.40                           # Core Invariant (Eligible for root BaseModel)
-      medium: 0.25                         # Relational Mechanic (Sub-model / Typed field)
-      low: 0.15                            # Contextual Modifier (Filtered out or marked optional)
 
   # =========================================================================
   # ARCHITECTURAL TIER PARTITIONING (Hybrid Geometric-Topological Scoring)

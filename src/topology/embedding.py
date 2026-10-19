@@ -57,47 +57,14 @@ class ClusterEmbeddingVisualizer:
           - Automated health scorecards and synthesis guidance recommendations
         """
         # 1. Load Concept Embeddings & Metadata
-        cache_dir = refinement_dir / "cache"
+        from src.topology.resolver import TargetResolver
         ref_cfg = self.config.get('refinement', {}) if 'refinement' in self.config else self.config
         model_name = getattr(self, 'embedding_model_name', ref_cfg.get('embedding_model'))
-
-        # Auto-detect model if not explicitly specified, defaulting to all-MiniLM-L6-v2
-        if not model_name:
-            if list(cache_dir.glob("subject_all_MiniLM_L6_v2*.npy")) or list(cache_dir.glob("concept_all_MiniLM_L6_v2*.npy")):
-                model_name = "all-MiniLM-L6-v2"
-            elif list(cache_dir.glob("concept_*_embeddings.npy")):
-                found = list(cache_dir.glob("concept_*_embeddings.npy"))[0].stem
-                slug = found.replace("concept_", "").replace("_embeddings", "")
-                model_name = slug.replace("_", "/")
-            elif list(cache_dir.glob("subject_*_embeddings.npy")):
-                found = list(cache_dir.glob("subject_*_embeddings.npy"))[0].stem
-                slug = found.replace("subject_", "").replace("_embeddings", "")
-                model_name = slug.replace("_", "/")
-            else:
-                model_name = "all-MiniLM-L6-v2"
-
-        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
-        concept_npy = cache_dir / f"concept_{model_slug}_embeddings.npy"
-        concept_meta = cache_dir / f"concept_{model_slug}_meta.json"
-
-        if not concept_npy.exists() or not concept_meta.exists():
-            subject_npy = cache_dir / f"subject_{model_slug}_embeddings.npy"
-            subject_meta = cache_dir / f"subject_{model_slug}_meta.json"
-            if subject_npy.exists() and subject_meta.exists():
-                concept_npy, concept_meta = subject_npy, subject_meta
-            else:
-                avail = list(cache_dir.glob("concept_*_embeddings.npy"))
-                if avail:
-                    concept_npy = avail[0]
-                    concept_meta = cache_dir / (concept_npy.stem.replace("_embeddings", "_meta.json"))
-                else:
-                    raise FileNotFoundError(f"Concept embeddings not found in '{cache_dir}'. Ensure Stage 2 is complete.")
-
-        with open(concept_meta, "r", encoding="utf-8") as f:
-            meta_data = json.load(f)
-        vocab_list = meta_data.get("vocab", [])
-        vocab_map = {str(term).lower().strip(): idx for idx, term in enumerate(vocab_list)}
-        embedding_matrix = np.load(concept_npy)
+        embedding_matrix, vocab_map, vocab_list = TargetResolver.load_raw_concept_matrix(
+            cache_dir=refinement_dir / "cache",
+            config=self.config,
+            explicit_model=model_name
+        )
 
         g_cfg = self.config.get("topology", {}).get("galaxy_3d", {}) if "topology" in self.config else self.config.get("galaxy_3d", {})
         debias_enabled = bool(g_cfg.get("debias_embeddings", True))
@@ -459,6 +426,8 @@ class ClusterEmbeddingVisualizer:
         global_metrics = {
             "total_communities_analyzed": num_comms,
             "total_concepts_mapped": sum(r["total_concepts"] for r in community_records),
+            "embedding_dimensions": int(embedding_matrix.shape[1]),
+            "embedding_model_name": str(model_name or "all-MiniLM-L6-v2"),
             "global_mean_intra_distance": round(global_mean_intra, 4),
             "global_mean_inter_distance": round(global_mean_inter, 4),
             "global_separation_index": round(global_mean_inter / max(0.001, global_mean_intra), 4),
@@ -533,6 +502,10 @@ class ClusterEmbeddingVisualizer:
             f'<div class="stat-pill"><span class="num">{cnt}</span><span class="lbl">{badge}</span></div>'
             for badge, cnt in badge_summary.items()
         ])
+
+        emb_dim = int(metrics["global_metrics"].get("embedding_dimensions", 384))
+        emb_model = str(metrics["global_metrics"].get("embedding_model_name", "all-MiniLM-L6-v2"))
+        hypersphere_dim = max(1, emb_dim - 1)
 
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1584,7 +1557,7 @@ class ClusterEmbeddingVisualizer:
         <!-- Tab 2: Mathematical Formulations & Scorecards -->
         <div id="pane-math" class="modal-tab-pane">
           <div class="explainer-banner">
-            <b>Mathematical Engine:</b> Every community partition is projected into the 384-dimensional unit hypersphere &Sopf;<sup>383</sup> using unit-normalized Sentence-Transformers embeddings (<code>all-MiniLM-L6-v2</code>).
+            <b>Mathematical Engine:</b> Every community partition is projected into the {emb_dim}-dimensional unit hypersphere &Sopf;<sup>{hypersphere_dim}</sup> using unit-normalized Sentence-Transformers embeddings (<code>{emb_model}</code>).
           </div>
 
           <div class="math-grid">
@@ -1658,7 +1631,7 @@ class ClusterEmbeddingVisualizer:
             <div class="math-card">
               <h4><span>🌌</span> Geometry of Deep Sentence Embeddings</h4>
               <p style="font-size:11px; margin-bottom:8px;">
-                In deep language models like Sentence-BERT / <code>all-MiniLM-L6-v2</code>, mean-pooled contextual embeddings do not uniformly span the 384-dimensional hypersphere. Instead, they concentrate inside a narrow, high-dimensional positive cone.
+                In deep language models like Sentence-BERT / <code>{emb_model}</code>, mean-pooled contextual embeddings do not uniformly span the {emb_dim}-dimensional hypersphere. Instead, they concentrate inside a narrow, high-dimensional positive cone.
               </p>
               <p style="font-size:11px; color:#94a3b8;">
                 Because all vocabulary terms originate from the same natural language domain (English medical/educational/clinical texts), random pairs of concepts naturally share a high baseline similarity of 0.70 to 0.85 (cosine distance 0.15 &ndash; 0.30). Concepts almost never point in opposite directions (cosine distance &approx; 2.0).

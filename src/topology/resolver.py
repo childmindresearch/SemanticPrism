@@ -14,6 +14,9 @@ class TargetResolver:
     Provides methods to resolve qualified spoke targets, rank/cap global hubs, aggregate enum nodes,
     and filter/cap triplet payloads based on PageRank and intra-cluster edge priority.
     """
+    _memory_cache: Dict[Tuple[str, str], Dict[str, np.ndarray]] = {}
+    _raw_matrix_cache: Dict[Tuple[str, str], Tuple[np.ndarray, Dict[str, int], List[str]]] = {}
+
     
     @staticmethod
     def qualify_and_resolve_targets(topology: Dict[str, Any], path_type: str = "community", config: Dict[str, Any] = None) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -41,6 +44,7 @@ class TargetResolver:
         all_enum_nodes = sorted(list(set(orphans + small_cluster_nodes + raw_hubs)))
         
         # 3. Consolidate Qualified Community Targets (>= min_cluster_size)
+        # Note: Communities are already agglomerated into macro-domains in Stage 3.3 Pass 5.
         targets = []
         raw_hubs_set = set(raw_hubs)
         for comm in topology.get("communities", []):
@@ -48,99 +52,15 @@ class TargetResolver:
             # Invariant: Strict Hub Quarantine (Hubs never enter community targets)
             clean_nodes = [n for n in nodes_in_comm if n not in raw_hubs_set]
             if len(clean_nodes) >= min_cluster_size:
-                targets.append({"type": "community", "id": comm.get("community_id"), "nodes": clean_nodes})
+                c_id = comm.get("community_id")
+                targets.append({
+                    "type": "community",
+                    "id": c_id,
+                    "nodes": clean_nodes,
+                    "merged_from": comm.get("merged_from", [c_id])
+                })
 
         targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
-
-        # 3.5 Pre-Synthesis Community Target Agglomeration Safety Check
-        synth_cfg = config.get('synthesis', {}) if config else {}
-        enable_target_agglom = synth_cfg.get('enable_target_agglomeration', True)
-        target_agglom_sim = float(synth_cfg.get('target_agglomeration_similarity', 0.85))
-        center_targets = synth_cfg.get('center_target_embeddings', True)
-        max_target_passes = int(synth_cfg.get('max_target_agglomeration_passes', 25))
-
-        if enable_target_agglom and len(targets) > 1:
-            all_target_nodes_pool = set()
-            for t in targets:
-                all_target_nodes_pool.update(t.get("nodes", []))
-            ref_cfg = config.get('refinement', {}) if config else {}
-            m_name = ref_cfg.get('embedding_model') or "all-MiniLM-L6-v2"
-            c_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
-            concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_target_nodes_pool), cache_dir=c_dir, model_name=m_name)
-
-            if center_targets and concept_vecs:
-                concept_vecs_agglom, _ = TargetResolver.center_concept_embeddings(concept_vecs)
-            else:
-                concept_vecs_agglom = concept_vecs
-
-            # Check if precomputed centroid diagnostics are available as fallback or fast-path similarity matrix
-            diag_sims = {}
-            if not concept_vecs:
-                diag_file = Path(f"outputs/03_topology/03_paths/{path_type}/cluster_centroid_diagnostics.json")
-                if diag_file.exists():
-                    try:
-                        with open(diag_file, "r", encoding="utf-8") as df:
-                            diag_data = json.load(df)
-                        for c in diag_data.get("communities", []):
-                            cid = c.get("community_id")
-                            for nn in c.get("nearest_neighbors", []):
-                                tid = nn.get("target_community_id")
-                                s_val = float(nn.get("cosine_similarity", 0.0))
-                                diag_sims[(min(cid, tid), max(cid, tid))] = max(diag_sims.get((min(cid, tid), max(cid, tid)), 0.0), s_val)
-                    except Exception:
-                        pass
-
-            merged_targets = list(targets)
-            for m in merged_targets:
-                if "source_ids" not in m:
-                    m["source_ids"] = {m["id"]}
-
-            for pass_idx in range(max_target_passes):
-                best_pair = None
-                best_sim = target_agglom_sim
-
-                if concept_vecs_agglom:
-                    target_centroids = {}
-                    for idx, t in enumerate(merged_targets):
-                        vecs = [concept_vecs_agglom[n.lower().strip()] for n in t.get("nodes", []) if n.lower().strip() in concept_vecs_agglom]
-                        if vecs:
-                            c_sum = np.sum(vecs, axis=0)
-                            c_norm = np.linalg.norm(c_sum)
-                            target_centroids[idx] = c_sum / c_norm if c_norm > 0 else c_sum
-
-                    for i in range(len(merged_targets)):
-                        for j in range(i + 1, len(merged_targets)):
-                            if i in target_centroids and j in target_centroids:
-                                sim = float(np.dot(target_centroids[i], target_centroids[j]))
-                                if sim > best_sim:
-                                    best_sim = sim
-                                    best_pair = (i, j, sim)
-                elif diag_sims:
-                    for i in range(len(merged_targets)):
-                        for j in range(i + 1, len(merged_targets)):
-                            s_list = [diag_sims.get((min(a, b), max(a, b)), 0.0) for a in merged_targets[i]["source_ids"] for b in merged_targets[j]["source_ids"]]
-                            if s_list:
-                                sim = sum(s_list) / len(s_list)
-                                if sim > best_sim:
-                                    best_sim = sim
-                                    best_pair = (i, j, sim)
-
-                if not best_pair:
-                    break
-
-                i, j, sim_val = best_pair
-                merged_targets[i]["source_ids"].update(merged_targets[j]["source_ids"])
-                # Directional merge: preserve ID of larger community
-                if len(merged_targets[i]["nodes"]) < len(merged_targets[j]["nodes"]):
-                    merged_targets[i]["id"] = merged_targets[j]["id"]
-                merged_targets[i]["nodes"] = sorted(list(set(merged_targets[i]["nodes"] + merged_targets[j]["nodes"])))
-                merged_targets.pop(j)
-
-            targets = merged_targets
-            for t in targets:
-                if "source_ids" in t:
-                    t["merged_from"] = sorted(list(t.pop("source_ids")))
-            targets.sort(key=lambda x: len(x["nodes"]), reverse=True)
 
         # Invariant: Mutually Disjoint Community and Enum Partitioning (no node exists in both)
         all_target_nodes = set()
@@ -173,9 +93,12 @@ class TargetResolver:
 
         target_nodes_norm = {str(n).lower().strip() for n in target_nodes}
 
-        sem_cfg = config.get('topology', {}).get('semantic_clustering', {}) if config else {}
-        exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', True)
-        strictly_intra = sem_cfg.get('triplet_payload_mode', 'strictly_intra_only') == 'strictly_intra_only'
+        if config:
+            sem_cfg = config.get('topology', {}).get('semantic_clustering', {}) if 'topology' in config else config.get('semantic_clustering', {})
+        else:
+            sem_cfg = {}
+        exclude_hubs = sem_cfg.get('exclude_hub_triplets_from_communities', False)
+        strictly_intra = sem_cfg.get('triplet_payload_mode', 'include_boundary') == 'strictly_intra_only'
 
         # Extract global hubs to enforce absolute quarantine purge
         raw_hubs = set(topology.get("global_hubs", [])) if topology else set()
@@ -279,10 +202,19 @@ class TargetResolver:
                 model_name = "all-MiniLM-L6-v2"
 
         model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
+        cache_key = (str(cache_dir.resolve()), model_slug)
+
+        if cache_key in TargetResolver._memory_cache:
+            node_map = TargetResolver._memory_cache[cache_key]
+            norm_nodes = [str(n).strip() for n in nodes if str(n).strip()]
+            missing = [n for n in norm_nodes if n.lower().strip() not in node_map]
+            if not missing:
+                return node_map
+        else:
+            node_map = {}
+
         concept_npy = cache_dir / f"concept_{model_slug}_embeddings.npy"
         concept_meta = cache_dir / f"concept_{model_slug}_meta.json"
-
-        node_map: Dict[str, np.ndarray] = {}
 
         # 1. Try unified concept cache first
         if concept_npy.exists() and concept_meta.exists():
@@ -345,7 +277,68 @@ class TargetResolver:
             except Exception as e:
                 print(f"      -> Warning: SentenceTransformer encoding error: {e}")
 
+        TargetResolver._memory_cache[cache_key] = node_map
         return node_map
+
+    @staticmethod
+    def load_raw_concept_matrix(
+        cache_dir: Path = Path("outputs/02_refinement/cache"),
+        config: Optional[Dict[str, Any]] = None,
+        explicit_model: Optional[str] = None
+    ) -> Tuple[np.ndarray, Dict[str, int], List[str]]:
+        """
+        Loads raw concept embedding matrix and vocab from refinement cache, auto-detecting model.
+        Returns:
+            Tuple of (embedding_matrix, vocab_map, vocab_list)
+        """
+        ref_cfg = config.get('refinement', {}) if config and 'refinement' in config else (config or {})
+        model_name = explicit_model or getattr(ref_cfg, 'embedding_model', None) or ref_cfg.get('embedding_model')
+
+        if not model_name:
+            if list(cache_dir.glob("subject_all_MiniLM_L6_v2*.npy")) or list(cache_dir.glob("concept_all_MiniLM_L6_v2*.npy")):
+                model_name = "all-MiniLM-L6-v2"
+            elif list(cache_dir.glob("concept_*_embeddings.npy")):
+                found = list(cache_dir.glob("concept_*_embeddings.npy"))[0].stem
+                slug = found.replace("concept_", "").replace("_embeddings", "")
+                model_name = slug.replace("_", "/")
+            elif list(cache_dir.glob("subject_*_embeddings.npy")):
+                found = list(cache_dir.glob("subject_*_embeddings.npy"))[0].stem
+                slug = found.replace("subject_", "").replace("_embeddings", "")
+                model_name = slug.replace("_", "/")
+            else:
+                model_name = "all-MiniLM-L6-v2"
+
+        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
+        cache_key = (str(cache_dir.resolve()), model_slug)
+        if cache_key in TargetResolver._raw_matrix_cache:
+            mat, v_map, v_list = TargetResolver._raw_matrix_cache[cache_key]
+            return mat.copy(), v_map, list(v_list)
+
+        concept_npy = cache_dir / f"concept_{model_slug}_embeddings.npy"
+        concept_meta = cache_dir / f"concept_{model_slug}_meta.json"
+
+        if not concept_npy.exists() or not concept_meta.exists():
+            subject_npy = cache_dir / f"subject_{model_slug}_embeddings.npy"
+            subject_meta = cache_dir / f"subject_{model_slug}_meta.json"
+            if subject_npy.exists() and subject_meta.exists():
+                concept_npy, concept_meta = subject_npy, subject_meta
+            else:
+                avail = list(cache_dir.glob("concept_*_embeddings.npy"))
+                if avail:
+                    concept_npy = avail[0]
+                    concept_meta = cache_dir / (concept_npy.stem.replace("_embeddings", "_meta.json"))
+                else:
+                    raise FileNotFoundError(f"Concept embeddings not found in '{cache_dir}'. Ensure Stage 2 is complete.")
+
+        with open(concept_meta, "r", encoding="utf-8") as f:
+            meta_data = json.load(f)
+        vocab_list = meta_data.get("vocab", [])
+        vocab_map = {str(term).lower().strip(): idx for idx, term in enumerate(vocab_list)}
+        embedding_matrix = np.load(concept_npy)
+
+        TargetResolver._raw_matrix_cache[cache_key] = (embedding_matrix, vocab_map, vocab_list)
+        return embedding_matrix.copy(), vocab_map, list(vocab_list)
+
 
     @staticmethod
     def center_concept_embeddings(
@@ -619,6 +612,9 @@ class TargetResolver:
                 cache_dir=cache_dir,
                 model_name=model_name
             )
+            topo_cfg = config.get('topology', {}) if 'topology' in config else config
+            if topo_cfg.get('center_agglomeration_embeddings', True) and concept_embeddings:
+                concept_embeddings, _ = TargetResolver.center_concept_embeddings(concept_embeddings)
 
         # 3. Build target payload records with sorted & capped triplets and architectural tiers
         target_payloads = []

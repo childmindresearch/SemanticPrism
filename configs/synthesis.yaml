@@ -18,13 +18,7 @@ synthesis:
   # Use 2 for small test datasets; 15+ for large production corpora.
   min_cluster_size: 15
 
-  # Pre-synthesis community agglomeration safety threshold.
-  # Merges qualified community targets with centroid cosine similarity >= threshold
-  # before invoking LLM schema generation to prevent duplicate/redundant schemas.
-  enable_target_agglomeration: true
-  target_agglomeration_similarity: 0.85
-  center_target_embeddings: true         # Centers embeddings by subtracting corpus mean vector μ to prevent anisotropic centroid collapse
-  max_target_agglomeration_passes: 25   # Maximum iterative merging rounds (safety ceiling until convergence)
+
 
   # =========================================================================
   # ENUM SEMANTIC CLUSTERING & COHESION FILTERING

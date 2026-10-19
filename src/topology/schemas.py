@@ -1,11 +1,13 @@
-from typing import List, Dict
-from pydantic import BaseModel
+from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, ConfigDict
 
 class EdgeDetail(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     node: str
     predicate: str
 
 class NodeMetrics(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     node_id: str
     degree_centrality: float
     pagerank: float
@@ -18,28 +20,20 @@ class NodeMetrics(BaseModel):
     out_edges: List[EdgeDetail] = []
 
 class HubPartition(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     hub_cluster_id: int
     nodes: List[str]
 
 class CommunityPartition(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     community_id: int
     nodes: List[str]
-
-class StructuralCluster(BaseModel):
-    cluster_id: int
-    nodes: List[str]
-
-class ThemeInheritance(BaseModel):
-    parent_theme: str
-    child_theme: str
-    overlap_score: float
+    merged_from: List[int] = []
 
 class TopologyResult(BaseModel):
+    model_config = ConfigDict(extra='ignore')
     global_hubs: List[str]
     hub_partitions: List[HubPartition] = []
     communities: List[CommunityPartition]
-    structural_clusters: List[StructuralCluster] = []
     orphans: List[str]
     node_metrics: Dict[str, NodeMetrics]
-    theme_inheritance: List[ThemeInheritance]
-    node_embeddings: Dict[str, List[float]] = {}

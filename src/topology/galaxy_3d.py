@@ -323,46 +323,15 @@ class Galaxy3DVisualizer:
         print("   -> [3D Galaxy] Computing dual-engine 3D projections (PCA-3D & UMAP-3D)...")
 
         # 1. Load Concept Embeddings & Metadata
+        from src.topology.resolver import TargetResolver
         ref_cache = refinement_dir / "cache"
         ref_cfg = self.config.get('refinement', {}) if 'refinement' in self.config else self.config
         model_name = ref_cfg.get('embedding_model')
-
-        # Auto-detect model if not explicitly specified, defaulting to all-MiniLM-L6-v2
-        if not model_name:
-            if list(ref_cache.glob("subject_all_MiniLM_L6_v2*.npy")) or list(ref_cache.glob("concept_all_MiniLM_L6_v2*.npy")):
-                model_name = "all-MiniLM-L6-v2"
-            elif list(ref_cache.glob("concept_*_embeddings.npy")):
-                found = list(ref_cache.glob("concept_*_embeddings.npy"))[0].stem
-                slug = found.replace("concept_", "").replace("_embeddings", "")
-                model_name = slug.replace("_", "/")
-            elif list(ref_cache.glob("subject_*_embeddings.npy")):
-                found = list(ref_cache.glob("subject_*_embeddings.npy"))[0].stem
-                slug = found.replace("subject_", "").replace("_embeddings", "")
-                model_name = slug.replace("_", "/")
-            else:
-                model_name = "all-MiniLM-L6-v2"
-
-        model_slug = re.sub(r'[^a-zA-Z0-9_]', '_', model_name)
-        concept_npy = ref_cache / f"concept_{model_slug}_embeddings.npy"
-        concept_meta = ref_cache / f"concept_{model_slug}_meta.json"
-
-        if not concept_npy.exists() or not concept_meta.exists():
-            subject_npy = ref_cache / f"subject_{model_slug}_embeddings.npy"
-            subject_meta = ref_cache / f"subject_{model_slug}_meta.json"
-            if subject_npy.exists() and subject_meta.exists():
-                concept_npy, concept_meta = subject_npy, subject_meta
-            else:
-                avail = list(ref_cache.glob("concept_*_embeddings.npy"))
-                if avail:
-                    concept_npy = avail[0]
-                    concept_meta = ref_cache / (concept_npy.stem.replace("_embeddings", "_meta.json"))
-                else:
-                    raise FileNotFoundError(f"Concept embeddings not found in '{ref_cache}'.")
-
-        with open(concept_meta, "r", encoding="utf-8") as f:
-            meta_data = json.load(f)
-        vocab_map = {str(t).lower().strip(): idx for idx, t in enumerate(meta_data.get("vocab", []))}
-        embedding_matrix = np.load(concept_npy)
+        embedding_matrix, vocab_map, vocab_list = TargetResolver.load_raw_concept_matrix(
+            cache_dir=ref_cache,
+            config=self.config,
+            explicit_model=model_name
+        )
 
         # 2. Load Community Tiers, Partitions & Highways
         comm_dir = base_dir / "03_paths" / "community"
