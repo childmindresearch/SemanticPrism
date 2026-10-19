@@ -429,6 +429,7 @@ class TopologyPipeline:
             b_val = betweenness.get(node, 0.0)
             pr_val = pagerank.get(node, 0.0)
             deg_val = dg.degree(node)
+            mv_val = mod_vitality.get(node, 0.0)
 
             is_thematic_bridge = (p_val >= self.hub_p_thresh) and (deg_val >= effective_min_hub_deg)
             is_workflow_chokepoint = (node in top_betweenness_nodes)

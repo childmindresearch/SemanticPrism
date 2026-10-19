@@ -1,5 +1,6 @@
 import json
 import html
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from collections import Counter
