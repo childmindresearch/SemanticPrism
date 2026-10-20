@@ -51,7 +51,8 @@ CRITICAL MODELING RULES:
 1. **Synthesize Domain Workflows, Do Not Transcribe:** Do NOT mechanically turn every term into a separate class. Step back, understand the domain narrative, and design 1 or more intuitive, cohesive Pydantic `BaseModel` classes modeling the core subject matter (e.g., ClinicalEvaluation, AssessmentProtocol, PatientCondition).
 2. **Model Real-World Attributes:** Derive concrete attributes and fields directly from the details in `thematic_observations` (e.g., status, duration, severity, modalities, operational metrics).
 3. **Use Enums/Literals with Semantic Abstraction:** Type fields representing discrete categories, severities, or classifications using Python `Enum` or `Literal` types instead of open-ended strings. Abstract nuanced terms into reusable categories.
-4. **Field Descriptions & Optionality:** Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the domain meaning derived from `thematic_observations` (e.g., `dosage: Optional[str] = Field(default=None, description="Prescribed medication dosage and frequency")`).
+4. **Field Descriptions & Optionality:** Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the domain meaning derived from `thematic_observations`.
+   - Field names MUST be valid Python identifiers in `snake_case` (alphanumeric and underscores only, NEVER hyphens like `field-name`).
 5. **Self-Contained & Valid Imports:** The source code must include all necessary imports:
    `from pydantic import BaseModel, Field`
    `from typing import Optional, List, Dict, Any, Union, Literal`
@@ -78,10 +79,13 @@ CONSOLIDATION_SYSTEM_PROMPT = """You are a Master Ontologist.
 Merge, deduplicate, and consolidate the provided fragmented Pydantic schema files into a unified `master_ontology.py` module.
 
 CRITICAL RULES:
-1. **Deduplicate & Merge:** Identify classes modeling the same core concept across files. Merge their fields using the most descriptive and comprehensive names.
+1. **Deduplicate & Merge (Strict Class Name Uniqueness):** Identify classes modeling the same core concept across files. Merge their fields into ONE single unified class using the most descriptive and comprehensive names.
+   - NEVER define two classes with the exact same name in the file (e.g., do NOT emit multiple `class EmotionalDysregulationAssessment`).
+   - NEVER define an Enum and a BaseModel sharing the exact same class name.
 2. **Preserve Hierarchy & Relationships:** Maintain valid class inheritance and typed cross-model references.
 3. **Preserve Field Descriptions:** Retain attributes declared as `Field(default=None, description="...")`, preserving the most detailed and descriptive `description` string across merged attributes.
-4. **Self-Contained Imports:** Ensure all necessary Pydantic and typing imports are included at the top of the file.
+4. **Valid Python Identifiers:** All attribute names must be valid Python identifiers in `snake_case` (alphanumeric and underscores only, NEVER hyphens like `help-seeking_barriers`).
+5. **Self-Contained Imports:** Ensure all necessary Pydantic and typing imports are included at the top of the file.
 
 OUTPUT SCHEMA INSTRUCTIONS:
 Return a JSON object conforming to the GeneratedModule schema:
@@ -98,10 +102,13 @@ Merge the provided `enums.py`, `raw_master_ontology.py`, and `normalized_master_
 
 CRITICAL RULES:
 1. **Embed Enums Directly:** Copy and define all `Enum` and `Literal` classes from `enums.py` at the top of the file. Do not use external or relative imports.
-2. **Merge Classes:** Combine raw and normalized models by unioning their fields. If only one master ontology is provided, use its classes directly.
+2. **Merge Classes & Strict Uniqueness:** Combine raw and normalized models by unioning their fields into single, comprehensive classes.
+   - NEVER declare multiple classes with the same name.
+   - NEVER define an Enum and a BaseModel with the same name.
 3. **Standardize Fields & Descriptions:** Keep all attributes declared with `Field(default=None, description="...")`, ensuring informative descriptions are retained across models, and leverage embedded Enums/Literals for typed fields.
-4. **No Synthetic Identifiers:** Ensure no synthetic `id`, `uuid`, or surrogate key fields are generated unless explicitly substantiated by source domain data.
-5. **Formatting:** Output pure, executable Python code with all necessary imports.
+4. **Valid Python Identifiers:** All attribute names must be valid Python identifiers in `snake_case` (alphanumeric and underscores only, NEVER hyphens).
+5. **No Synthetic Identifiers:** Ensure no synthetic `id`, `uuid`, or surrogate key fields are generated unless explicitly substantiated by source domain data.
+6. **Formatting:** Output pure, executable Python code with all necessary imports.
 
 OUTPUT SCHEMA INSTRUCTIONS:
 Return a JSON object conforming to the GeneratedModule schema:

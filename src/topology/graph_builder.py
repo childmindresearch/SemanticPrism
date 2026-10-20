@@ -160,16 +160,20 @@ class TopologyPipeline:
         # 1. Granularity Intent (Target Schema Breadth & Count)
         if granularity == "macro":
             base_leiden_res = 0.55
-            self.agglomeration_similarity_threshold = 0.70
+            self.agglomeration_similarity_threshold = 0.65
             self.max_agglomeration_passes = 20
         elif granularity == "granular":
             base_leiden_res = 1.05
-            self.agglomeration_similarity_threshold = 0.80
+            self.agglomeration_similarity_threshold = 0.75
             self.max_agglomeration_passes = 5
         else:  # "balanced"
             base_leiden_res = 0.75
-            self.agglomeration_similarity_threshold = 0.74
+            self.agglomeration_similarity_threshold = 0.69
             self.max_agglomeration_passes = 15
+
+        # Allow explicit override from macro_dials block if specified:
+        if "agglomeration_similarity_threshold" in macro_cfg and macro_cfg["agglomeration_similarity_threshold"] is not None:
+            self.agglomeration_similarity_threshold = float(macro_cfg["agglomeration_similarity_threshold"])
 
         # 2. Dynamic Scale Auto-Detection
         if auto_scale:

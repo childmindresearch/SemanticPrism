@@ -1,5 +1,6 @@
 import json
 import re
+import ast
 import subprocess
 import shutil
 import asyncio
@@ -110,18 +111,30 @@ def clean_python_code(code: str) -> str:
     # Specific fix to prevent un-escaping the one known problematic Enum string
     code = code.replace('"the "firstthen" principle"', '\'the "firstthen" principle\'')
     
-    # Sanitize invalid variable/enum identifiers with commas or spaces before assignment '='
+    # Sanitize invalid variable/enum identifiers and hyphenated type annotations
     def fix_line(line: str) -> str:
+        # 1. Assignment '=' fix
         m = re.match(r'^(\s+)([a-zA-Z0-9_, ]+?)(\s*=\s*.*)$', line)
         if m:
             indent, var, rest = m.groups()
             stripped_var = var.strip()
             if (',' in stripped_var or ' ' in stripped_var) and not stripped_var.startswith(('def ', 'class ', 'return ', 'if ', 'elif ')):
                 clean_var = re.sub(r'[, ]+', '_', stripped_var)
-                return f"{indent}{clean_var}{rest}"
+                line = f"{indent}{clean_var}{rest}"
+
+        # 2. Type annotation ':' fix for hyphens (e.g. 'help-seeking_barriers: ...' -> 'help_seeking_barriers: ...')
+        m_ann = re.match(r'^(\s+)([a-zA-Z_][a-zA-Z0-9_-]*)(\s*:\s*.*)$', line)
+        if m_ann:
+            indent, var, rest = m_ann.groups()
+            if '-' in var:
+                clean_var = var.replace('-', '_')
+                line = f"{indent}{clean_var}{rest}"
         return line
 
     code = '\n'.join(fix_line(line_str) for line_str in code.splitlines())
+
+    # Strip rogue CJK / non-ASCII character leakage from bilingual models in comments or docstrings
+    code = re.sub(r'[\u4e00-\u9fff]+', '', code)
     
     # Strip any accidental meta-modeling classes that mirror the prompt/JSON wrapper
     code = re.sub(
@@ -131,6 +144,85 @@ def clean_python_code(code: str) -> str:
         flags=re.DOTALL
     )
     return code.strip()
+
+
+def deduplicate_consolidated_classes(code: str) -> str:
+    """
+    Programmatic AST post-processor for consolidated ontologies (master_ontology.py and comprehensive_ontology.py).
+    Merges duplicate Enums and BaseModels, and disambiguates Enum vs BaseModel naming collisions.
+    """
+    clean_code = clean_python_code(code)
+    try:
+        tree = ast.parse(clean_code)
+    except Exception:
+        return clean_code
+
+    def is_enum_class(node: ast.ClassDef) -> bool:
+        for b in node.bases:
+            if isinstance(b, ast.Name) and "Enum" in b.id:
+                return True
+            if isinstance(b, ast.Attribute) and "Enum" in b.attr:
+                return True
+        return False
+
+    def get_assigned_name(stmt: ast.AST) -> Optional[str]:
+        if isinstance(stmt, ast.Assign) and stmt.targets and isinstance(stmt.targets[0], ast.Name):
+            return stmt.targets[0].id
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            return stmt.target.id
+        return None
+
+    enums_by_name: Dict[str, ast.ClassDef] = {}
+    models_by_name: Dict[str, ast.ClassDef] = {}
+    other_nodes: List[ast.AST] = []
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            name = node.name
+            if is_enum_class(node):
+                if name not in enums_by_name:
+                    enums_by_name[name] = node
+                else:
+                    # Merge enum members (both Assign and AnnAssign)
+                    existing_members = {
+                        get_assigned_name(stmt) for stmt in enums_by_name[name].body 
+                        if get_assigned_name(stmt) is not None
+                    }
+                    for stmt in node.body:
+                        m_name = get_assigned_name(stmt)
+                        if m_name and m_name not in existing_members:
+                            enums_by_name[name].body.append(stmt)
+                            existing_members.add(m_name)
+            else:
+                if name not in models_by_name:
+                    models_by_name[name] = node
+                else:
+                    # Merge BaseModel fields (both AnnAssign and Assign)
+                    existing_fields = {
+                        get_assigned_name(stmt) for stmt in models_by_name[name].body 
+                        if get_assigned_name(stmt) is not None
+                    }
+                    for stmt in node.body:
+                        f_name = get_assigned_name(stmt)
+                        if f_name and f_name not in existing_fields:
+                            models_by_name[name].body.append(stmt)
+                            existing_fields.add(f_name)
+        else:
+            other_nodes.append(node)
+
+    # Disambiguate Enum vs BaseModel name collisions
+    for m_name in list(models_by_name.keys()):
+        if m_name in enums_by_name:
+            new_name = f"{m_name}Detail"
+            model_node = models_by_name.pop(m_name)
+            model_node.name = new_name
+            models_by_name[new_name] = model_node
+
+    tree.body = other_nodes + list(enums_by_name.values()) + list(models_by_name.values())
+    try:
+        return ast.unparse(tree)
+    except Exception:
+        return clean_code
 
 class SynthesisPipeline:
     def __init__(self, config: Dict[str, Any]):
@@ -502,7 +594,8 @@ class SynthesisPipeline:
                 if tr.get('theme_association') and tr.get('theme_association') != 'Other'
             )
             primary_theme = theme_counts.most_common(1)[0][0] if theme_counts else ""
-            domain_focus = primary_theme if primary_theme else (f"Domain Focus: {', '.join(top_terms[:3])}" if top_terms else f"Community #{target_id}")
+            terms_context = f" — Focus: {', '.join(top_terms[:3])}" if top_terms else ""
+            domain_focus = f"{primary_theme}{terms_context}" if primary_theme else (f"Domain Focus: {', '.join(top_terms[:3])}" if top_terms else f"Community #{target_id}")
 
             payload_dict = {
                 "community_id": target_id,
@@ -796,12 +889,14 @@ class SynthesisPipeline:
                         master_code = loop.run_until_complete(process_consolidation_async(files_list, schema_dir))
                     finally:
                         loop.close()
+                    master_code = deduplicate_consolidated_classes(master_code)
                     with open(schema_dir / "master_ontology.py", "w") as f:
                         f.write(master_code)
                 except Exception as e:
                     print(f"      [Warning] Async consolidation failed ({e}). Falling back to sync...")
                     try:
                         master_code = process_consolidation_sync(files_list, schema_dir)
+                        master_code = deduplicate_consolidated_classes(master_code)
                         with open(schema_dir / "master_ontology.py", "w") as f:
                             f.write(master_code)
                     except Exception as sync_e:
@@ -809,6 +904,7 @@ class SynthesisPipeline:
             else:
                 try:
                     master_code = process_consolidation_sync(files_list, schema_dir)
+                    master_code = deduplicate_consolidated_classes(master_code)
                     with open(schema_dir / "master_ontology.py", "w") as f:
                         f.write(master_code)
                 except Exception as e:
@@ -838,6 +934,7 @@ class SynthesisPipeline:
                 save_payload_file("phase4_comprehensive_ontology_payload.txt", f"=== SYSTEM PROMPT ===\n{synth_prompts.FINAL_ONTOLOGY_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{final_payload}")
                 final_res = comprehensive_ontology_agent.run_sync(final_payload)
                 final_code = clean_python_code(final_res.output.source_code)
+                final_code = deduplicate_consolidated_classes(final_code)
             except Exception as e:
                 malformed_text = extract_malformed_text(messages, e)
                 print(f"      [Warning] Initial comprehensive ontology synthesis failed for {path_type}. Running Schema Reformat Agent...")
@@ -851,11 +948,13 @@ class SynthesisPipeline:
                 try:
                     ref_res = schema_reformat_agent.run_sync(reformat_prompt)
                     final_code = clean_python_code(ref_res.output.source_code)
+                    final_code = deduplicate_consolidated_classes(final_code)
                     print(f"      -> Reformat successful for comprehensive_ontology ({path_type})!")
                 except Exception as ref_err:
                     log_error(f"[Synthesis {path_type}] Error generating comprehensive_ontology: {ref_err}")
                     final_code = "# Error generating comprehensive ontology"
 
+        final_code = deduplicate_consolidated_classes(final_code)
         with open(output_base_dir / "comprehensive_ontology.py", "w") as f:
             f.write(final_code)
 
