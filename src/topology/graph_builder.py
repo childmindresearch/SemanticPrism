@@ -168,7 +168,7 @@ class TopologyPipeline:
             self.max_agglomeration_passes = 5
         else:  # "balanced"
             base_leiden_res = 0.75
-            self.agglomeration_similarity_threshold = 0.69
+            self.agglomeration_similarity_threshold = 0.70
             self.max_agglomeration_passes = 15
 
         # Allow explicit override from macro_dials block if specified:

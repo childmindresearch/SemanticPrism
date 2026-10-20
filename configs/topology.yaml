@@ -43,8 +43,8 @@ topology:
     # 4. Agglomeration Similarity Threshold Override (Centroid Cosine Similarity Cutoff)
     #    - When set (uncommented): Explicitly overrides the profile preset.
     #    - To use automatic profile presets: Simply comment out this line (or set to null).
-    #      Preset defaults: "macro" = 0.65, "balanced" = 0.69, "granular" = 0.75.
-    agglomeration_similarity_threshold: null # Defaults to active profile preset (0.69 for balanced)
+    #      Preset defaults: "macro" = 0.65, "balanced" = 0.70, "granular" = 0.75.
+    agglomeration_similarity_threshold: null # Defaults to active profile preset (0.70 for balanced)
 
   # ----------------------------------------------------------------------------
   # SECTION 0.1: PIPELINE EXECUTION & TABULAR DIAGNOSTIC REPORTS
@@ -146,7 +146,7 @@ topology:
     # --- 3.7 Hierarchical Community Agglomeration ---
     # Iteratively consolidates redundant or split communities with near-identical centroids:
     enable_community_agglomeration: true
-    agglomeration_similarity_threshold: 0.69 # Centroid cosine similarity cutoff for merging communities
+    agglomeration_similarity_threshold: 0.70 # Centroid cosine similarity cutoff for merging communities
     max_agglomeration_passes: 15      # Iterative convergence ceiling
     center_agglomeration_embeddings: true # Subtract corpus mean vector mu to eliminate anisotropic baseline shift
 
