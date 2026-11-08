@@ -308,7 +308,7 @@ class Galaxy3DVisualizer:
                 if (
                     "concepts" in data
                     and "agglom" in data
-                    and len(data["concepts"]) > 100
+                    and len(data["concepts"]) > 5
                     and cached_debiased == desired_debiased
                     and cached_weighting == desired_weighting
                     and cached_hull == desired_hull

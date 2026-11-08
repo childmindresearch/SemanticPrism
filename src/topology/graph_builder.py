@@ -177,28 +177,35 @@ class TopologyPipeline:
 
         # 2. Dynamic Scale Auto-Detection
         if auto_scale:
-            if num_nodes < 50:
-                # Small/toy dataset (e.g. 5-30 nodes): preserve connectivity, never prune hubs
-                self.min_hub_degree = max(3, int(0.7 * num_nodes))
-                self.max_global_hubs = 0
-                self.absorption_size_threshold = max(2, int(0.15 * num_nodes))
-                self.leiden_res = max(0.4, base_leiden_res * 0.8)
+            if num_nodes < 80:
+                # Small dataset (e.g. 5-80 nodes): preserve connectivity, minimal hub pruning
+                self.min_hub_degree = max(4, int(0.35 * num_nodes))
+                self.max_global_hubs = min(2, max(0, int(num_nodes // 30)))
+                self.absorption_size_threshold = max(3, int(0.06 * num_nodes))
+                self.leiden_res = max(0.5, base_leiden_res * 0.85)
                 self.hybrid_semantic_alpha = 0.60
+                adaptive_min_cluster = max(4, int(0.04 * num_nodes))
             elif num_nodes < 500:
-                # Mid-sized dataset
+                # Mid-sized dataset (e.g. 80-500 nodes, such as 10-25 documents)
                 self.min_hub_degree = max(8, int(0.04 * num_nodes))
                 self.max_global_hubs = 5
-                self.absorption_size_threshold = max(5, int(0.03 * num_nodes))
+                self.absorption_size_threshold = max(4, int(0.025 * num_nodes))
                 self.leiden_res = base_leiden_res
                 self.hybrid_semantic_alpha = 0.50
+                adaptive_min_cluster = max(5, min(12, int(0.03 * num_nodes)))
             else:
-                # Large complex dataset (e.g. 5,000+ nodes)
+                # Large complex dataset (e.g. 500+ nodes)
                 self.min_hub_degree = max(25, int(math.sqrt(num_nodes)))
                 self.max_global_hubs = 10
                 self.absorption_size_threshold = max(15, min(25, int(0.003 * num_nodes + 15)))
                 self.leiden_res = base_leiden_res
                 density_factor = min(1.0, max(0.0, math.sqrt(density * 50)))
                 self.hybrid_semantic_alpha = round(0.55 - 0.20 * density_factor, 2)
+                adaptive_min_cluster = 15
+
+            if hasattr(self, "full_config") and isinstance(self.full_config, dict):
+                self.full_config.setdefault("synthesis", {})
+                self.full_config["synthesis"].setdefault("min_cluster_size", adaptive_min_cluster)
         else:
             self.leiden_res = base_leiden_res
 
@@ -933,17 +940,20 @@ class TopologyPipeline:
         all_stage_nodes = set(cluster_ug.nodes()) | set(attachable_leaves.keys()) | set(attachable_leaves.values()) | set(orphans)
         for c in communities:
             all_stage_nodes.update(c.nodes)
-        concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_stage_nodes), cache_dir=c_dir, model_name=m_name)
-        if self.center_agglomeration_embeddings and concept_vecs:
-            concept_vecs, _ = TargetResolver.center_concept_embeddings(concept_vecs)
+        raw_concept_vecs = TargetResolver._get_or_load_concept_embeddings(list(all_stage_nodes), cache_dir=c_dir, model_name=m_name)
+        if self.center_agglomeration_embeddings and raw_concept_vecs:
+            concept_vecs, _ = TargetResolver.center_concept_embeddings(raw_concept_vecs)
+        else:
+            concept_vecs = raw_concept_vecs
 
         # Pass 2: Two-Pass Leaf Reattachment
         # Re-attach degree-1 pendant leaves to their unique core neighbor's community
+        # Uses raw L2-normalized embeddings so min_leaf_attachment_similarity (0.45) is not distorted by mean-centering
         comm_lookup = {c.community_id: c for c in communities}
         reattached_leaf_count = 0
         segregated_leaf_count = 0
 
-        leaf_vecs = concept_vecs
+        leaf_vecs = raw_concept_vecs
         core_centroids = {}
         if self.enable_guarded_leaf_attachment and attachable_leaves:
             for c in communities:
@@ -966,8 +976,8 @@ class TopologyPipeline:
                     leaf_sim = 0.0
                     if u_vec is not None and c_centroid is not None:
                         leaf_sim = float(np.dot(u_vec, c_centroid))
-                    elif u_vec is not None and v_vec is not None:
-                        leaf_sim = float(np.dot(u_vec, v_vec))
+                    if u_vec is not None and v_vec is not None:
+                        leaf_sim = max(leaf_sim, float(np.dot(u_vec, v_vec)))
 
                     if leaf_sim >= self.min_leaf_attachment_similarity:
                         comm_lookup[target_cid].nodes.append(u)
@@ -1000,10 +1010,14 @@ class TopologyPipeline:
             major_comms = [c for c in communities if len(c.nodes) >= min_size]
             minor_comms = [c for c in communities if len(c.nodes) < min_size]
 
-            # Fallback if no community meets the threshold: take top 2 largest
-            if not major_comms and communities:
+            # Scale-aware fallback if too few communities meet the static threshold on a smaller corpus:
+            # preserve at least the top half (or up to 6) of communities with >= 4 nodes as major communities
+            if len(major_comms) < min(3, len(communities)) and communities:
                 sorted_by_size = sorted(communities, key=lambda x: len(x.nodes), reverse=True)
-                major_comms = sorted_by_size[:max(1, min(2, len(sorted_by_size)))]
+                target_major_count = max(2, min(6, (len(sorted_by_size) + 1) // 2))
+                major_comms = [c for c in sorted_by_size[:target_major_count] if len(c.nodes) >= 4]
+                if not major_comms:
+                    major_comms = sorted_by_size[:max(1, min(3, len(sorted_by_size)))]
                 minor_comms = [c for c in communities if c not in major_comms]
 
             if major_comms and minor_comms:

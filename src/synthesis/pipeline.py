@@ -153,22 +153,54 @@ class TargetResolver:
     """
 
     @staticmethod
+    def resolve_effective_min_cluster_size(topology: Dict[str, Any], configured_min_size: int = MIN_CLUSTER_SIZE) -> int:
+        """
+        Adapts min_cluster_size to corpus scale so smaller corpora (e.g., 5-20 documents)
+        do not have most or all of their communities filtered out by a static 15-node floor.
+        """
+        raw_hubs_set = set(topology.get("global_hubs", []))
+        comm_sizes = [
+            len([n for n in comm.get("nodes", []) if n not in raw_hubs_set])
+            for comm in topology.get("communities", [])
+        ]
+        comm_sizes = [s for s in comm_sizes if s > 0]
+        if not comm_sizes:
+            return configured_min_size
+
+        total_comm_nodes = sum(comm_sizes)
+        if total_comm_nodes < 500:
+            effective_min = max(4, min(configured_min_size, int(total_comm_nodes * 0.03)))
+        else:
+            effective_min = configured_min_size
+
+        # Ensure at least up to 5 viable communities (>= 4 nodes) qualify when available
+        qualifying = [s for s in comm_sizes if s >= effective_min]
+        viable = sorted([s for s in comm_sizes if s >= 4], reverse=True)
+        if len(qualifying) < min(4, len(viable)) and viable:
+            target_idx = min(5, len(viable)) - 1
+            effective_min = min(effective_min, viable[target_idx])
+
+        return max(3, effective_min)
+
+    @staticmethod
     def qualify_and_resolve_targets(
         topology: Dict[str, Any],
         config: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Resolves qualified community targets (>= min_cluster_size).
+        Resolves qualified community targets (>= effective min_cluster_size).
         """
-        min_cluster_size = (
+        configured_min_size = (
             config.get("synthesis", {}).get("min_cluster_size", MIN_CLUSTER_SIZE)
             if config
             else MIN_CLUSTER_SIZE
         )
+        min_cluster_size = TargetResolver.resolve_effective_min_cluster_size(topology, configured_min_size)
+        raw_hubs_set = set(topology.get("global_hubs", []))
 
         targets = []
         for comm in topology.get("communities", []):
-            nodes_in_comm = list(comm.get("nodes", []))
+            nodes_in_comm = [n for n in comm.get("nodes", []) if n not in raw_hubs_set]
             if len(nodes_in_comm) >= min_cluster_size:
                 c_id = comm.get("community_id")
                 targets.append({
@@ -287,8 +319,21 @@ class TargetResolver:
             output_dir = Path(RESOLVED_TARGETS_OUTPUT_DIR)
         output_dir.mkdir(parents=True, exist_ok=True)
         synth_cfg = config.get("synthesis", {}) if config else {}
-        min_cluster_size = synth_cfg.get("min_cluster_size", MIN_CLUSTER_SIZE)
+        configured_min_size = synth_cfg.get("min_cluster_size", MIN_CLUSTER_SIZE)
+        min_cluster_size = TargetResolver.resolve_effective_min_cluster_size(topology, configured_min_size)
         max_triplets_cap = synth_cfg.get("max_triplets_per_target", MAX_TRIPLETS_PER_TARGET)
+
+        # Preserve pre-computed architectural_tiers from Stage 3 if available on disk
+        existing_tiers_by_cid: Dict[Any, Any] = {}
+        tiers_file = output_dir / "community_architectural_tiers.json"
+        if tiers_file.exists():
+            try:
+                with open(tiers_file, "r", encoding="utf-8") as tf:
+                    for item in json.load(tf):
+                        if isinstance(item, dict) and "community_id" in item:
+                            existing_tiers_by_cid[item["community_id"]] = item
+            except Exception:
+                pass
 
         targets = TargetResolver.qualify_and_resolve_targets(topology, config)
 
@@ -321,6 +366,8 @@ class TargetResolver:
                 "triplets_count": len(capped_triplets),
                 "triplets": capped_triplets,
             }
+            if c_id in existing_tiers_by_cid:
+                payload_item["architectural_tiers"] = existing_tiers_by_cid[c_id]
             target_payloads.append(payload_item)
 
         audit_payload = {
