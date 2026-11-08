@@ -34,12 +34,10 @@ class TargetResolver:
             return configured_min_size
 
         total_comm_nodes = sum(comm_sizes)
-        if total_comm_nodes < 500:
-            effective_min = max(4, min(configured_min_size, int(total_comm_nodes * 0.03)))
-        else:
-            effective_min = configured_min_size
+        if total_comm_nodes >= 500:
+            return configured_min_size
 
-        # Ensure at least up to 5 viable communities (>= 4 nodes) qualify when available
+        effective_min = max(4, min(configured_min_size, int(total_comm_nodes * 0.03)))
         qualifying = [s for s in comm_sizes if s >= effective_min]
         viable = sorted([s for s in comm_sizes if s >= 4], reverse=True)
         if len(qualifying) < min(4, len(viable)) and viable:

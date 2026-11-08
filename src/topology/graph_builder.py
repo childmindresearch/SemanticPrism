@@ -947,13 +947,15 @@ class TopologyPipeline:
             concept_vecs = raw_concept_vecs
 
         # Pass 2: Two-Pass Leaf Reattachment
-        # Re-attach degree-1 pendant leaves to their unique core neighbor's community
-        # Uses raw L2-normalized embeddings so min_leaf_attachment_similarity (0.45) is not distorted by mean-centering
+        # Re-attach degree-1 pendant leaves to their unique core neighbor's community.
+        # On large corpora (>= 500 nodes), use debiased concept_vecs and strict centroid similarity.
+        # On smaller corpora (< 500 nodes), use raw L2-normalized embeddings so valid degree-1 leaves are not starved.
+        is_small_corpus = len(dg) < 500
         comm_lookup = {c.community_id: c for c in communities}
         reattached_leaf_count = 0
         segregated_leaf_count = 0
 
-        leaf_vecs = raw_concept_vecs
+        leaf_vecs = raw_concept_vecs if is_small_corpus else concept_vecs
         core_centroids = {}
         if self.enable_guarded_leaf_attachment and attachable_leaves:
             for c in communities:
@@ -976,8 +978,10 @@ class TopologyPipeline:
                     leaf_sim = 0.0
                     if u_vec is not None and c_centroid is not None:
                         leaf_sim = float(np.dot(u_vec, c_centroid))
-                    if u_vec is not None and v_vec is not None:
-                        leaf_sim = max(leaf_sim, float(np.dot(u_vec, v_vec)))
+                        if is_small_corpus and v_vec is not None:
+                            leaf_sim = max(leaf_sim, float(np.dot(u_vec, v_vec)))
+                    elif u_vec is not None and v_vec is not None:
+                        leaf_sim = float(np.dot(u_vec, v_vec))
 
                     if leaf_sim >= self.min_leaf_attachment_similarity:
                         comm_lookup[target_cid].nodes.append(u)
@@ -1010,14 +1014,16 @@ class TopologyPipeline:
             major_comms = [c for c in communities if len(c.nodes) >= min_size]
             minor_comms = [c for c in communities if len(c.nodes) < min_size]
 
-            # Scale-aware fallback if too few communities meet the static threshold on a smaller corpus:
-            # preserve at least the top half (or up to 6) of communities with >= 4 nodes as major communities
-            if len(major_comms) < min(3, len(communities)) and communities:
+            if is_small_corpus and len(major_comms) < min(3, len(communities)) and communities:
                 sorted_by_size = sorted(communities, key=lambda x: len(x.nodes), reverse=True)
                 target_major_count = max(2, min(6, (len(sorted_by_size) + 1) // 2))
                 major_comms = [c for c in sorted_by_size[:target_major_count] if len(c.nodes) >= 4]
                 if not major_comms:
                     major_comms = sorted_by_size[:max(1, min(3, len(sorted_by_size)))]
+                minor_comms = [c for c in communities if c not in major_comms]
+            elif not major_comms and communities:
+                sorted_by_size = sorted(communities, key=lambda x: len(x.nodes), reverse=True)
+                major_comms = sorted_by_size[:max(1, min(2, len(sorted_by_size)))]
                 minor_comms = [c for c in communities if c not in major_comms]
 
             if major_comms and minor_comms:
