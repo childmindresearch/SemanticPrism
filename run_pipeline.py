@@ -139,10 +139,10 @@ def generate_pipeline_summary(
     raw_diag = _load_json_safe(s3_dir / "01_raw_graph_evaluation" / "raw_graph_diagnostics.json") or {}
     hubs_reg = _load_json_safe(s3_dir / "01_raw_graph_evaluation" / "global_hubs_registry.json") or {}
     core_diag = _load_json_safe(s3_dir / "02_core_separation" / "core_graph_diagnostics.json") or {}
-    comm_diag = _load_json_safe(s3_dir / "03_paths" / "community" / "community_path_diagnostics.json") or {}
-    baseline_parts = _load_json_safe(s3_dir / "03_paths" / "community" / "topology_partitions_baseline.json") or {}
-    final_parts = _load_json_safe(s3_dir / "03_paths" / "community" / "topology_partitions.json") or {}
-    agglom_report = _load_json_safe(s3_dir / "03_paths" / "community" / "community_agglomeration_report.json") or {}
+    comm_diag = _load_json_safe(s3_dir / "03_results" / "community_path_diagnostics.json") or {}
+    baseline_parts = _load_json_safe(s3_dir / "03_results" / "topology_partitions_baseline.json") or {}
+    final_parts = _load_json_safe(s3_dir / "03_results" / "topology_partitions.json") or {}
+    agglom_report = _load_json_safe(s3_dir / "03_results" / "community_agglomeration_report.json") or {}
 
     raw_scale = raw_diag.get("graph_scale", {})
     raw_nodes = raw_scale.get("num_nodes", 0)

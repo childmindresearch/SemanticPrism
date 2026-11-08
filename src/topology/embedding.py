@@ -75,7 +75,7 @@ class ClusterEmbeddingVisualizer:
             embedding_matrix = diff / np.maximum(norms, 1e-9)
 
         # 2. Load Community Architectural Tiers and/or Partitions
-        comm_dir = base_dir / "03_paths" / "community"
+        comm_dir = base_dir / "03_results"
         tiers_json = comm_dir / "community_architectural_tiers.json"
         partitions_json = comm_dir / "topology_partitions.json"
         highways_json = comm_dir / "community_highways.json"
@@ -466,7 +466,7 @@ class ClusterEmbeddingVisualizer:
         metrics = self.compute_centroid_metrics(base_dir=base_dir, refinement_dir=refinement_dir)
         
         if output_path is None:
-            output_path = base_dir / "03_paths" / "community" / "cluster_semantic_dispersion_map.html"
+            output_path = base_dir / "03_results" / "cluster_semantic_dispersion_map.html"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Export companion diagnostics JSON for programmatic evaluation

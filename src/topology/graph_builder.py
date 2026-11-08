@@ -330,13 +330,13 @@ class TopologyPipeline:
             node_metrics=node_metrics
         )
 
-        # 3. 03_paths/community: Dedicated community path visuals
+        # 3. 03_results: Dedicated community results visuals
         if "community" in results:
             self.visualizer.generate_stage_3_3_community_visuals(
                 dg=dg,
                 result=results["community"],
                 refined_triplets=refined_triplets,
-                vis_dir=Path("outputs/03_topology/03_paths/community"),
+                vis_dir=Path("outputs/03_topology/03_results"),
                 baseline_result=getattr(self, 'baseline_community_result', None)
             )
 
@@ -889,7 +889,7 @@ class TopologyPipeline:
         node_metrics: Dict[str, NodeMetrics], refined_triplets: List[dict]
     ) -> TopologyResult:
         print("   ==> [Stage 3.3 - Path 1] Executing Community Path (Leiden Modularity)...")
-        path_out_dir = Path("outputs/03_topology/03_paths/community")
+        path_out_dir = Path("outputs/03_topology/03_results")
         path_out_dir.mkdir(parents=True, exist_ok=True)
 
         communities = []

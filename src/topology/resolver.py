@@ -580,7 +580,7 @@ class TargetResolver:
         path_type: str = "community",
         refined_triplets: List[Dict[str, Any]] = None,
         config: Dict[str, Any] = None,
-        output_dir: Path = Path("outputs/03_topology/03_paths/community")
+        output_dir: Path = Path("outputs/03_topology/03_results")
     ) -> Path:
         """
         Executes target qualification and triplet PageRank capping, and exports

@@ -284,7 +284,7 @@ class Galaxy3DVisualizer:
         UMAP-3D projection coordinates for concepts, centroids, hulls, and highways.
         Caches the computed 3D dataset to avoid repeated dimensionality reduction.
         """
-        cache_dir = base_dir / "03_paths" / "community" / "cache"
+        cache_dir = base_dir / "03_results" / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_file = cache_dir / "galaxy_3d_data.json"
 
@@ -293,7 +293,7 @@ class Galaxy3DVisualizer:
         desired_weighting = str(g_cfg.get("centroid_weighting", "core_tiers"))
         desired_hull = int(g_cfg.get("density_hull_percentile", 75))
 
-        comm_dir = base_dir / "03_paths" / "community"
+        comm_dir = base_dir / "03_results"
         baseline_file_check = comm_dir / "topology_partitions_baseline.json"
 
         if not force_recompute and cache_file.exists():
@@ -334,7 +334,7 @@ class Galaxy3DVisualizer:
         )
 
         # 2. Load Community Tiers, Partitions & Highways
-        comm_dir = base_dir / "03_paths" / "community"
+        comm_dir = base_dir / "03_results"
         tiers_json = comm_dir / "community_architectural_tiers.json"
         partitions_json = comm_dir / "topology_partitions.json"
         baseline_partitions_json = comm_dir / "topology_partitions_baseline.json"
@@ -702,7 +702,7 @@ class Galaxy3DVisualizer:
         galaxy_data = self.compute_3d_galaxy_data(base_dir=base_dir, refinement_dir=refinement_dir, force_recompute=force_recompute)
 
         if output_path is None:
-            output_path = base_dir / "03_paths" / "community" / "cluster_3d_galaxy_visualization.html"
+            output_path = base_dir / "03_results" / "cluster_3d_galaxy_visualization.html"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         data_json_str = json.dumps(galaxy_data)

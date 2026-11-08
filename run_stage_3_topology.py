@@ -38,7 +38,7 @@ def run_tabular_export(base_dir: Path, top_hubs: int | None = None) -> None:
 def run_resolver_only(base_dir: Path, config: dict) -> None:
     """Fast recomputation of TargetResolver community architectural tiers directly from existing partitions."""
     from src.topology.resolver import TargetResolver
-    comm_partitions_path = base_dir / "03_paths" / "community" / "topology_partitions.json"
+    comm_partitions_path = base_dir / "03_results" / "topology_partitions.json"
     refined_path = Path("outputs/02_refinement/refined_triplets.json")
     if not comm_partitions_path.exists():
         print(f"CRITICAL ERROR: '{comm_partitions_path}' not found. Please run Stage 3 first.")
@@ -53,7 +53,7 @@ def run_resolver_only(base_dir: Path, config: dict) -> None:
     with open(refined_path, "r", encoding="utf-8") as f:
         refined_triplets = json.load(f)
 
-    out_dir = base_dir / "03_paths" / "community"
+    out_dir = base_dir / "03_results"
     TargetResolver.export_resolved_targets_json(
         topology=topology,
         path_type="community",
@@ -188,9 +188,9 @@ def main():
         s1_hubs = Path("outputs/03_topology/01_raw_graph_evaluation/global_hubs_registry.json")
         s2_diag = Path("outputs/03_topology/02_core_separation/core_graph_diagnostics.json")
         s2_impact = Path("outputs/03_topology/02_core_separation/separation_impact_report.json")
-        s3_comm = Path("outputs/03_topology/03_paths/community/community_path_diagnostics.json")
-        comm_out = Path("outputs/03_topology/03_paths/community/topology_partitions.json")
-        comm_targets = Path("outputs/03_topology/03_paths/community/resolved_community_targets.json")
+        s3_comm = Path("outputs/03_topology/03_results/community_path_diagnostics.json")
+        comm_out = Path("outputs/03_topology/03_results/topology_partitions.json")
+        comm_targets = Path("outputs/03_topology/03_results/resolved_community_targets.json")
         
         print("\n--- Output Artifacts Verification ---")
         if s1_diag.exists() and s1_hubs.exists():
@@ -198,7 +198,7 @@ def main():
         if s2_diag.exists() and s2_impact.exists():
             print("   [OK] Stage 3.2 Core Separation & Impact Report Saved (02_core_separation/)")
         if s3_comm.exists():
-            print("   [OK] Stage 3.3 Community Diagnostics & Highways Saved (03_paths/community/)")
+            print("   [OK] Stage 3.3 Community Diagnostics & Highways Saved (03_results/)")
         if comm_out.exists():
             print(f"   [OK] Community Canonical Partitions: {comm_out}")
         if comm_targets.exists():
@@ -207,9 +207,9 @@ def main():
         v1 = Path("outputs/03_topology/01_raw_graph_evaluation/complete_topology_graph.html")
         v2 = Path("outputs/03_topology/02_core_separation/reduced_core_graph.html")
         v2_hub = Path("outputs/03_topology/02_core_separation/hub_backbone_network.html")
-        v3_comm = Path("outputs/03_topology/03_paths/community/isolated_communities_only.html")
-        v3_disp = Path("outputs/03_topology/03_paths/community/cluster_semantic_dispersion_map.html")
-        v3_galaxy = Path("outputs/03_topology/03_paths/community/cluster_3d_galaxy_visualization.html")
+        v3_comm = Path("outputs/03_topology/03_results/isolated_communities_only.html")
+        v3_disp = Path("outputs/03_topology/03_results/cluster_semantic_dispersion_map.html")
+        v3_galaxy = Path("outputs/03_topology/03_results/cluster_3d_galaxy_visualization.html")
 
         print("\n--- Visuals Verification (Co-Located in 03_topology) ---")
         if v1.exists():
@@ -229,7 +229,7 @@ def main():
         csv_sum = Path("outputs/03_topology/topology_metrics_comparative_summary.csv")
         csv_hubs = Path("outputs/03_topology/01_raw_graph_evaluation/top_global_hubs_registry.csv")
         csv_prune = Path("outputs/03_topology/02_core_separation/graph_scale_and_pruning_breakdown.csv")
-        csv_comm = Path("outputs/03_topology/03_paths/community/community_clusters_summary.csv")
+        csv_comm = Path("outputs/03_topology/03_results/community_clusters_summary.csv")
 
         print("\n--- Tabular CSV Reports Verification ---")
         if csv_sum.exists():

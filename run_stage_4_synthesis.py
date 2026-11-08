@@ -8,7 +8,7 @@ with PrismRunner's local HuggingFace batch inference engine.
 
 Workflow Phases & Output Artifacts:
   - Phase 0 : Dynamic Target Resolution
-              * outputs/03_topology/03_paths/community/resolved_community_targets.json
+              * outputs/03_topology/03_results/resolved_community_targets.json
   - Phase 1 : Community Path Schema Synthesis (Single Pass from Raw Source Sentence Text)
               * outputs/04_synthesis/schemas/community/<01_module_name>.py ...
   - Phase 2 : Global Schema Consolidation & AST Class Deduplication
@@ -86,8 +86,8 @@ DRY_RUN: bool = False                                  # Set True to preview pro
 # --- 2. Input & Output Paths ---
 OUTPUTS_DIR: str = "outputs"
 REFINED_TRIPLETS_PATH: str = "outputs/02_refinement/refined_triplets.json"
-TOPOLOGY_PARTITIONS_PATH: str = "outputs/03_topology/03_paths/community/topology_partitions.json"
-RESOLVED_TARGETS_OUTPUT_DIR: str = "outputs/03_topology/03_paths/community"
+TOPOLOGY_PARTITIONS_PATH: str = "outputs/03_topology/03_results/topology_partitions.json"
+RESOLVED_TARGETS_OUTPUT_DIR: str = "outputs/03_topology/03_results"
 SAVE_LLM_PAYLOADS: bool = True
 PRINT_CHECKPOINTS: bool = True                       # Print real-time timestamped checkpoint messages to console
 RESUME_EXISTING_SCHEMAS: bool = False                # If True, skips community targets whose .py files already exist
@@ -238,7 +238,7 @@ def main() -> None:
     print("   -> Phase 0: Resolving Synthesis Targets from Stage 3 Graph Partitions...")
     comm_file = Path(TOPOLOGY_PARTITIONS_PATH)
     if not comm_file.exists():
-        comm_file = Path(OUTPUTS_DIR) / "03_topology" / "community" / "topology_partitions.json"
+        comm_file = Path(OUTPUTS_DIR) / "03_topology" / "03_results" / "topology_partitions.json"
     comm_topology = load_json(comm_file, required=False)
 
     resolved_targets_path = Path(RESOLVED_TARGETS_OUTPUT_DIR) / "resolved_community_targets.json"

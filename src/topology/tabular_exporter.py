@@ -387,7 +387,7 @@ class TopologyTabularExporter:
         core_diag_path = base_dir / "02_core_separation" / "core_graph_diagnostics.json"
         sep_report_path = base_dir / "02_core_separation" / "separation_impact_report.json"
         manifest_path = base_dir / "02_core_separation" / "removed_nodes_manifest.json"
-        comm_diag_path = base_dir / "03_paths" / "community" / "community_path_diagnostics.json"
+        comm_diag_path = base_dir / "03_results" / "community_path_diagnostics.json"
 
         # 1. Comparative master table
         if raw_diag_path.exists() and core_diag_path.exists() and sep_report_path.exists():
@@ -432,7 +432,7 @@ class TopologyTabularExporter:
         if comm_diag_path.exists():
             with open(comm_diag_path, "r", encoding="utf-8") as f:
                 comm_data = json.load(f)
-            comm_csv = base_dir / "03_paths" / "community" / "community_clusters_summary.csv"
+            comm_csv = base_dir / "03_results" / "community_clusters_summary.csv"
             self.export_community_summary(comm_data, comm_csv)
             exported_files.append(comm_csv)
 

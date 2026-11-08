@@ -88,8 +88,8 @@ DRY_RUN: bool = False                                  # Set True to preview pro
 # --- 2. Input & Output Paths ---
 OUTPUTS_DIR: str = "outputs"
 REFINED_TRIPLETS_PATH: str = "outputs/02_refinement/refined_triplets.json"
-TOPOLOGY_PARTITIONS_PATH: str = "outputs/03_topology/03_paths/community/topology_partitions.json"
-RESOLVED_TARGETS_OUTPUT_DIR: str = "outputs/03_topology/03_paths/community"
+TOPOLOGY_PARTITIONS_PATH: str = "outputs/03_topology/03_results/topology_partitions.json"
+RESOLVED_TARGETS_OUTPUT_DIR: str = "outputs/03_topology/03_results"
 SAVE_LLM_PAYLOADS: bool = True
 PRINT_CHECKPOINTS: bool = True                       # Print real-time timestamped checkpoint messages to console
 RESUME_EXISTING_SCHEMAS: bool = False                # If True, skips community targets whose .py files already exist
