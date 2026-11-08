@@ -1,14 +1,11 @@
 """
-Global Configuration Loader
-Acts as the single source of truth for all application settings.
-
-Loads modular configuration files from the `configs/` directory.
-To modify system behavior, please edit the respective `.yaml` files in `configs/`.
+Global Configuration Loader for Stage 3 Topology
+Loads `configs/topology.yaml` (if present) or defaults to an empty dictionary.
 """
 
-import yaml
 from pathlib import Path
-from dotenv import load_dotenv
+import yaml
+
 
 def deep_merge(dict_a: dict, dict_b: dict) -> dict:
     """Recursively merges dict_b into dict_a."""
@@ -19,65 +16,27 @@ def deep_merge(dict_a: dict, dict_b: dict) -> dict:
             dict_a[key] = value
     return dict_a
 
+
 class ConfigLoader:
     _config = None
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict:
         """Loads, merges, and caches configuration from configs/*.yaml."""
         if cls._config is None:
             root_dir = Path(__file__).parent.parent
-            configs_dir = root_dir / 'configs'
-            env_path = root_dir / '.env'
-            
-            # Load environment variables
-            if env_path.exists():
-                load_dotenv(dotenv_path=env_path)
-            
+            configs_dir = root_dir / "configs"
             merged_config = {}
 
-            # Load modular config files from configs/ directory if present
             if configs_dir.exists() and configs_dir.is_dir():
-                yaml_files = sorted(configs_dir.glob('*.yaml'))
-                for yf in yaml_files:
-                    with open(yf, 'r', encoding='utf-8') as f:
+                for yf in sorted(configs_dir.glob("*.yaml")):
+                    with open(yf, "r", encoding="utf-8") as f:
                         data = yaml.safe_load(f) or {}
                         deep_merge(merged_config, data)
 
             cls._config = merged_config
-                
+
         return cls._config
 
-# Expose a global, read-only dictionary that any file can import
+
 settings = ConfigLoader.get_config()
-
-# Monkey patch pydantic_ai to fix Ollama Nil-Content Bug.
-# Ollama's OpenAI compatibility layer fails with a 400 Bad Request error if the content of any message is null/nil.
-# By forcing content to be an empty string if it is None, we keep Ollama happy.
-try:
-    from pydantic_ai.models.openai import OpenAIChatModel
-    _original_map_messages = OpenAIChatModel._map_messages
-    async def _patched_map_messages(self, *args, **kwargs):
-        messages = await _original_map_messages(self, *args, **kwargs)
-        if messages:
-            for msg in messages:
-                if msg.get("content") is None:
-                    msg["content"] = ""
-        return messages
-    OpenAIChatModel._map_messages = _patched_map_messages
-except Exception:
-    pass
-
-# Monkey patch pyarrow extension type unregister to prevent unhandled unregister exceptions
-try:
-    import pyarrow as pa
-    _orig_unregister = getattr(pa, 'unregister_extension_type', None)
-    if _orig_unregister:
-        def _safe_unregister(type_name):
-            try:
-                _orig_unregister(type_name)
-            except Exception:
-                pass
-        pa.unregister_extension_type = _safe_unregister
-except Exception:
-    pass
