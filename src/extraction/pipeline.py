@@ -1225,3 +1225,11 @@ class SemanticPrismStage1Pipeline:
             "triples_count": len(self.context.raw_triples),
             "output_dir": str(self.out_dir),
         }
+
+    def run(
+        self,
+        input_data: Optional[Union[str, Path, pd.DataFrame, List[Dict[str, Any]]]] = None,
+        dry_run: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Convenience alias for run_stage_1()."""
+        return self.run_stage_1(input_data=input_data, dry_run=dry_run)

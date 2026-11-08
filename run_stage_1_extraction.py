@@ -112,7 +112,7 @@ def main() -> None:
     args = parser.parse_args()
 
     dry_run = True if args.dry_run else DRY_RUN
-    resume_mode = False if args.overwrite else RESUME_MODE
+    resume_mode = "overwrite" if args.overwrite else RESUME_MODE
     model_name = args.model if args.model else MODEL_NAME
     device = args.device if args.device else DEVICE
     batch_size = args.batch_size if args.batch_size else BATCH_SIZE
@@ -149,7 +149,7 @@ def main() -> None:
             manifold_edge_threshold=MANIFOLD_EDGE_THRESHOLD,
             micro_cluster_ratio=MICRO_CLUSTER_RATIO,
         )
-        pipeline.run()
+        pipeline.run_stage_1(dry_run=dry_run)
     except Exception as e:
         print(f"CRITICAL ERROR: Stage 1 Pipeline failed with unhandled exception: {e}")
         traceback.print_exc()
