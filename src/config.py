@@ -34,6 +34,13 @@ class ConfigLoader:
                         data = yaml.safe_load(f) or {}
                         deep_merge(merged_config, data)
 
+            try:
+                from model_config import EMBEDDING_MODEL
+                merged_config.setdefault("refinement", {})
+                merged_config["refinement"].setdefault("embedding_model", EMBEDDING_MODEL)
+            except Exception:
+                pass
+
             cls._config = merged_config
 
         return cls._config

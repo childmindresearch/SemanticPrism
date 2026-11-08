@@ -1,8 +1,8 @@
 # SemanticPrism
 
-SemanticPrism is an automated knowledge engineering pipeline that transforms unstructured domain text (such as clinical reports or technical documentation) into strictly typed, production-ready Python ontologies (Pydantic v2 BaseModel classes and Enum definitions).
+SemanticPrism is an automated knowledge engineering pipeline that transforms unstructured domain text (such as clinical reports, research papers, or technical documents) into strictly typed, production-ready Python ontologies (`Pydantic v2` models and `Enum` classes).
 
-Rather than generating models through a single monolithic prompt—which risks hallucination and tangled cross-domain concepts—SemanticPrism enforces a strict decoupling between non-deterministic LLM operations (extraction, taxonomic reasoning, code synthesis) and deterministic mathematical/graph-theoretic operations (vector embeddings, spherical clustering, core-periphery separation, and Leiden community detection).
+Instead of relying on a single monolithic LLM prompt—which often hallucinates or tangles concepts—SemanticPrism separates **LLM reasoning** (fact extraction, concept naming, and code synthesis) from **deterministic math and graph algorithms** (vector clustering, network topology, and AST code sanitization).
 
 ---
 
@@ -14,13 +14,13 @@ flowchart TD
         direction LR
         In(["📄 <b>Source Documents</b><br/><i>Text • Reports • Parquet</i>"])
         --> |Raw Text| S1["🔍 <b>Stage 1: Extraction</b><br/>Theme Discovery • SVO Triplets"]
-        --> |Semantic Triplets| S2["🎯 <b>Stage 2: Refinement</b><br/>Vector Embeddings • Taxonomic Lifting"]
+        --> |Semantic Triplets| S2["🎯 <b>Stage 2: Refinement</b><br/>Vector Clustering • Taxonomic Lifting"]
     end
 
     subgraph Row2 ["Phase 2: Architecture & Synthesis"]
         direction LR
-        S3["🌐 <b>Stage 3: Graph Architecture</b><br/>Hub Backbone • Leiden Modularity"]
-        --> |Architectural Partitions| S4["⚙️ <b>Stage 4: Synthesis</b><br/>Pydantic Models • Enum Resolution"]
+        S3["🌐 <b>Stage 3: Graph Topology</b><br/>Hub Separation • Leiden Communities"]
+        --> |Domain Partitions| S4["⚙️ <b>Stage 4: Synthesis</b><br/>Pydantic Models • AST Sanitization"]
         --> |Python Code| Out(["📦 <b>Deployable Ontologies</b><br/><i>comprehensive_ontology.py</i>"])
     end
 
@@ -40,102 +40,112 @@ flowchart TD
 
 ## Quickstart
 
-### Prerequisites
+### 1. Prerequisites
 - **Python**: 3.10+
-- **Local LLM**: [Ollama](https://ollama.com/) (e.g., `qwen2.5:7b`)
+- **LLM Backend**: Powered by `PrismRunner` (loads local HuggingFace LLMs and `SentenceTransformer` embedding models configured in **[model_config.py](model_config.py)**).
 
-### Installation
+### 2. Installation
 ```bash
 git clone https://github.com/childmindresearch/SemanticPrism.git
 cd SemanticPrism
 pip install -r requirements.txt
 ```
 
-### Running the Pipeline
+### 3. Configure Models & Input Dataset (`model_config.py`)
+Edit **[model_config.py](model_config.py)** in the root directory to set your models and input data in one place:
+```python
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"          # Used in Stages 1 & 2
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"             # Used in Stages 1, 2 & 3
+CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"   # Used in Stage 4
 
-Execute the full end-to-end pipeline:
+INPUT_PATH = "inputs/testdocs.parquet"           # Path to dataset or folder of .txt files
+ID_COLUMN = "unique_val"                         # Document ID column
+TEXT_COLUMN = "report"                           # Raw text column
+DOCUMENT_LIMIT = None                            # Optional cap on documents (None = all)
+```
+
+### 4. Run the Pipeline
+Run the complete 4-stage pipeline end-to-end (automatically generates `outputs/pipeline_summary.txt` and `outputs/pipeline_summary.json` upon completion):
 ```bash
 python3 run_pipeline.py
 ```
 
-Or run individual stages independently:
-- **Stage 1 (Extraction)**: `python3 run_stage_1_extraction.py`
-- **Stage 2 (Refinement)**: `python3 run_stage_2_refinement.py`
-- **Stage 3 (Graph Architecture)**: `python3 run_stage_3_topology.py`
-- **Stage 4 (Synthesis)**: `python3 run_stage_4_synthesis.py`
+Or run any stage individually:
+```bash
+python3 run_stage_1_extraction.py   # Stage 1: Theme & Triplet Extraction
+python3 run_stage_2_refinement.py   # Stage 2: Embedding Clustering & Taxonomic Lifting
+python3 run_stage_3_topology.py     # Stage 3: Graph Architecture & Community Detection
+python3 run_stage_4_synthesis.py    # Stage 4: Pydantic & Enum Code Generation
+python3 run_pipeline.py --summary-only  # Regenerate pipeline_summary.txt from existing outputs
+```
 
 ---
 
-## Pipeline Stages
+## How Each Stage Works (Key Processes)
 
-### Stage 1: Extraction
-Ingests plain text files or Parquet datasets, identifies overarching domain themes, and extracts structured Subject-Predicate-Object (S-P-O) semantic triplets anchored to verbatim source quotes.
+SemanticPrism uses self-calibrating, multi-variable algorithms at every stage so you do not have to hand-tune thresholds when switching datasets or embedding models. For full mathematical details, see **[docs/Custom_Process.md](docs/Custom_Process.md)**.
 
-### Stage 2: Refinement
-Encodes extracted entities and relations into vector embeddings, groups them into semantic clusters, and optionally maps terms into standardized taxonomic concepts using LLM hypernym resolution.
+### Stage 1: Extraction (`src/extraction/`)
+Reads raw text or Parquet files, discovers overarching themes, and extracts Subject-Predicate-Object (S-P-O) facts anchored to verbatim source quotes.
+- **Self-Calibrating Manifold Clustering**: Automatically adapts similarity cutoffs to the background distribution of your embedding model so theme clusters neither collapse into one giant group nor shatter into singletons.
+- **Leave-One-Out (LOO) Centroid Scoring & Dual-Gate Confidence**: Removes small-cluster self-bias when measuring how well a theme fits its cluster, classifying each theme into `high`, `medium`, `low`, or `unassigned` confidence bands.
+- **Core-Gated MMR Selection**: Uses Maximal Marginal Relevance (MMR) to select cluster exemplars that are both highly representative (central) and semantically diverse, preventing near-duplicate themes from crowding the LLM prompt.
 
-### Stage 3: Graph Architecture
-Builds a directed network graph from refined triplets, executes a 3-stage core-separation pipeline, and derives fine-grained thematic partitions:
-- **Stage 3.1: Raw Graph Evaluation & Hub Identification**: Computes baseline metrics, degree distributions, and isolates systemic routers via participation coefficients and betweenness centrality.
-- **Stage 3.2: Core-Periphery Separation**: Extracts the Hub Backbone Network to eliminate cross-domain modularity blur, doubling modularity $Q$ on the dense clustering substrate.
-- **Stage 3.3: Community Discovery & Agglomeration**: Discovers fine-grained Leiden modules, derives architectural tiers (Nucleus, Mechanics, Modifiers), and executes multi-pass semantic agglomeration to merge high-cosine-similarity centroids into macro-domains.
-- **Interactive Visual Suite**: Generates self-contained HTML dashboards (`cluster_3d_galaxy_visualization.html`, `stage_04_llm_payload_gallery.html`, `isolated_communities_only.html`) with in-page toggles to compare raw Leiden baseline partitions against agglomerated macro-domains.
+### Stage 2: Refinement (`src/refinement/`)
+Embeds extracted Subjects, Predicates, and Objects into vector space, groups synonymous terms, and lifts them into clean taxonomic concepts.
+- **Adaptive Distance Cutoffs & UMAP Sizing**: Dynamically scales UMAP neighborhood sizes to match vocabulary size and calibrates outlier-rescue and cluster-merging thresholds separately for nouns (`Subject`/`Object`) vs. verbs (`Predicate`).
+- **Frequency-Weighted Spherical Centroids & Seeded MMR Packing**: Weights terms by log-dampened corpus frequency to find the best representative label for each cluster, and packs LLM context windows in diversity-ranked order.
+- **Contextual Grounding Fidelity ($\gamma_e$)**: Scores every refined triplet against its original verbatim source quote via cosine similarity so downstream stages know how closely each concept remains grounded in the source text.
 
-#### Mathematical & Geometric Foundation
-SemanticPrism replaces ad-hoc graph clustering with a mathematically rigorous, 4-step geometric and topological pipeline:
+### Stage 3: Graph Topology (`src/topology/`)
+Constructs a knowledge graph from refined triplets and partitions it into cohesive domain modules.
+- **Core-Periphery Hub Separation**: Identifies generic, high-traffic "hub" concepts (using Participation Coefficients and Betweenness Centrality) and moves them out of the core graph into shared `enums.py` vocabularies so they don't blur domain boundaries.
+- **Hybrid Leiden Clustering & Agglomeration**: Combines graph edge weights with embedding cosine similarity to discover fine-grained communities, then merges tightly related micro-clusters into coherent macro-domains.
+- **Architectural Tier Scoring**: Ranks entities within each community (using centrality, prototypicality, and source fidelity) into **Tier 1: Core Models**, **Tier 2: Domain Fields**, and **Tier 3: Modifiers**.
+- **Interactive 3D Visuals**: Exports standalone HTML dashboards (`cluster_3d_galaxy_visualization.html`, `stage_04_llm_payload_gallery.html`) for inspecting the graph.
 
-1. **Hyperspherical Representation & Debiasing ($\mathbb{S}^{D-1}$)**
-   * **$L_2$ Normalization:** All embeddings satisfy $\|e_v\|_2 = 1.0$, rendering dot products identical to cosine similarity: $\langle u, v \rangle = \cos(\theta_{uv})$.
-   * **All-but-the-Top Centering:** Removes corpus mean anisotropy ($\hat{v} = \frac{v - \mu}{\|v - \mu\|_2}$), preventing multi-concept centroids from collapsing into the global background cone.
-   * **Spherical Fréchet Centroids:** Computes true centers of mass on the hypersphere: $\mu_C = \frac{\sum_{v \in C} \hat{v}}{\|\sum_{v \in C} \hat{v}\|_2}$.
-
-2. **Topological Core-Separation & Hub Quarantining**
-   * **Reciprocal Edge Evidence:** Sums bidirectional statement support: $w(u, v) = w_{\text{dir}}(u, v) + w_{\text{dir}}(v, u)$.
-   * **Systemic Hub Extraction:** Prunes high-degree routers using **Participation Coefficients** ($P_i = 1 - \sum_m (k_{im}/k_i)^2 \ge 0.70$) and deterministic **Betweenness Centrality** ($C_B(v)$). Hubs are strictly quarantined to `enums.py`, decoupling modular community structure.
-
-3. **Multi-Pass Community Optimization & Agglomeration**
-   * **Hybrid Leiden Modularity:** Maximizes modularity $Q$ on the dense core ($d > 1$) with strictly positive hybrid weights: $w_{\text{hybrid}} = w \cdot [(1 - \alpha) + \alpha \max(\text{floor}, \cos \theta)]$.
-   * **Guarded Absorption & Harvesting:** Reattaches degree-1 leaves and singletons based on centroid affinity and contrast margins ($\Delta_{\text{contrast}} \ge 0.05$).
-   * **Hierarchical Agglomeration:** Iteratively merges communities with high centroid cosine similarity ($\tau_{\text{agglom}} \ge 0.85$) into cohesive macro-domains.
-
-4. **Architectural Tier Partitioning (Synthesis Grounding)**
-   * Computes a Cobb-Douglas composite score for every entity $u \in C$:
-     $$S_u = \left[\max(0.001, P_u)\right]^{0.40} \cdot \left[D_u\right]^{0.40} \cdot \left[\Gamma_u\right]^{0.20}$$
-     *(where $P_u$ is centroid prototypicality, $D_u$ is internal degree centrality, and $\Gamma_u$ is source fidelity)*.
-   * Stratifies entities into **Tier 1: Thematic Nuclei** (BaseModel classes), **Tier 2: Relational Mechanics** (domain fields), and **Tier 3: Contextual Modifiers** (metadata nuances).
-
-### Stage 4: Synthesis
-Translates graph partitions and low-density nodes into deployable Python code:
-- Generates Python `Enum` classes for orphan and boundary entities (`enums.py`).
-- Synthesizes Pydantic `BaseModel` classes for qualified clusters.
-- Consolidates schemas and formats the final `comprehensive_ontology.py` using Ruff.
+### Stage 4: Synthesis (`src/synthesis/`)
+Translates each graph community into clean, validated Python `Enum` and `Pydantic BaseModel` classes, then merges them into `comprehensive_ontology.py`.
+- **Cross-Cluster C-TF-IDF Domain Ranking**: Identifies the top 5 signature terms that uniquely define a community while penalizing generic terms that appear across multiple communities.
+- **Fidelity & Entity-Overlap Sentence Ranking**: Selects the most relevant source sentences for LLM synthesis by combining Stage 2 grounding fidelity ($\gamma_e$) with the density of community entities in each sentence.
+- **Multi-Criteria AST Sanitization & Entropy Collapse**: Parses generated Python code through an Abstract Syntax Tree (AST) sanitizer that automatically:
+  - Collapses repetitive runs of prefixed/suffixed fields (e.g., `item_a`, `item_b`, `item_c`) into clean list fields (`items: Optional[List[str]]`).
+  - Strips narrative sentence dumps, bloated enums, and boolean checklists.
+  - Prioritizes and caps models at 15 core fields (`MAX_BASEMODEL_FIELDS_PER_CLASS`) and enums at 20 members (`MAX_ENUM_MEMBERS_PER_CLASS`).
+- **Multi-Signal Module Disambiguation**: Resolves duplicate module filenames using a 4-step cascade (LLM name $\rightarrow$ primary `BaseModel` class $\rightarrow$ C-TF-IDF domain term $\rightarrow$ compound class name).
 
 ---
 
-## Configuration (`configs/`)
+## Configuration
 
-Pipeline behavior is configured via modular YAML files:
+All key settings are centralized for quick customization:
 
-- **[configs/llm.yaml](configs/llm.yaml)**: Local Ollama model name, API endpoints, temperature, and context window limits.
-- **[configs/io.yaml](configs/io.yaml)**: Ingestion source (`directory` vs. `parquet`), input/output paths, and resume modes (`skip` vs. `overwrite`).
-- **[configs/refinement.yaml](configs/refinement.yaml)**: Embedding models, taxonomic lifting toggles, target theme count guidance, and clustering thresholds.
-- **[configs/topology.yaml](configs/topology.yaml)**: Hub extraction thresholds, Leiden modularity resolution, agglomeration similarity thresholds (macro-domain fusion), architectural tier scoring weights, and tabular CSV export toggles.
-- **[configs/synthesis.yaml](configs/synthesis.yaml)**: Minimum cluster sizes, hub target caps, and payload options.
+| Config File | Purpose |
+| :--- | :--- |
+| **[model_config.py](model_config.py)** | **Master configuration**: Set `MODEL_NAME` (Stages 1 & 2), `EMBEDDING_MODEL` (Stages 1–3), `CODER_MODEL` (Stage 4), and input dataset settings (`INPUT_PATH`, `ID_COLUMN`, `TEXT_COLUMN`, `DOCUMENT_LIMIT`). |
+| **[configs/topology.yaml](configs/topology.yaml)** | Stage 3 graph architecture settings: macro granularity dials, hub separation sensitivity, Leiden resolution, community merging thresholds, and HTML visualization toggles. |
+| **[configs/AST_toggle.py](configs/AST_toggle.py)** | Stage 4 AST sanitization controls: centralized `True`/`False` switches and numerical limits (e.g., max fields per model, max enum members) for every code sanitization rule. |
+| **Stage Runner Scripts (`run_stage_1..4_*.py`)** | Advanced per-stage hardware, batching, chunking, and token limit variables at the top of each runner script. |
 
 ---
 
-## Output Structure (`outputs/`)
+## Project Layout
 
 ```text
-outputs/
-├── 01_extraction/          # Raw triplets, discovered themes, and master theme mappings
-├── 02_refinement/          # Refined triplets, vector cluster mappings, taxonomic maps & fidelity diagnostics
-├── 03_topology/            # Stage 3 (Graph Architecture): 3-stage modular architecture, interactive HTML visuals & diagnostics
-│   ├── 01_raw_graph_evaluation/   # Raw graph metrics, hub registry & global topology visuals
-│   ├── 02_core_separation/        # Reduced core metrics, hub backbone & pruning breakdown
-│   ├── 03_paths/
-│   │   └── community/             # Leiden partitions, architectural tiers, diagnostics & payload gallery
-│   └── topology_metrics_comparative_summary.csv # Cross-stage macro topological benchmarks
-├── 04_synthesis/           # Generated Pydantic schemas, enums, and comprehensive ontologies
-└── payload_text/           # Centralized record of prompts and payloads sent to the LLM
+SemanticPrism/
+├── model_config.py             # Master model & input dataset configuration
+├── configs/                    # Stage 3 topology.yaml & Stage 4 AST_toggle.py
+│   ├── topology.yaml           # Graph partitioning & 3D visual configuration
+│   └── AST_toggle.py           # True/False toggles & limits for Stage 4 AST rules
+├── docs/                       # Detailed technical documentation
+│   ├── Custom_Process.md       # Multi-variable scoring, ranking & filtering reference
+│   └── AST_Sanitization_Rules.md # Complete guide to Stage 4 AST code sanitization rules
+├── src/                        # Modular stage packages
+│   ├── extraction/             # Stage 1: Theme discovery & S-P-O extraction
+│   ├── refinement/             # Stage 2: Vector clustering & taxonomic lifting
+│   ├── topology/               # Stage 3: Graph hub separation & Leiden communities
+│   └── synthesis/              # Stage 4: Pydantic synthesis & AST sanitization
+├── outputs/                    # Generated artifacts for Stages 01–04 & LLM payload logs
+├── run_pipeline.py             # Master end-to-end pipeline runner
+└── run_stage_1..4_*.py         # Individual stage entrypoints
 ```
