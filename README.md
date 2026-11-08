@@ -17,11 +17,12 @@ flowchart TD
         --> |Semantic Triplets| S2["🎯 <b>Stage 2: Refinement</b><br/>Vector Clustering • Taxonomic Lifting"]
     end
 
-    subgraph Row2 ["Phase 2: Architecture & Synthesis"]
+    subgraph Row2 ["Phase 2: Architecture, Synthesis & Mapping"]
         direction LR
         S3["🌐 <b>Stage 3: Graph Topology</b><br/>Hub Separation • Leiden Communities"]
         --> |Domain Partitions| S4["⚙️ <b>Stage 4: Synthesis</b><br/>Pydantic Models • AST Sanitization"]
-        --> |Python Code| Out(["📦 <b>Deployable Ontologies</b><br/><i>comprehensive_ontology.py</i>"])
+        --> |Python Ontologies| S5["📊 <b>Stage 5: Mapping</b><br/>Schema Triage • Relational & Wide Tables"]
+        --> |Structured Data| Out(["📦 <b>Deployable Ontologies & Tables</b><br/><i>master_ontology.py • SQLite • Parquet • CSV</i>"])
     end
 
     Row1 --> |Standardized Knowledge Graph| Row2
@@ -33,6 +34,7 @@ flowchart TD
     style S2 stroke:#10b981,stroke-width:2px
     style S3 stroke:#8b5cf6,stroke-width:2px
     style S4 stroke:#f59e0b,stroke-width:2px
+    style S5 stroke:#ef4444,stroke-width:2px
     style Out stroke:#ec4899,stroke-width:2px
 ```
 
@@ -54,7 +56,7 @@ pip install -r requirements.txt
 ### 3. Configure Models & Input Dataset (`model_config.py`)
 Edit **[model_config.py](model_config.py)** in the root directory to set your models and input data in one place:
 ```python
-MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"          # Used in Stages 1 & 2
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"          # Used in Stages 1, 2 & 5
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"             # Used in Stages 1, 2 & 3
 CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"   # Used in Stage 4
 
@@ -65,7 +67,7 @@ DOCUMENT_LIMIT = None                            # Optional cap on documents (No
 ```
 
 ### 4. Run the Pipeline
-Run the complete 4-stage pipeline end-to-end (automatically generates `outputs/pipeline_summary.txt` and `outputs/pipeline_summary.json` upon completion):
+Run the complete 5-stage pipeline end-to-end (automatically generates `outputs/pipeline_summary.txt` and `outputs/pipeline_summary.json` upon completion):
 ```bash
 python3 run_pipeline.py
 ```
@@ -76,6 +78,7 @@ python3 run_stage_1_extraction.py   # Stage 1: Theme & Triplet Extraction
 python3 run_stage_2_refinement.py   # Stage 2: Embedding Clustering & Taxonomic Lifting
 python3 run_stage_3_topology.py     # Stage 3: Graph Architecture & Community Detection
 python3 run_stage_4_synthesis.py    # Stage 4: Pydantic & Enum Code Generation
+python3 run_stage_5_mapping.py      # Stage 5: Schema-Driven Extraction & Relational/Wide-Table Aggregation
 python3 run_pipeline.py --summary-only  # Regenerate pipeline_summary.txt from existing outputs
 ```
 
@@ -114,6 +117,13 @@ Translates each graph community into clean, validated Python `Enum` and `Pydanti
   - Prioritizes and caps models at 15 core fields (`MAX_BASEMODEL_FIELDS_PER_CLASS`) and enums at 20 members (`MAX_ENUM_MEMBERS_PER_CLASS`).
 - **Multi-Signal Module Disambiguation**: Resolves duplicate module filenames using a 4-step cascade (LLM name $\rightarrow$ primary `BaseModel` class $\rightarrow$ C-TF-IDF domain term $\rightarrow$ compound class name).
 
+### Stage 5: Schema-Driven Extraction & Aggregation (`src/mapping/`)
+Maps the synthesized `Pydantic v2` ontologies back onto the source corpus to extract structured records and build normalized relational and consolidated wide tables.
+- **Dynamic Schema DAG Discovery**: Automatically inspects a single consolidated ontology file (`master_ontology.py`) or a directory of community `.py` schemas to classify top-level vs. child `BaseModel` dependencies.
+- **Two-Pass Hardware-Batched Extraction**: Runs a fast multi-schema relevance triage pass per text chunk to prune irrelevant schemas before executing targeted deep extraction with chunk-level resume caching.
+- **Verbatim Chunk Consolidation**: Merges chunk-level Pydantic instances into document-level JSON extracts (`outputs/05_extraction/extracts/`) without paraphrasing or altering extracted values.
+- **Relational & Wide-Table Aggregation**: Exports normalized parent/child CSV tables, a 1-row-per-document `consolidated_wide` table (`.csv` and `.parquet`), and a typed SQLite database (`aggregated_data.db`).
+
 ---
 
 ## Configuration
@@ -122,10 +132,10 @@ All key settings are centralized for quick customization:
 
 | Config File | Purpose |
 | :--- | :--- |
-| **[model_config.py](model_config.py)** | **Master configuration**: Set `MODEL_NAME` (Stages 1 & 2), `EMBEDDING_MODEL` (Stages 1–3), `CODER_MODEL` (Stage 4), and input dataset settings (`INPUT_PATH`, `ID_COLUMN`, `TEXT_COLUMN`, `DOCUMENT_LIMIT`). |
+| **[model_config.py](model_config.py)** | **Master configuration**: Set `MODEL_NAME` (Stages 1, 2 & 5), `EMBEDDING_MODEL` (Stages 1–3), `CODER_MODEL` (Stage 4), and input dataset settings (`INPUT_PATH`, `ID_COLUMN`, `TEXT_COLUMN`, `DOCUMENT_LIMIT`). |
 | **[configs/topology.yaml](configs/topology.yaml)** | Stage 3 graph architecture settings: macro granularity dials, hub separation sensitivity, Leiden resolution, community merging thresholds, and HTML visualization toggles. |
 | **[configs/AST_toggle.py](configs/AST_toggle.py)** | Stage 4 AST sanitization controls: centralized `True`/`False` switches and numerical limits (e.g., max fields per model, max enum members) for every code sanitization rule. |
-| **Stage Runner Scripts (`run_stage_1..4_*.py`)** | Advanced per-stage hardware, batching, chunking, and token limit variables at the top of each runner script. |
+| **Stage Runner Scripts (`run_stage_1..5_*.py`)** | Advanced per-stage hardware, batching, chunking, and token limit variables at the top of each runner script. |
 
 ---
 
@@ -144,8 +154,9 @@ SemanticPrism/
 │   ├── extraction/             # Stage 1: Theme discovery & S-P-O extraction
 │   ├── refinement/             # Stage 2: Vector clustering & taxonomic lifting
 │   ├── topology/               # Stage 3: Graph hub separation & Leiden communities
-│   └── synthesis/              # Stage 4: Pydantic synthesis & AST sanitization
-├── outputs/                    # Generated artifacts for Stages 01–04 & LLM payload logs
+│   ├── synthesis/              # Stage 4: Pydantic synthesis & AST sanitization
+│   └── mapping/                # Stage 5: Schema-driven extraction & table aggregation
+├── outputs/                    # Generated artifacts for Stages 01–05 & LLM payload logs
 ├── run_pipeline.py             # Master end-to-end pipeline runner
-└── run_stage_1..4_*.py         # Individual stage entrypoints
+└── run_stage_1..5_*.py         # Individual stage entrypoints
 ```

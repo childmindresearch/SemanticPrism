@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SemanticPrism Master Pipeline Execution Script
-This script sequentially executes Stages 1 through 4 of the SemanticPrism pipeline.
+This script sequentially executes Stages 1 through 5 of the SemanticPrism pipeline.
 It utilizes subprocesses to ensure memory and VRAM are cleanly garbage collected
 between each intensive LLM and mathematical operation, and writes a final end-to-end
 pipeline summary report to `outputs/pipeline_summary.txt` and `outputs/pipeline_summary.json`.
@@ -25,6 +25,7 @@ STAGES: List[Tuple[int, str, str, bool]] = [
     (2, "run_stage_2_refinement.py", "Stage 2: Vector Clustering & Taxonomic Lifting", True),
     (3, "run_stage_3_topology.py", "Stage 3: Topology Graphing & Structural Clustering", False),
     (4, "run_stage_4_synthesis.py", "Stage 4: Pydantic Schema Synthesis", True),
+    (5, "run_stage_5_mapping.py", "Stage 5: Schema-Driven Extraction & Aggregation", True),
 ]
 
 
@@ -181,19 +182,78 @@ def generate_pipeline_summary(
 
     schema_names = [p.name for p in schema_files]
 
-    # Collect BaseModel classes across individual schema modules and consolidated ontology
+    # Collect BaseModel and Enum classes across individual schema modules and consolidated ontology
     per_schema_basemodels: List[str] = []
+    per_schema_enums: List[str] = []
     seen_bm = set()
+    seen_en = set()
     for pf in schema_files:
-        bms, _ = _extract_ast_classes(pf)
+        bms, ens = _extract_ast_classes(pf)
         for bm in bms:
             if bm not in seen_bm:
                 seen_bm.add(bm)
                 per_schema_basemodels.append(bm)
+        for en in ens:
+            if en not in seen_en:
+                seen_en.add(en)
+                per_schema_enums.append(en)
 
     comp_ontology_path = s4_comm_dir / "comprehensive_ontology.py"
+    if not comp_ontology_path.exists():
+        comp_ontology_path = s4_comm_dir / "master_ontology.py"
     consolidated_basemodels, consolidated_enums = _extract_ast_classes(comp_ontology_path)
     final_basemodels = consolidated_basemodels if consolidated_basemodels else per_schema_basemodels
+    final_enums = consolidated_enums if consolidated_enums else per_schema_enums
+
+    # =========================================================================
+    # STAGE 5 METRICS
+    # =========================================================================
+    s5_dir = outputs_dir / "05_extraction"
+    s5_extracts_dir = s5_dir / "extracts"
+    s5_tables_dir = s5_dir / "aggregated_tables"
+
+    s5_docs_processed = 0
+    s5_total_extractions = 0
+    s5_populated_extractions = 0
+    if s5_extracts_dir.exists():
+        doc_dirs = [d for d in s5_extracts_dir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+        s5_docs_processed = len(doc_dirs)
+        extract_jsons = [
+            f for f in s5_extracts_dir.rglob("*.json")
+            if not f.name.startswith(".") and "chunks" not in f.parts
+        ]
+        s5_total_extractions = len(extract_jsons)
+        for jf in extract_jsons:
+            data = _load_json_safe(jf)
+            if data and (
+                (isinstance(data, dict) and any(v is not None and v != [] and v != {} and v != "" for v in data.values()))
+                or (isinstance(data, list) and len(data) > 0)
+            ):
+                s5_populated_extractions += 1
+
+    s5_csv_tables: List[str] = []
+    s5_wide_csv_exists = False
+    s5_wide_parquet_exists = False
+    s5_sqlite_exists = False
+    s5_wide_rows = 0
+    s5_wide_cols = 0
+    if s5_tables_dir.exists():
+        for csv_f in sorted(s5_tables_dir.glob("*.csv")):
+            if csv_f.name == "consolidated_wide.csv":
+                s5_wide_csv_exists = True
+                try:
+                    with open(csv_f, "r", encoding="utf-8") as f:
+                        reader = csv.reader(f)
+                        header = next(reader, None)
+                        if header:
+                            s5_wide_cols = len(header)
+                            s5_wide_rows = sum(1 for _ in reader)
+                except Exception:
+                    pass
+            else:
+                s5_csv_tables.append(csv_f.name)
+        s5_wide_parquet_exists = (s5_tables_dir / "consolidated_wide.parquet").exists()
+        s5_sqlite_exists = (s5_tables_dir / "aggregated_data.db").exists()
 
     # =========================================================================
     # BUILD HUMAN-READABLE & JSON SUMMARY
@@ -241,8 +301,20 @@ def generate_pipeline_summary(
             "final_schemas": schema_names,
             "final_basemodels_count": len(final_basemodels),
             "final_basemodels": final_basemodels,
-            "consolidated_enums_count": len(consolidated_enums),
-            "consolidated_enums": consolidated_enums,
+            "consolidated_enums_count": len(final_enums),
+            "consolidated_enums": final_enums,
+        },
+        "stage_5_mapping": {
+            "documents_processed": s5_docs_processed,
+            "total_schema_extractions": s5_total_extractions,
+            "populated_schema_extractions": s5_populated_extractions,
+            "relational_csv_tables_count": len(s5_csv_tables),
+            "relational_csv_tables": s5_csv_tables,
+            "consolidated_wide_csv": s5_wide_csv_exists,
+            "consolidated_wide_parquet": s5_wide_parquet_exists,
+            "consolidated_wide_rows": s5_wide_rows,
+            "consolidated_wide_columns": s5_wide_cols,
+            "sqlite_database": s5_sqlite_exists,
         },
     }
 
@@ -318,6 +390,19 @@ def generate_pipeline_summary(
             lines.append(f"      * {bm_name}")
     else:
         lines.append("      (none)")
+    lines.append("")
+
+    # Stage 5
+    lines.append("Stage 5: Schema-Driven Extraction & Aggregation")
+    lines.append(f"  - {s5_docs_processed} documents processed")
+    lines.append(
+        f"  - {s5_populated_extractions}/{s5_total_extractions} populated (document, schema) extraction files"
+    )
+    lines.append(f"  - {len(s5_csv_tables)} relational CSV tables generated")
+    lines.append(
+        f"  - Consolidated wide table: {s5_wide_rows} rows x {s5_wide_cols} columns "
+        f"(CSV: {s5_wide_csv_exists}, Parquet: {s5_wide_parquet_exists}, SQLite DB: {s5_sqlite_exists})"
+    )
     lines.append("=" * 70)
 
     report_text = "\n".join(lines) + "\n"
@@ -355,20 +440,20 @@ def run_stage(script_name: str, stage_desc: str, extra_args: List[str] | None = 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="SemanticPrism Master Pipeline Orchestrator (Stages 1-4)"
+        description="SemanticPrism Master Pipeline Orchestrator (Stages 1-5)"
     )
     parser.add_argument(
         "--stages",
         type=int,
         nargs="+",
-        choices=[1, 2, 3, 4],
-        default=[1, 2, 3, 4],
-        help="Stages to execute in order (default: 1 2 3 4)",
+        choices=[1, 2, 3, 4, 5],
+        default=[1, 2, 3, 4, 5],
+        help="Stages to execute in order (default: 1 2 3 4 5)",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Pass --dry-run to LLM stages (Stages 1, 2, and 4)",
+        help="Pass --dry-run to LLM stages (Stages 1, 2, 4, and 5)",
     )
     parser.add_argument(
         "--summary-only",

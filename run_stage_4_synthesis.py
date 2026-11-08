@@ -228,8 +228,17 @@ def main() -> None:
 
     config = build_default_config()
 
-    refined_triplets = load_json(REFINED_TRIPLETS_PATH)
+    refined_triplets = load_json(REFINED_TRIPLETS_PATH, required=not DRY_RUN)
     if not refined_triplets:
+        if DRY_RUN:
+            print(
+                f"   -> [Dry Run] Stage 2 output '{REFINED_TRIPLETS_PATH}' not yet generated; "
+                "verifying SynthesisPipeline setup in dry-run mode."
+            )
+            pipeline = SynthesisPipeline(config)
+            pipeline._unload_prism_pipeline("Stage 4 Dry Run Complete")
+            print("=== Stage 4 Synthesis (Dry Run) Completed Successfully ===")
+            return
         print(f"CRITICAL ERROR: Cannot run Stage 4. Missing required Stage 2 output ({REFINED_TRIPLETS_PATH}).")
         print("Please run preceding stages first.")
         sys.exit(1)
@@ -254,6 +263,15 @@ def main() -> None:
     elif resolved_targets_path.exists():
         print(f"   -> Using pre-existing resolved targets at: {resolved_targets_path}")
         comm_targets = load_json(resolved_targets_path)
+    elif DRY_RUN:
+        print(
+            f"   -> [Dry Run] Stage 3 output '{comm_file}' not yet generated; "
+            "verifying SynthesisPipeline setup in dry-run mode."
+        )
+        pipeline = SynthesisPipeline(config)
+        pipeline._unload_prism_pipeline("Stage 4 Dry Run Complete")
+        print("=== Stage 4 Synthesis (Dry Run) Completed Successfully ===")
+        return
     else:
         print(
             f"CRITICAL ERROR: Cannot run Stage 4. Missing required Stage 3 community topology partition outputs ({comm_file})."

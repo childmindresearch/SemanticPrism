@@ -83,8 +83,8 @@ RESUME_MODE: str = "skip"                               # "skip" (reuse existing
 PRINT_CHECKPOINTS: bool = True                          # Print real-time chunk, document, and stage checkpoint progress to console
 
 # --- 3. Chunking, Token & Theme Clustering Settings ---
-THEME_CHUNK_MAX_WORDS: int = 2000                       # Max words per chunk during Phase 1 Theme Discovery
-TRIPLE_CHUNK_MAX_WORDS: int = 400                       # Max words per chunk during Phase 3 SVO Triple Extraction
+THEME_CHUNK_MAX_WORDS: int = 1800                       # Max words per chunk during Phase 1 Theme Discovery
+TRIPLE_CHUNK_MAX_WORDS: int = 300                       # Max words per chunk during Phase 3 SVO Triple Extraction
 THEME_MAX_NEW_TOKENS: int = 512                         # Max generated tokens per theme discovery chunk
 MASTER_SYNTHESIS_MAX_NEW_TOKENS: int = 512              # Max generated tokens for cluster map/reduce synthesis
 TRIPLE_MAX_NEW_TOKENS: int = 768                        # Max generated tokens per triple extraction chunk

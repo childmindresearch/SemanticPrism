@@ -171,6 +171,13 @@ def main() -> None:
 
     triplets_path = input_dir / "original_triplets.json"
     if not triplets_path.exists():
+        if DRY_RUN:
+            print(
+                f"   -> [Dry Run] Stage 1 output '{triplets_path}' not yet generated; "
+                "verified RefinementPipeline setup in dry-run mode."
+            )
+            print("=== Stage 2 Refinement (Dry Run) Completed Successfully ===")
+            return
         print(f"CRITICAL ERROR: Required file '{triplets_path}' not found.")
         print("Stage 2 requires Stage 1 triple extraction outputs ('outputs/01_extraction/original_triplets.json').")
         print("Please run Stage 1 first ('python3 run_stage_1_extraction.py').")
