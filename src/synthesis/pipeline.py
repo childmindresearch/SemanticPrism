@@ -52,6 +52,7 @@ from src.synthesis.sanitizers import (
     _sanitize_ast_models,
     clean_python_code,
     deduplicate_consolidated_classes,
+    detect_and_merge_semantic_duplicate_classes,
     sanitize_module_name,
     _camel_to_snake,
     _extract_ast_basemodel_names,
@@ -461,7 +462,7 @@ class SynthesisPipeline:
     Stage 4 Synthesis Pipeline using PrismRunner for batch local LLM execution.
     Executes single-pass ontological synthesis from raw source sentence text:
       - Phase 1: Community Schema Synthesis (`<id>_<module>.py`)
-      - Phase 2: Global Consolidation (`master_ontology.py` & `comprehensive_ontology.py`)
+      - Phase 2: Global Consolidation (`master_ontology.py`)
     """
 
     def __init__(
@@ -1578,82 +1579,43 @@ class SynthesisPipeline:
                     )
 
         # =====================================================================
-        # PHASE 2: Global Consolidation (Master & Comprehensive Ontology)
+        # PHASE 2: Global Consolidation (AST-First + Targeted Semantic Merge)
         # =====================================================================
-        print(f"   -> [{path_label}] Phase 2: Global Consolidation...")
+        print(f"   -> [{path_label}] Phase 2: Global Consolidation (AST-First + Targeted Semantic Merge)...")
 
-        def strip_inline_comments(code: str) -> str:
-            """Strips inline '#' comments and extra blank lines while preserving triple-quoted class docstrings."""
-            code = re.sub(r"(?m)^\s*#.*$", "", code)
-            code = re.sub(r"\n\s*\n", "\n", code)
-            return code.strip()
-
-        self._ensure_engine_loaded("Phase 2: Global Consolidation")
-        synthesis_cap = self._apply_context_window_cap()
-        sys_tokens = estimate_tokens(CONSOLIDATION_SYSTEM_PROMPT)
-        eff_consolidation_tokens = min(
-            CONSOLIDATION_MAX_NEW_TOKENS,
-            max(1024, int(synthesis_cap * 0.35)),
-        )
-        max_payload_tokens = max(1500, synthesis_cap - sys_tokens - eff_consolidation_tokens)
-
-        def run_consolidation_single(payload: str, label: str) -> str:
+        def _targeted_llm_cluster_merge(cluster_label: str, snippet_code: str, primary_name: str) -> Optional[str]:
+            """
+            Targeted LLM merge callback invoked ONLY when 2+ cross-community BaseModel classes
+            exhibit high lexical + field overlap. Leaves all non-overlapping classes untouched.
+            """
+            if DRY_RUN:
+                return None
+            self._ensure_engine_loaded("Phase 2: Targeted Semantic Merge")
+            synthesis_cap = self._apply_context_window_cap()
+            eff_merge_tokens = min(
+                MAX_NEW_TOKENS,
+                max(1024, int(synthesis_cap * 0.25)),
+            )
+            merge_prompt = (
+                f"Consolidate the following overlapping Pydantic BaseModel classes into a SINGLE unified "
+                f"BaseModel class named `{primary_name}` (preserving any referenced Enum classes).\n\n"
+                f"--- Overlapping Classes Snippet ---\n{snippet_code}\n"
+            )
+            save_payload_file(
+                f"phase2_{cluster_label}_payload.txt",
+                f"=== SYSTEM PROMPT ===\n{CONSOLIDATION_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{merge_prompt}",
+            )
             res_list = self._run_module_batch(
-                items=[{"id": label, "payload": payload, "fallback_module_name": "master_ontology"}],
+                items=[{"id": cluster_label, "payload": merge_prompt, "fallback_module_name": "master_ontology"}],
                 system_prompt=CONSOLIDATION_SYSTEM_PROMPT,
-                phase_label=f"Phase 2: Consolidation ({label})",
+                phase_label=f"Phase 2: Targeted Merge ({primary_name})",
                 default_module_name="master_ontology",
                 allow_reformat_repair=True,
-                max_new_tokens=eff_consolidation_tokens,
+                max_new_tokens=eff_merge_tokens,
             )
-            if res_list and res_list[0]["success"]:
+            if res_list and res_list[0]["success"] and res_list[0]["source_code"]:
                 return res_list[0]["source_code"]
-            raise RuntimeError(res_list[0]["error"] if res_list else "Consolidation failed")
-
-        def process_consolidation_sync(
-            files_list: List[dict],
-            schema_dir: Path,
-            _depth: int = 0,
-        ) -> str:
-            payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
-            save_payload_file(
-                "phase2_consolidation_payload.txt",
-                f"=== SYSTEM PROMPT ===\n{CONSOLIDATION_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{payload}",
-            )
-            if estimate_tokens(payload) <= max_payload_tokens or len(files_list) <= 1 or _depth >= 3:
-                return run_consolidation_single(payload, schema_dir.name)
-
-            for f in files_list:
-                f["content"] = strip_inline_comments(f["content"])
-            payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
-            if estimate_tokens(payload) <= max_payload_tokens:
-                return run_consolidation_single(payload, schema_dir.name)
-
-            sub_batches, current_batch = [], []
-            for f in files_list:
-                test_batch = current_batch + [f]
-                test_payload = "\n".join([f"--- File: {x['name']} ---\n{x['content']}\n" for x in test_batch])
-                if estimate_tokens(test_payload) > max_payload_tokens and current_batch:
-                    sub_batches.append(current_batch)
-                    current_batch = [f]
-                else:
-                    current_batch.append(f)
-            if current_batch:
-                sub_batches.append(current_batch)
-
-            # Prevent infinite recursion if every single file exceeds max_payload_tokens
-            if len(sub_batches) >= len(files_list):
-                sub_batches = [
-                    files_list[i : i + 2]
-                    for i in range(0, len(files_list), 2)
-                ]
-
-            intermediate_results = []
-            for idx, batch in enumerate(sub_batches, start=1):
-                res = process_consolidation_sync(batch, schema_dir, _depth=_depth + 1)
-                intermediate_results.append({"name": f"intermediate_{idx}.py", "content": res})
-
-            return process_consolidation_sync(intermediate_results, schema_dir, _depth=_depth + 1)
+            return None
 
         def consolidate_schemas(schema_dir: Path) -> None:
             py_files = sorted([
@@ -1668,31 +1630,52 @@ class SynthesisPipeline:
                 with open(pf, "r", encoding="utf-8") as f:
                     files_list.append({"name": pf.name, "content": f.read()})
 
+            header = self._build_schema_provenance_header()
+
+            # Remove legacy redundant comprehensive_ontology.py if present from an older run
+            legacy_comp = schema_dir / "comprehensive_ontology.py"
+            if legacy_comp.exists():
+                try:
+                    legacy_comp.unlink()
+                except Exception:
+                    pass
+
+            # Step 2A: Lossless Deterministic AST Union across all community modules
+            combined_raw = "\n\n".join(f["content"] for f in files_list)
+            ast_union_code = deduplicate_consolidated_classes(
+                combined_raw,
+                context_label="master_ontology",
+            )
+
+            # Step 2B: Targeted Cross-Community Semantic Duplicate Merge -> master_ontology.py
             try:
-                master_code = process_consolidation_sync(files_list, schema_dir)
-                master_code = deduplicate_consolidated_classes(master_code)
+                master_code, merge_notes = detect_and_merge_semantic_duplicate_classes(
+                    comprehensive_code=ast_union_code,
+                    llm_merge_fn=_targeted_llm_cluster_merge,
+                    context_label="master_ontology",
+                )
+                if merge_notes:
+                    for note in merge_notes:
+                        self._checkpoint("Phase 2: Consolidation", note)
+                else:
+                    self._checkpoint(
+                        "Phase 2: Consolidation",
+                        f"All {len(py_files)} community schema module(s) are semantically distinct; preserving 100% in master_ontology.py",
+                    )
             except Exception as e:
                 log_error(
-                    f"[Synthesis {path_type}] LLM consolidation encountered error ({e}); "
-                    "falling back to deterministic AST ontology consolidation."
+                    f"[Synthesis {path_type}] Targeted semantic duplicate resolution encountered error ({e}); "
+                    "using lossless AST union for master_ontology.py."
                 )
-                combined_raw = "\n\n".join(f["content"] for f in files_list)
-                master_code = deduplicate_consolidated_classes(combined_raw)
+                master_code = ast_union_code
 
             try:
-                header = self._build_schema_provenance_header()
-                full_master_code = f"{header}\n{master_code.lstrip()}"
                 out_master = schema_dir / "master_ontology.py"
                 with open(out_master, "w", encoding="utf-8") as f:
-                    f.write(full_master_code)
+                    f.write(f"{header}\n{master_code.lstrip()}")
                 self._checkpoint("Phase 2: Consolidation", "Saved master_ontology.py", out_master)
-
-                comp_path = schema_dir / "comprehensive_ontology.py"
-                with open(comp_path, "w", encoding="utf-8") as f:
-                    f.write(full_master_code)
-                self._checkpoint("Phase 2: Consolidation", "Saved comprehensive_ontology.py", comp_path)
             except Exception as e:
-                log_error(f"[Synthesis {path_type}] Error saving consolidated ontology files: {e}")
+                log_error(f"[Synthesis {path_type}] Error saving master_ontology.py: {e}")
 
         consolidate_schemas(output_base_dir)
 

@@ -992,6 +992,46 @@ def deduplicate_consolidated_classes(code: str, context_label: str = "master_ont
         else:
             other_nodes.append(node)
 
+    # Deduplicate and merge top-level import statements across combined modules
+    deduped_other_nodes: List[ast.AST] = []
+    seen_imports: Dict[str, ast.Import] = {}
+    seen_import_froms: Dict[Tuple[Optional[str], int], ast.ImportFrom] = {}
+    seen_other_src: set = set()
+    for o_node in other_nodes:
+        if isinstance(o_node, ast.Import):
+            for alias in o_node.names:
+                key = f"{alias.name}:{alias.asname or ''}"
+                if key not in seen_imports:
+                    imp_stmt = ast.Import(names=[alias])
+                    seen_imports[key] = imp_stmt
+                    deduped_other_nodes.append(imp_stmt)
+        elif isinstance(o_node, ast.ImportFrom):
+            mod_key = (o_node.module, o_node.level or 0)
+            if mod_key not in seen_import_froms:
+                seen_import_froms[mod_key] = ast.ImportFrom(
+                    module=o_node.module,
+                    names=list(o_node.names),
+                    level=o_node.level or 0,
+                )
+                deduped_other_nodes.append(seen_import_froms[mod_key])
+            else:
+                existing_imp = seen_import_froms[mod_key]
+                existing_alias_keys = {(a.name, a.asname) for a in existing_imp.names}
+                for alias in o_node.names:
+                    if (alias.name, alias.asname) not in existing_alias_keys:
+                        existing_imp.names.append(alias)
+                        existing_alias_keys.add((alias.name, alias.asname))
+        else:
+            try:
+                src_sig = ast.unparse(o_node).strip()
+            except Exception:
+                src_sig = ""
+            if not src_sig or src_sig not in seen_other_src:
+                if src_sig:
+                    seen_other_src.add(src_sig)
+                deduped_other_nodes.append(o_node)
+    other_nodes = deduped_other_nodes
+
     # Disambiguate Enum vs BaseModel name collisions
     if getattr(ast_cfg, "DISAMBIGUATE_ENUM_BASEMODEL_COLLISIONS", True):
         collision_suffix = getattr(ast_cfg, "COLLISION_RENAME_SUFFIX", "Detail") or "Detail"
@@ -1144,3 +1184,281 @@ def validate_python_syntax(code: str) -> Tuple[bool, Optional[str]]:
         return False, f"SyntaxError: {err}"
     except Exception as err:
         return False, str(err)
+
+
+_GENERIC_CLASS_SUFFIX_TOKENS = {
+    "record",
+    "records",
+    "profile",
+    "profiles",
+    "model",
+    "models",
+    "info",
+    "information",
+    "data",
+    "detail",
+    "details",
+    "entry",
+    "entries",
+    "item",
+    "items",
+    "object",
+    "entity",
+    "summary",
+    "workflow",
+    "schema",
+    "specification",
+    "specifications",
+    "attributes",
+    "metadata",
+}
+
+
+def _normalize_stem(token: str) -> str:
+    t = token.lower().strip()
+    if len(t) > 4 and t.endswith("ies"):
+        return t[:-3] + "y"
+    if len(t) > 3 and t.endswith("es") and not t.endswith(("ses", "xes", "zes")):
+        return t[:-1]
+    if len(t) > 3 and t.endswith("s") and not t.endswith("ss"):
+        return t[:-1]
+    return t
+
+
+def detect_and_merge_semantic_duplicate_classes(
+    comprehensive_code: str,
+    llm_merge_fn: Optional[Any] = None,
+    context_label: str = "master_ontology",
+) -> Tuple[str, List[str]]:
+    """
+    Phase 2 Targeted Semantic Duplicate Resolver:
+      1. Parses `comprehensive_code` (the lossless AST union of all Phase 1 community schemas).
+      2. Identifies pairs/clusters of differently-named `BaseModel` classes across communities
+         that model the same underlying entity (based on core class-name stems + field overlap),
+         while never merging classes that have a parent-child composition reference.
+      3. Leaves all unique/non-overlapping `BaseModel` classes 100% untouched (zero token loss),
+         merges only the overlapping class clusters (via `llm_merge_fn` if provided, with automatic
+         fallback to deterministic AST field union), and rewrites any type references to merged
+         class names across the ontology AST.
+    Returns `(master_ontology_code, merge_notes)`.
+    """
+    try:
+        tree = ast.parse(comprehensive_code)
+    except Exception:
+        return comprehensive_code, []
+
+    def is_enum_class(node: ast.ClassDef) -> bool:
+        for b in node.bases:
+            if isinstance(b, ast.Name) and "Enum" in b.id:
+                return True
+            if isinstance(b, ast.Attribute) and "Enum" in b.attr:
+                return True
+        return False
+
+    def get_assigned_name(stmt: ast.AST) -> Optional[str]:
+        if isinstance(stmt, ast.Assign) and stmt.targets and isinstance(stmt.targets[0], ast.Name):
+            return stmt.targets[0].id
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            return stmt.target.id
+        return None
+
+    other_nodes: List[ast.AST] = []
+    enums_by_name: Dict[str, ast.ClassDef] = {}
+    models_by_name: Dict[str, ast.ClassDef] = {}
+
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            if is_enum_class(node):
+                enums_by_name[node.name] = node
+            else:
+                models_by_name[node.name] = node
+        else:
+            other_nodes.append(node)
+
+    model_names = list(models_by_name.keys())
+    if len(model_names) < 2:
+        return comprehensive_code, []
+
+    # Extract signature features for each BaseModel
+    core_tokens_by_model: Dict[str, Set[str]] = {}
+    all_tokens_by_model: Dict[str, Set[str]] = {}
+    fields_by_model: Dict[str, Set[str]] = {}
+    refs_by_model: Dict[str, Set[str]] = {}
+
+    for m_name, m_node in models_by_name.items():
+        raw_toks = [_normalize_stem(t) for t in _camel_to_snake(m_name).split("_") if t]
+        core_toks = {t for t in raw_toks if t not in _GENERIC_CLASS_SUFFIX_TOKENS}
+        all_tokens_by_model[m_name] = set(raw_toks)
+        core_tokens_by_model[m_name] = core_toks if core_toks else set(raw_toks)
+
+        f_set: Set[str] = set()
+        r_set: Set[str] = set()
+        for stmt in m_node.body:
+            f_name = get_assigned_name(stmt)
+            if f_name:
+                f_set.add(_normalize_stem(f_name))
+            if isinstance(stmt, ast.AnnAssign) and stmt.annotation is not None:
+                for sub in ast.walk(stmt.annotation):
+                    if isinstance(sub, ast.Name):
+                        r_set.add(sub.id)
+                    elif isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                        r_set.add(sub.value)
+        fields_by_model[m_name] = f_set
+        refs_by_model[m_name] = r_set
+
+    # Pairwise duplicate detection
+    adj: Dict[str, Set[str]] = {m: set() for m in model_names}
+    for i in range(len(model_names)):
+        for j in range(i + 1, len(model_names)):
+            a, b = model_names[i], model_names[j]
+            # Never merge parent and child models that reference one another
+            if b in refs_by_model[a] or a in refs_by_model[b]:
+                continue
+
+            ct_a, ct_b = core_tokens_by_model[a], core_tokens_by_model[b]
+            union_ct = ct_a | ct_b
+            name_sim = len(ct_a & ct_b) / len(union_ct) if union_ct else 0.0
+            exact_core_name = bool(ct_a and ct_a == ct_b)
+
+            f_a, f_b = fields_by_model[a], fields_by_model[b]
+            shared_fields = len(f_a & f_b)
+            min_fields = min(len(f_a), len(f_b))
+            field_containment = shared_fields / max(1, min_fields) if min_fields > 0 else 0.0
+
+            is_dup = False
+            if exact_core_name and (shared_fields >= 1 or len(ct_a) >= 2):
+                is_dup = True
+            elif field_containment >= 0.50 and shared_fields >= 2 and name_sim >= 0.30:
+                is_dup = True
+            elif (0.55 * field_containment + 0.45 * name_sim) >= 0.60 and shared_fields >= 2:
+                is_dup = True
+
+            if is_dup:
+                adj[a].add(b)
+                adj[b].add(a)
+
+    # Extract connected components of size >= 2
+    visited: Set[str] = set()
+    duplicate_clusters: List[List[str]] = []
+    for m in model_names:
+        if m not in visited and adj[m]:
+            comp: List[str] = []
+            queue = [m]
+            visited.add(m)
+            while queue:
+                curr = queue.pop(0)
+                comp.append(curr)
+                for nxt in sorted(adj[curr]):
+                    if nxt not in visited:
+                        visited.add(nxt)
+                        queue.append(nxt)
+            # Order cluster members by field count descending so the richest class is primary
+            comp.sort(key=lambda x: (len(fields_by_model[x]), -model_names.index(x)), reverse=True)
+            duplicate_clusters.append(comp)
+
+    if not duplicate_clusters:
+        return comprehensive_code, []
+
+    alias_map: Dict[str, str] = {}
+    merge_notes: List[str] = []
+
+    for cluster_idx, cluster in enumerate(duplicate_clusters, start=1):
+        primary_name = cluster[0]
+        secondary_names = cluster[1:]
+        merged_via_llm = False
+
+        if callable(llm_merge_fn):
+            try:
+                # Collect only the Enums referenced by this cluster and the BaseModels in this cluster
+                cluster_enum_names: List[str] = []
+                for c_name in cluster:
+                    for r_name in refs_by_model.get(c_name, set()):
+                        if r_name in enums_by_name and r_name not in cluster_enum_names:
+                            cluster_enum_names.append(r_name)
+                snippet_nodes: List[ast.AST] = (
+                    [enums_by_name[en] for en in cluster_enum_names]
+                    + [models_by_name[cn] for cn in cluster]
+                )
+                snippet_mod = ast.Module(body=snippet_nodes, type_ignores=[])
+                snippet_code = ast.unparse(snippet_mod)
+                llm_merged_code = llm_merge_fn(
+                    f"dup_cluster_{cluster_idx}_{primary_name}",
+                    snippet_code,
+                    primary_name,
+                )
+                if llm_merged_code:
+                    llm_tree = ast.parse(llm_merged_code)
+                    llm_models = [n for n in llm_tree.body if isinstance(n, ast.ClassDef) and not is_enum_class(n)]
+                    llm_enums = [n for n in llm_tree.body if isinstance(n, ast.ClassDef) and is_enum_class(n)]
+                    if llm_models:
+                        chosen_model = next((m for m in llm_models if m.name == primary_name), llm_models[0])
+                        target_name = chosen_model.name
+                        for en_node in llm_enums:
+                            enums_by_name[en_node.name] = en_node
+                        for old_c in cluster:
+                            models_by_name.pop(old_c, None)
+                            if old_c != target_name:
+                                alias_map[old_c] = target_name
+                        models_by_name[target_name] = chosen_model
+                        merged_via_llm = True
+                        merge_notes.append(
+                            f"Merged semantic duplicate cluster {cluster} -> '{target_name}' (targeted LLM merge)"
+                        )
+            except Exception:
+                merged_via_llm = False
+
+        if not merged_via_llm:
+            # Deterministic AST field union into primary_name
+            primary_node = models_by_name[primary_name]
+            for sec_name in secondary_names:
+                sec_node = models_by_name.pop(sec_name, None)
+                if sec_node is not None:
+                    sec_Node_copy = ast.ClassDef(
+                        name=primary_name,
+                        bases=sec_node.bases,
+                        keywords=sec_node.keywords,
+                        body=sec_node.body,
+                        decorator_list=sec_node.decorator_list,
+                    )
+                    # Append fields; deduplicate_consolidated_classes will unify and cap them cleanly
+                    primary_node.body.extend(sec_Node_copy.body)
+                    alias_map[sec_name] = primary_name
+            merge_notes.append(
+                f"Merged semantic duplicate cluster {cluster} -> '{primary_name}' (deterministic AST union)"
+            )
+
+        _log_sanitization_detail(
+            context_label=context_label,
+            class_name=primary_name,
+            class_kind="BaseModel (Semantic Duplicate Merge)",
+            kept_count=len(cluster),
+            stripped_items=[f"{s} -> {alias_map.get(s, primary_name)}" for s in secondary_names],
+            extra_note=merge_notes[-1],
+        )
+
+    # Rewrite any type annotation referencing a merged secondary class name across all remaining models
+    if alias_map:
+        class _ClassAliasRewriter(ast.NodeTransformer):
+            def visit_Name(self, n: ast.Name) -> ast.AST:
+                if isinstance(n.ctx, ast.Load) and n.id in alias_map:
+                    return ast.copy_location(ast.Name(id=alias_map[n.id], ctx=ast.Load()), n)
+                return n
+
+            def visit_Constant(self, n: ast.Constant) -> ast.AST:
+                if isinstance(n.value, str) and n.value in alias_map:
+                    return ast.copy_location(ast.Constant(value=alias_map[n.value]), n)
+                return n
+
+        rewriter = _ClassAliasRewriter()
+        for m_node in models_by_name.values():
+            for st in m_node.body:
+                if isinstance(st, ast.AnnAssign) and st.annotation is not None:
+                    st.annotation = rewriter.visit(st.annotation)
+
+    tree.body = other_nodes + list(enums_by_name.values()) + list(models_by_name.values())
+    try:
+        raw_merged = ast.unparse(tree)
+        final_master = deduplicate_consolidated_classes(raw_merged, context_label=context_label)
+        return final_master, merge_notes
+    except Exception:
+        return comprehensive_code, merge_notes

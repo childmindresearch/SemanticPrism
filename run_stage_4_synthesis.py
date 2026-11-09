@@ -13,7 +13,6 @@ Workflow Phases & Output Artifacts:
               * outputs/04_synthesis/schemas/community/<01_module_name>.py ...
   - Phase 2 : Global Schema Consolidation & AST Class Deduplication
               * outputs/04_synthesis/schemas/community/master_ontology.py
-              * outputs/04_synthesis/schemas/community/comprehensive_ontology.py
               * outputs/04_synthesis/logs/schema_sanitization.log
               * outputs/04_synthesis/logs/synthesis_community_errors.log
 """

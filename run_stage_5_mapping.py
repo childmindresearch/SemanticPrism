@@ -7,8 +7,7 @@ powered by PrismRunner's local HuggingFace batch inference engine.
 
 Supported Schema Input Modes (SCHEMA_PATH):
   1. Single .py file with multiple Pydantic BaseModel schemas:
-     e.g., "outputs/04_synthesis/schemas/community/master_ontology.py" or
-           "outputs/04_synthesis/schemas/community/comprehensive_ontology.py"
+     e.g., "outputs/04_synthesis/schemas/community/master_ontology.py"
   2. Directory of multiple .py schema files:
      e.g., "outputs/04_synthesis/schemas/community"
 
