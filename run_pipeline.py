@@ -564,6 +564,13 @@ def run_stage(
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    try:
+        from model_config import HF_TOKEN
+        if HF_TOKEN and HF_TOKEN.strip():
+            env["HF_TOKEN"] = HF_TOKEN.strip()
+            env["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN.strip()
+    except Exception:
+        pass
     recent_lines: deque[str] = deque(maxlen=40)
 
     try:
