@@ -107,12 +107,12 @@ EXTRACT_MODE: str = MASTER_STAGE5_EXTRACT_MODE                # "top_level" (rec
 
 # --- 4. Context Window, Chunking & Triage Settings ---
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"           # "auto" = full native model context window, or int cap
-MAX_NEW_TOKENS: int = 4096                             # Max generated tokens per schema extraction call
-TRIAGE_MAX_NEW_TOKENS: int = 1024                      # Max generated tokens for fast schema relevance triage
+MAX_NEW_TOKENS: int = 1536                             # Max generated tokens per schema extraction call
+TRIAGE_MAX_NEW_TOKENS: int = 256                       # Max generated tokens for fast schema relevance triage
 CHUNK_SIZE_WORDS: int = 300                            # Target word count per text chunk
 CHUNK_OVERLAP_WORDS: int = 20                          # Overlapping words between consecutive chunks
 ENABLE_TRIAGE: bool = True                             # Run fast triage pass to skip irrelevant schemas per chunk
-TRIAGE_THRESHOLD: int = 3                              # Only run triage when candidate schema count >= threshold
+TRIAGE_THRESHOLD: int = 6                              # Only run triage when candidate schema count >= threshold
 FALLBACK_ON_EMPTY_TRIAGE: bool = False                 # False = skip chunk if triage selects 0 schemas; True = run all
 
 # --- 5. Output, Caching & Logging Settings ---

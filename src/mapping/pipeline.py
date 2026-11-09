@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import traceback
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 
@@ -286,6 +287,41 @@ class ResumeTracker:
         chunk_file.write_text(payload_str, encoding="utf-8")
         return chunk_file
 
+    def get_triage_chunk_file(self, doc_id: str, chunk_idx: int) -> Path:
+        safe_doc_id = sanitize_filename(doc_id)
+        return self.get_doc_dir(doc_id) / "chunks" / "_triage" / f"{safe_doc_id}_triage_chunk_{chunk_idx}.json"
+
+    def is_triage_chunk_completed(self, doc_id: str, chunk_idx: int) -> bool:
+        if self.mode == "overwrite":
+            return False
+        return self.get_triage_chunk_file(doc_id, chunk_idx).exists()
+
+    def load_triage_chunk_result(self, doc_id: str, chunk_idx: int) -> Optional[List[str]]:
+        triage_file = self.get_triage_chunk_file(doc_id, chunk_idx)
+        if not triage_file.exists():
+            return None
+        try:
+            data = json.loads(triage_file.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and "relevant_schemas" in data and isinstance(data["relevant_schemas"], list):
+                return [str(x).strip() for x in data["relevant_schemas"] if str(x).strip()]
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
+            return []
+        except Exception:
+            return None
+
+    def save_triage_chunk_result(
+        self,
+        doc_id: str,
+        chunk_idx: int,
+        relevant_schemas: List[str],
+    ) -> Path:
+        triage_file = self.get_triage_chunk_file(doc_id, chunk_idx)
+        triage_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"doc_id": str(doc_id), "chunk_idx": int(chunk_idx), "relevant_schemas": list(relevant_schemas)}
+        triage_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return triage_file
+
     def get_completed_schemas(self, doc_id: str) -> Set[str]:
         if self.mode == "overwrite":
             return set()
@@ -542,12 +578,12 @@ class SemanticPrismStage5Pipeline:
         repetition_penalty: float = 1.05,
         constrain_json: bool = True,
         context_window_cap: Union[int, str] = "auto",
-        max_new_tokens: int = 4096,
-        triage_max_new_tokens: int = 1024,
+        max_new_tokens: int = 1536,
+        triage_max_new_tokens: int = 256,
         chunk_size_words: int = 300,
         chunk_overlap_words: int = 20,
         enable_triage: bool = True,
-        triage_threshold: int = 3,
+        triage_threshold: int = 6,
         fallback_on_empty_triage: bool = False,
         schema_path: Union[str, Path] = "outputs/04_synthesis/schemas/master_ontology.py",
         target_class_name: Optional[str] = None,
@@ -897,9 +933,10 @@ class SemanticPrismStage5Pipeline:
                 chunk_to_schemas[(doc_id, chunk_idx)] = pending_for_doc
             return chunk_to_schemas
 
-        # Only triage chunks that have at least one uncached schema
+        # Only triage chunks that have at least one uncached schema and no cached triage file
         triage_inputs: List[Dict[str, Any]] = []
         triage_meta_by_id: Dict[str, Dict[str, Any]] = {}
+        cached_triage_hits = 0
         for rec in chunk_records:
             rec_id = rec["id"]
             doc_id = rec["doc_id"]
@@ -912,9 +949,26 @@ class SemanticPrismStage5Pipeline:
             if not uncached:
                 # All pending schemas for this chunk already have cached chunk JSONs
                 chunk_to_schemas[(doc_id, chunk_idx)] = pending_for_doc
+            elif self.tracker.is_triage_chunk_completed(doc_id, chunk_idx):
+                cached_names = self.tracker.load_triage_chunk_result(doc_id, chunk_idx) or []
+                cached_names_lower = {n.strip().lower() for n in cached_names if n.strip()}
+                matched = [
+                    s for s in pending_for_doc
+                    if s.name.lower() in cached_names_lower or s.qualified_name.lower() in cached_names_lower
+                ]
+                if not matched and self.fallback_on_empty_triage:
+                    matched = pending_for_doc
+                chunk_to_schemas[(doc_id, chunk_idx)] = matched
+                cached_triage_hits += 1
             else:
                 triage_inputs.append({"id": rec_id, "text": rec["text"]})
                 triage_meta_by_id[rec_id] = rec
+
+        if cached_triage_hits > 0:
+            self._log(
+                "Phase 3a: Schema Triage",
+                f"Resumed {cached_triage_hits} already-triaged chunk(s) from disk cache.",
+            )
 
         if not triage_inputs:
             return chunk_to_schemas
@@ -932,11 +986,67 @@ class SemanticPrismStage5Pipeline:
                 f"Document Excerpt:\n{triage_inputs[0]['text']}\n\nInstruction:\n{triage_instruction}",
             )
 
+        total_triage_chunks = len(triage_inputs)
         self._log(
             "Phase 3a: Schema Triage",
-            f"Running batched relevance triage across {len(triage_inputs)} chunk(s) "
+            f"Running batched relevance triage across {total_triage_chunks} chunk(s) "
             f"against {len(target_schemas)} candidate schemas...",
         )
+
+        triage_start_ts = time.time()
+        triage_done_count = 0
+
+        def _on_triage_batch_start(batch_idx: int, total_batches: int, batch_records: List[Any]) -> None:
+            self._log(
+                "Phase 3a: Schema Triage",
+                f"Batch {batch_idx + 1}/{total_batches} starting (batch_size={len(batch_records)} chunk(s))...",
+            )
+
+        def _on_triage_chunk_done(annotated_chunk: Dict[str, Any]) -> None:
+            nonlocal triage_done_count
+            rec_id = str(annotated_chunk.get("record_id") or annotated_chunk.get("id") or "")
+            rec = triage_meta_by_id.get(rec_id)
+            if not rec:
+                return
+            triage_done_count += 1
+            doc_id = rec["doc_id"]
+            chunk_idx = rec["chunk_idx"]
+            pending_for_doc: List[SchemaMeta] = rec["pending_schemas"]
+            parsed_items = annotated_chunk.get("parsed_items") or annotated_chunk.get("extracted_items") or []
+            selected_names_lower: Set[str] = set()
+            for item in parsed_items:
+                if isinstance(item, dict):
+                    names = item.get("relevant_schemas", [])
+                elif isinstance(item, TriageResult):
+                    names = item.relevant_schemas
+                else:
+                    names = []
+                if isinstance(names, list):
+                    for n in names:
+                        if isinstance(n, str) and n.strip():
+                            selected_names_lower.add(n.strip().lower())
+            matched = [
+                s for s in pending_for_doc
+                if s.name.lower() in selected_names_lower or s.qualified_name.lower() in selected_names_lower
+            ]
+            if not matched and self.fallback_on_empty_triage:
+                matched = pending_for_doc
+            chunk_to_schemas[(doc_id, chunk_idx)] = matched
+            triage_path = self.tracker.save_triage_chunk_result(
+                doc_id, chunk_idx, [s.name for s in matched]
+            )
+            elapsed = max(0.001, time.time() - triage_start_ts)
+            rate = triage_done_count / elapsed
+            remaining = max(0, total_triage_chunks - triage_done_count)
+            eta_s = int(remaining / rate) if rate > 0 else 0
+            pct = (100.0 * triage_done_count) / max(1, total_triage_chunks)
+            matched_str = ", ".join(s.name for s in matched) if matched else "none"
+            self._log(
+                "Phase 3a: Schema Triage",
+                f"Chunk {triage_done_count}/{total_triage_chunks} ({pct:.1f}%) | "
+                f"Doc '{doc_id}' chunk #{chunk_idx} -> [{matched_str}] "
+                f"| {rate:.2f} ch/s | ETA {eta_s}s -> {triage_path.name}",
+            )
 
         triage_results = self.prism.run(
             input_data=triage_inputs,
@@ -955,6 +1065,8 @@ class SemanticPrismStage5Pipeline:
             constrain_json=self.constrain_json,
             dedup=False,
             dry_run=dry_run,
+            on_batch_start=_on_triage_batch_start,
+            on_chunk_processed=_on_triage_chunk_done,
         )
 
         if dry_run:
@@ -962,7 +1074,7 @@ class SemanticPrismStage5Pipeline:
                 chunk_to_schemas[(rec["doc_id"], rec["chunk_idx"])] = rec["pending_schemas"]
             return chunk_to_schemas
 
-        # Map returned results by chunk record id ("record_id" or "id")
+        # Map any remaining returned results not already handled by streaming callback
         results_by_id = {
             str(res.get("record_id") or res.get("id") or ""): res
             for res in triage_results
@@ -973,34 +1085,36 @@ class SemanticPrismStage5Pipeline:
             doc_id = rec["doc_id"]
             chunk_idx = rec["chunk_idx"]
             pending_for_doc: List[SchemaMeta] = rec["pending_schemas"]
+            if (doc_id, chunk_idx) not in chunk_to_schemas:
+                res = results_by_id.get(rec_id, {})
+                extracted_items = res.get("extracted_items") or res.get("parsed_items") or []
+                selected_names_lower: Set[str] = set()
 
-            res = results_by_id.get(rec_id, {})
-            extracted_items = res.get("extracted_items") or res.get("parsed_items") or []
-            selected_names_lower: Set[str] = set()
+                for item in extracted_items:
+                    if isinstance(item, dict):
+                        names = item.get("relevant_schemas", [])
+                    elif isinstance(item, TriageResult):
+                        names = item.relevant_schemas
+                    else:
+                        names = []
+                    if isinstance(names, list):
+                        for n in names:
+                            if isinstance(n, str) and n.strip():
+                                selected_names_lower.add(n.strip().lower())
 
-            for item in extracted_items:
-                if isinstance(item, dict):
-                    names = item.get("relevant_schemas", [])
-                elif isinstance(item, TriageResult):
-                    names = item.relevant_schemas
-                else:
-                    names = []
-                if isinstance(names, list):
-                    for n in names:
-                        if isinstance(n, str) and n.strip():
-                            selected_names_lower.add(n.strip().lower())
+                matched = [
+                    s for s in pending_for_doc
+                    if s.name.lower() in selected_names_lower
+                    or s.qualified_name.lower() in selected_names_lower
+                ]
 
-            matched = [
-                s for s in pending_for_doc
-                if s.name.lower() in selected_names_lower
-                or s.qualified_name.lower() in selected_names_lower
-            ]
+                if not matched and self.fallback_on_empty_triage:
+                    matched = pending_for_doc
 
-            if not matched and self.fallback_on_empty_triage:
-                matched = pending_for_doc
+                chunk_to_schemas[(doc_id, chunk_idx)] = matched
+                self.tracker.save_triage_chunk_result(doc_id, chunk_idx, [s.name for s in matched])
 
-            chunk_to_schemas[(doc_id, chunk_idx)] = matched
-            total_selected += len(matched)
+            total_selected += len(chunk_to_schemas[(doc_id, chunk_idx)])
 
         total_possible = len(triage_inputs) * len(target_schemas)
         skipped_calls = max(0, total_possible - total_selected)
@@ -1092,6 +1206,34 @@ class SemanticPrismStage5Pipeline:
         # Store chunk-level BaseModel results in memory: (doc_id, qualified_name) -> List[BaseModel]
         extracted_chunk_models: Dict[Tuple[str, str], List[BaseModel]] = defaultdict(list)
         schema_work_queues: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        remaining_doc_schema_chunks: Dict[Tuple[str, str], int] = defaultdict(int)
+        finalized_doc_schemas: Set[Tuple[str, str]] = set()
+        consolidated_count = 0
+        non_empty_count = 0
+
+        def _finalize_doc_schema_if_ready(doc_id_val: str, s_meta_val: SchemaMeta) -> None:
+            nonlocal consolidated_count, non_empty_count
+            key = (doc_id_val, s_meta_val.qualified_name)
+            if key in finalized_doc_schemas:
+                return
+            if remaining_doc_schema_chunks.get(key, 0) > 0:
+                return
+            finalized_doc_schemas.add(key)
+            chunk_instances = extracted_chunk_models.get(key, [])
+            merged_doc_model = merge_pydantic_instances(chunk_instances, s_meta_val.schema_cls)
+            if merged_doc_model is not None and has_extracted_content(merged_doc_model):
+                serialized = merged_doc_model.model_dump(mode="json")
+                out_f = self.tracker.save_extraction(doc_id_val, s_meta_val, serialized)
+                non_empty_count += 1
+                status_label = "populated"
+            else:
+                out_f = self.tracker.save_extraction(doc_id_val, s_meta_val, [])
+                status_label = "empty"
+            consolidated_count += 1
+            self._log(
+                "Phase 3c: Document Saved",
+                f"Consolidated doc '{doc_id_val}' for schema '{s_meta_val.name}' ({status_label}) -> {out_f.name}",
+            )
 
         for (doc_id, chunk_idx), selected_schemas in chunk_to_schemas.items():
             ch_text = chunk_text_lookup[(doc_id, chunk_idx)]
@@ -1101,6 +1243,7 @@ class SemanticPrismStage5Pipeline:
                     if cached_inst is not None and has_extracted_content(cached_inst):
                         extracted_chunk_models[(doc_id, s_meta.qualified_name)].append(cached_inst)
                 else:
+                    remaining_doc_schema_chunks[(doc_id, s_meta.qualified_name)] += 1
                     schema_work_queues[s_meta.qualified_name].append(
                         {
                             "id": f"{doc_id}::chunk_{chunk_idx}::{s_meta.qualified_name}",
@@ -1110,6 +1253,13 @@ class SemanticPrismStage5Pipeline:
                             "qualified_name": s_meta.qualified_name,
                         }
                     )
+
+        if not dry_run:
+            # Immediately finalize any (doc_id, schema) pairs that require 0 LLM chunk calls
+            for doc_id, pending_list in doc_pending_schemas.items():
+                for s_meta in pending_list:
+                    if remaining_doc_schema_chunks.get((doc_id, s_meta.qualified_name), 0) == 0:
+                        _finalize_doc_schema_if_ready(doc_id, s_meta)
 
         # Pass 3b: Targeted Single-Schema Deep Extraction
         total_schemas_with_work = len(schema_work_queues)
@@ -1128,20 +1278,39 @@ class SemanticPrismStage5Pipeline:
                     f"Document Excerpt:\n{work_items[0]['text']}\n\nInstruction:\n{instruction}",
                 )
 
+            total_schema_chunks = len(work_items)
             self._log(
                 "Phase 3b: Deep Extraction",
                 f"[{s_idx}/{total_schemas_with_work}] Extracting schema '{s_meta.qualified_name}' "
-                f"across {len(work_items)} relevant chunk(s)...",
+                f"across {total_schema_chunks} relevant chunk(s)...",
             )
 
             work_meta_by_id = {w["id"]: w for w in work_items}
             prism_inputs = [{"id": w["id"], "text": w["text"]} for w in work_items]
+            schema_start_ts = time.time()
+            schema_done_chunks = 0
+
+            def _on_extract_batch_start(
+                batch_idx: int,
+                total_batches: int,
+                batch_records: List[Any],
+                _s_idx: int = s_idx,
+                _meta: SchemaMeta = s_meta,
+            ) -> None:
+                self._log(
+                    "Phase 3b: Deep Extraction",
+                    f"[{_s_idx}/{total_schemas_with_work} '{_meta.name}'] "
+                    f"Batch {batch_idx + 1}/{total_batches} starting (batch_size={len(batch_records)} chunk(s))...",
+                )
 
             def _on_chunk_done(
                 annotated_chunk: Dict[str, Any],
+                _s_idx: int = s_idx,
+                _total_chunks: int = total_schema_chunks,
                 _meta: SchemaMeta = s_meta,
                 _lookup: Dict[str, Dict[str, Any]] = work_meta_by_id,
             ) -> None:
+                nonlocal schema_done_chunks
                 rec_id = str(annotated_chunk.get("record_id") or annotated_chunk.get("id") or "")
                 w_info = _lookup.get(rec_id, {})
                 c_doc_id = w_info.get("doc_id")
@@ -1149,6 +1318,7 @@ class SemanticPrismStage5Pipeline:
                 parsed_items = annotated_chunk.get("parsed_items", [])
                 if c_doc_id is None or c_idx is None:
                     return
+                schema_done_chunks += 1
                 valid_models = [
                     m for m in parsed_items
                     if isinstance(m, BaseModel) and has_extracted_content(m)
@@ -1158,9 +1328,28 @@ class SemanticPrismStage5Pipeline:
                     if valid_models
                     else None
                 )
-                self.tracker.save_chunk_result(c_doc_id, _meta, c_idx, merged_chunk_inst)
+                chunk_file = self.tracker.save_chunk_result(c_doc_id, _meta, c_idx, merged_chunk_inst)
                 if merged_chunk_inst is not None:
                     extracted_chunk_models[(c_doc_id, _meta.qualified_name)].append(merged_chunk_inst)
+
+                elapsed = max(0.001, time.time() - schema_start_ts)
+                rate = schema_done_chunks / elapsed
+                rem = max(0, _total_chunks - schema_done_chunks)
+                eta_s = int(rem / rate) if rate > 0 else 0
+                pct = (100.0 * schema_done_chunks) / max(1, _total_chunks)
+                state_str = "populated" if merged_chunk_inst is not None else "empty"
+                self._log(
+                    "Phase 3b: Deep Extraction",
+                    f"[{_s_idx}/{total_schemas_with_work} '{_meta.name}' | "
+                    f"Chunk {schema_done_chunks}/{_total_chunks} ({pct:.1f}%) | "
+                    f"{rate:.2f} ch/s | ETA {eta_s}s] "
+                    f"Doc '{c_doc_id}' chunk #{c_idx} ({state_str}) -> {chunk_file.name}",
+                )
+
+                key = (c_doc_id, _meta.qualified_name)
+                remaining_doc_schema_chunks[key] = max(0, remaining_doc_schema_chunks.get(key, 1) - 1)
+                if remaining_doc_schema_chunks[key] == 0 and not dry_run:
+                    _finalize_doc_schema_if_ready(c_doc_id, _meta)
 
             self.prism.run(
                 input_data=prism_inputs,
@@ -1179,6 +1368,7 @@ class SemanticPrismStage5Pipeline:
                 constrain_json=self.constrain_json,
                 dedup=False,
                 dry_run=dry_run,
+                on_batch_start=_on_extract_batch_start,
                 on_chunk_processed=_on_chunk_done,
             )
 
@@ -1186,21 +1376,11 @@ class SemanticPrismStage5Pipeline:
             self._log("Phase 3: Dry Run", "Dry run complete; skipping consolidation and file writes.")
             return
 
-        # Pass 3c: Exact Verbatim Chunk Consolidation per (doc_id, SchemaMeta)
-        consolidated_count = 0
-        non_empty_count = 0
+        # Pass 3c: Final sweep for any remaining (doc_id, SchemaMeta) pairs not already finalized in streaming callback
         for doc_id, pending_list in doc_pending_schemas.items():
             for s_meta in pending_list:
-                chunk_instances = extracted_chunk_models.get((doc_id, s_meta.qualified_name), [])
-                merged_doc_model = merge_pydantic_instances(chunk_instances, s_meta.schema_cls)
-
-                if merged_doc_model is not None and has_extracted_content(merged_doc_model):
-                    serialized = merged_doc_model.model_dump(mode="json")
-                    self.tracker.save_extraction(doc_id, s_meta, serialized)
-                    non_empty_count += 1
-                else:
-                    self.tracker.save_extraction(doc_id, s_meta, [])
-                consolidated_count += 1
+                remaining_doc_schema_chunks[(doc_id, s_meta.qualified_name)] = 0
+                _finalize_doc_schema_if_ready(doc_id, s_meta)
 
         self._log(
             "Phase 3c: Consolidation",
