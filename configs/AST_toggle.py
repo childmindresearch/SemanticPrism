@@ -72,6 +72,10 @@ MAX_ENUM_MEMBERS_PER_CLASS: int = 15         # Main config cap for max Enum memb
 # 2.5 Automatically move 'OTHER' / 'Other' member to the final position of the Enum class
 PLACE_ENUM_OTHER_LAST: bool = True
 
+# 2.5b Ensure every Enum class inherits from (str, Enum) and includes an OTHER = 'Other' fallback member
+ENSURE_STR_ENUM_INHERITANCE: bool = True
+ENSURE_ENUM_OTHER_FALLBACK: bool = True
+
 # 2.6 Remove Enum classes with 0 valid members remaining and rewrite referencing fields to 'str'
 REMOVE_EMPTY_ENUMS_AND_REWRITE_REFS: bool = True
 
@@ -94,6 +98,7 @@ STRIP_DUPLICATE_BASEMODEL_FIELDS: bool = True
 
 # 3.4 Shared 2-token snake_case prefix collapse & cap (for fields with >= PREFIX_MIN_TOKENS tokens)
 COLLAPSE_SHARED_PREFIX_FIELDS: bool = True
+PROTECT_ENUM_AND_MODEL_FIELDS_FROM_COLLAPSE: bool = True  # Never collapse/strip fields typed with an Enum or BaseModel
 PREFIX_MIN_TOKENS: int = 3                   # Minimum underscore-separated tokens to check 2-token prefix
 SHARED_PREFIX_COLLAPSE_THRESHOLD: int = 3    # Collapse into Optional[List[str]] when >= N fields share prefix
 
@@ -139,6 +144,9 @@ ENABLE_CONSOLIDATED_ONTOLOGY_MERGER: bool = True
 
 # 4.1 Merge duplicate Enum classes with the same name by unioning unique members
 MERGE_DUPLICATE_ENUM_CLASSES: bool = True
+
+# 4.1b Merge synonymous Enum classes across communities (matching normalized stem or high member overlap)
+MERGE_SYNONYMOUS_ENUM_CLASSES: bool = True
 
 # 4.2 Merge duplicate BaseModel classes with the same name by unioning unique fields
 MERGE_DUPLICATE_BASEMODEL_CLASSES: bool = True

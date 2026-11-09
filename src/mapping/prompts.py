@@ -14,9 +14,10 @@ from src.mapping.schemas import SchemaMeta, extract_referenced_models
 
 EXTRACTION_RULES = """
 CRITICAL EXTRACTION RULES:
-1. **Verbatim Fidelity & Granular Specificity**: Extract mentions, phrases, and values EXACTLY as they appear in the source text. Do NOT paraphrase, summarize, synthesize, or generalize into high-level categories.
-2. **Strict Null Rule (Zero Hallucination)**: If a specific field is NOT explicitly mentioned or supported by the text, you MUST leave it as `null` (`None`) or an empty list `[]`. NEVER guess, infer, extrapolate, or fabricate default placeholder values.
-3. **Context Grounding**: Every extracted attribute must be directly grounded in the provided document excerpt. If the excerpt contains no relevant information for the entire schema, return `null` (`None`) or empty lists `[]` for all fields.
+1. **Verbatim Fidelity for Free-Text & Numbers**: For `str`, `int`, and `float` fields, extract mentions, phrases, and values EXACTLY as they appear in the source text without paraphrasing or inventing values.
+2. **Categorical Mapping for `Enum(...)` & Boolean (`bool`) Fields**: For fields typed as `Enum(...)` or `List[Enum(...)]`, map the text evidence to the single best-matching allowed choice(s) listed in `Enum(...)` (or `'Other'` when the text mentions a relevant concept not covered by a specific choice). For `bool` fields, set `true` or `false` when the text explicitly affirms or negates the condition/attribute, and `null` (`None`) when not mentioned.
+3. **Strict Null Rule (Zero Hallucination)**: If a specific field is NOT explicitly mentioned or supported by the text, you MUST leave it as `null` (`None`) or an empty list `[]`. NEVER guess, infer, extrapolate, or fabricate default placeholder values.
+4. **Context Grounding**: Every extracted attribute must be directly grounded in the provided document excerpt. If the excerpt contains no relevant information for the entire schema, return `null` (`None`) or empty lists `[]` for all fields.
 """.strip()
 
 TRIAGE_RULES = """

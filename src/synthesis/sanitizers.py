@@ -234,6 +234,36 @@ def _sanitize_ast_enums(
                     kept_stmts.append(stmt)
 
             if member_count > 0:
+                if getattr(ast_cfg, "ENSURE_STR_ENUM_INHERITANCE", True):
+                    base_ids = [
+                        b.id if isinstance(b, ast.Name) else (b.attr if isinstance(b, ast.Attribute) else "")
+                        for b in node.bases
+                    ]
+                    if "str" not in base_ids and not any("Int" in b or "Flag" in b for b in base_ids):
+                        node.bases = [ast.Name(id="str", ctx=ast.Load()), ast.Name(id="Enum", ctx=ast.Load())]
+                        modified = True
+
+                has_other = any(
+                    n.strip().upper() == "OTHER" for n in seen_names
+                ) or ("other" in seen_vals)
+                if getattr(ast_cfg, "ENSURE_ENUM_OTHER_FALLBACK", True) and not has_other:
+                    other_stmt = ast.Assign(
+                        targets=[ast.Name(id="OTHER", ctx=ast.Store())],
+                        value=ast.Constant(value="Other"),
+                    )
+                    ast.fix_missing_locations(other_stmt)
+                    if ast_cfg.ENFORCE_MAX_ENUM_MEMBERS_CAP and member_count >= max_members and kept_stmts:
+                        # Replace final member slot with OTHER = 'Other' so max_members cap is respected
+                        for rev_idx in range(len(kept_stmts) - 1, -1, -1):
+                            st_cand = kept_stmts[rev_idx]
+                            if isinstance(st_cand, (ast.Assign, ast.AnnAssign)):
+                                kept_stmts[rev_idx] = other_stmt
+                                break
+                    else:
+                        kept_stmts.append(other_stmt)
+                        member_count += 1
+                    modified = True
+
                 if ast_cfg.PLACE_ENUM_OTHER_LAST:
                     non_field_stmts: List[ast.stmt] = []
                     regular_member_stmts: List[ast.stmt] = []
@@ -382,9 +412,11 @@ def _sanitize_ast_models(
         "Type", "ClassVar", "Final", "Annotated", "BaseModel", "Field", "Enum",
         "date", "datetime", "time", "timedelta", "UUID", "Decimal", "Path",
     }
+    defined_custom_types: set = set()
     for top_node in tree.body:
         if isinstance(top_node, ast.ClassDef):
             known_type_names.add(top_node.name)
+            defined_custom_types.add(top_node.name)
         elif isinstance(top_node, ast.Import):
             for alias in top_node.names:
                 known_type_names.add(alias.asname or alias.name.split(".")[0])
@@ -491,11 +523,23 @@ def _sanitize_ast_models(
             continue
 
         # Pass 1: Structural prefix-entropy & suffix-repetition filtering
+        protect_custom_types = getattr(ast_cfg, "PROTECT_ENUM_AND_MODEL_FIELDS_FROM_COLLAPSE", True)
+
+        def _is_custom_typed_annotation(ann_s: str) -> bool:
+            if not ann_s or not defined_custom_types:
+                return False
+            tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ann_s)
+            return any(t in defined_custom_types for t in tokens)
+
         raw_prefix2_counts: Counter = Counter(
-            f"{e[4][0]}_{e[4][1]}" for e in field_entries if len(e[4]) >= prefix_min_tokens
+            f"{e[4][0]}_{e[4][1]}"
+            for e in field_entries
+            if len(e[4]) >= prefix_min_tokens and not (protect_custom_types and _is_custom_typed_annotation(e[5]))
         )
         raw_suffix_counts: Counter = Counter(
-            e[4][-1] for e in field_entries if len(e[4]) >= suffix_min_tokens
+            e[4][-1]
+            for e in field_entries
+            if len(e[4]) >= suffix_min_tokens and not (protect_custom_types and _is_custom_typed_annotation(e[5]))
         )
         prefix2_counts: Counter = Counter()
         suffix_counts: Counter = Counter()
@@ -503,16 +547,21 @@ def _sanitize_ast_models(
 
         for entry in field_entries:
             idx, norm_name, stmt, is_bool, parts, ann_str = entry
+            is_protected_custom = protect_custom_types and _is_custom_typed_annotation(ann_str)
 
             # 1a. Shared 2-token prefix collapse/cap (collapses 3+ flattened sub-entity fields into a List[str] field)
-            if len(parts) >= prefix_min_tokens:
+            if len(parts) >= prefix_min_tokens and not is_protected_custom:
                 prefix2 = f"{parts[0]}_{parts[1]}"
                 if getattr(ast_cfg, "COLLAPSE_SHARED_PREFIX_FIELDS", True) and raw_prefix2_counts[prefix2] >= prefix_collapse_threshold:
                     modified = True
                     if prefix2_counts[prefix2] == 0:
                         collapsed_name = prefix2 if prefix2.endswith("s") else f"{prefix2}s"
                         grouped_names = [
-                            e[1] for e in field_entries if len(e[4]) >= prefix_min_tokens and f"{e[4][0]}_{e[4][1]}" == prefix2
+                            e[1]
+                            for e in field_entries
+                            if len(e[4]) >= prefix_min_tokens
+                            and f"{e[4][0]}_{e[4][1]}" == prefix2
+                            and not (protect_custom_types and _is_custom_typed_annotation(e[5]))
                         ]
                         if collapsed_name not in seen_fields:
                             seen_fields.add(collapsed_name)
@@ -541,14 +590,18 @@ def _sanitize_ast_models(
                 prefix2 = None
 
             # 1b. Shared suffix collapse/cap (collapses 3+ repeated suffix/checklist fields into a List[str] field)
-            suffix1 = parts[-1] if len(parts) >= suffix_min_tokens else None
+            suffix1 = parts[-1] if (len(parts) >= suffix_min_tokens and not is_protected_custom) else None
             if suffix1 and suffix1 not in exempt_suffixes:
                 if getattr(ast_cfg, "COLLAPSE_SHARED_SUFFIX_FIELDS", True) and raw_suffix_counts[suffix1] >= suffix_collapse_threshold:
                     modified = True
                     if suffix_counts[suffix1] == 0:
                         collapsed_name = suffix1 if suffix1.endswith("s") else f"{suffix1}s"
                         grouped_names = [
-                            e[1] for e in field_entries if len(e[4]) >= suffix_min_tokens and e[4][-1] == suffix1
+                            e[1]
+                            for e in field_entries
+                            if len(e[4]) >= suffix_min_tokens
+                            and e[4][-1] == suffix1
+                            and not (protect_custom_types and _is_custom_typed_annotation(e[5]))
                         ]
                         if collapsed_name not in seen_fields:
                             seen_fields.add(collapsed_name)
@@ -587,10 +640,11 @@ def _sanitize_ast_models(
             scored = sorted(
                 filtered_entries,
                 key=lambda item: (
-                    1 if item[3] else 0,                 # non-bool before bool
+                    0 if _is_custom_typed_annotation(item[5]) else 1,  # Enum / BaseModel typed fields prioritized first
+                    0 if item[3] else 1,                               # bool (True/False) fields prioritized ahead of generic str
                     1 if (len(item[4]) >= 3 and raw_prefix2_counts[f"{item[4][0]}_{item[4][1]}"] > 1) else 0,
-                    1 if len(item[4]) >= 3 else 0,       # 1-2 token core fields before 3+ token compound fields
-                    item[0],                             # original declaration order
+                    1 if len(item[4]) >= 3 else 0,                     # 1-2 token core fields before 3+ token compound fields
+                    item[0],                                           # original declaration order
                 ),
             )
             kept_top = scored[:max_fields]
@@ -754,7 +808,11 @@ def _sanitize_ast_models(
         return code
 
 
-def clean_python_code(code: str, context_label: str = "schema") -> str:
+def clean_python_code(
+    code: str,
+    context_label: str = "schema",
+    run_ast_sanitizers: bool = True,
+) -> str:
     """Removes markdown formatting, invalid characters, and escapes that LLMs often inject."""
     if not code:
         return ""
@@ -872,8 +930,9 @@ def clean_python_code(code: str, context_label: str = "schema") -> str:
                         stripped_items=[f"class {m_cls} [reason: banned prompt-wrapper meta-model]"],
                         extra_note="Meta-model class mirroring prompt envelope was stripped completely.",
                     )
-    code = _sanitize_ast_enums(code.strip(), context_label=context_label)
-    code = _sanitize_ast_models(code.strip(), context_label=context_label)
+    if run_ast_sanitizers:
+        code = _sanitize_ast_enums(code.strip(), context_label=context_label)
+        code = _sanitize_ast_models(code.strip(), context_label=context_label)
     return code.strip()
 
 
@@ -883,9 +942,9 @@ def deduplicate_consolidated_classes(code: str, context_label: str = "master_ont
     Merges duplicate Enums and BaseModels, disambiguates Enum vs BaseModel naming collisions,
     and enforces MAX_ENUM_MEMBERS_PER_CLASS and MAX_BASEMODEL_FIELDS_PER_CLASS.
     """
-    clean_code = clean_python_code(code, context_label=context_label)
+    clean_code = clean_python_code(code, context_label=context_label, run_ast_sanitizers=False)
     if not getattr(ast_cfg, "ENABLE_CONSOLIDATED_ONTOLOGY_MERGER", True):
-        return clean_code
+        return clean_python_code(clean_code, context_label=context_label, run_ast_sanitizers=True)
     try:
         tree = ast.parse(clean_code)
     except Exception:
@@ -964,21 +1023,39 @@ def deduplicate_consolidated_classes(code: str, context_label: str = "master_ont
                     if not existing_has_doc and incoming_has_doc:
                         models_by_name[name].body.insert(0, node.body[0])
 
-                    existing_fields = {
-                        get_assigned_name(stmt)
-                        for stmt in models_by_name[name].body
+                    existing_field_idx = {
+                        get_assigned_name(stmt): idx_s
+                        for idx_s, stmt in enumerate(models_by_name[name].body)
                         if get_assigned_name(stmt) is not None
                     }
+                    existing_fields = set(existing_field_idx.keys())
                     added_fields, skipped_fields = [], []
                     for stmt in node.body:
                         f_name = get_assigned_name(stmt)
                         if f_name:
                             if f_name not in existing_fields:
                                 models_by_name[name].body.append(stmt)
+                                existing_field_idx[f_name] = len(models_by_name[name].body) - 1
                                 existing_fields.add(f_name)
                                 added_fields.append(f_name)
                             else:
-                                skipped_fields.append(f"{f_name} [reason: duplicate field across merged BaseModel '{name}']")
+                                # Upgrade existing 'str' field to Enum-typed field if incoming field uses an Enum
+                                prev_idx = existing_field_idx[f_name]
+                                prev_stmt = models_by_name[name].body[prev_idx]
+                                try:
+                                    prev_ann = ast.unparse(prev_stmt.annotation) if isinstance(prev_stmt, ast.AnnAssign) else ""
+                                    new_ann = ast.unparse(stmt.annotation) if isinstance(stmt, ast.AnnAssign) else ""
+                                except Exception:
+                                    prev_ann, new_ann = "", ""
+                                prev_has_enum = any(en in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", prev_ann) for en in enums_by_name)
+                                new_has_enum = any(en in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", new_ann) for en in enums_by_name)
+                                prev_is_bool = bool(re.search(r"\bbool\b", prev_ann))
+                                new_is_bool = bool(re.search(r"\bbool\b", new_ann))
+                                if (new_has_enum and not prev_has_enum) or (new_is_bool and not prev_is_bool and not prev_has_enum):
+                                    models_by_name[name].body[prev_idx] = stmt
+                                    added_fields.append(f"{f_name} (upgraded to {new_ann})")
+                                else:
+                                    skipped_fields.append(f"{f_name} [reason: duplicate field across merged BaseModel '{name}']")
                     _log_sanitization_detail(
                         context_label=context_label,
                         class_name=name,
@@ -1031,6 +1108,95 @@ def deduplicate_consolidated_classes(code: str, context_label: str = "master_ont
                     seen_other_src.add(src_sig)
                 deduped_other_nodes.append(o_node)
     other_nodes = deduped_other_nodes
+
+    # Merge synonymous Enum classes across communities (matching normalized core stem or high member overlap)
+    if getattr(ast_cfg, "MERGE_SYNONYMOUS_ENUM_CLASSES", True) and len(enums_by_name) >= 2:
+        enum_generic_suffixes = {
+            "enum", "enums", "type", "types", "category", "categories",
+            "kind", "kinds", "status", "level", "levels", "mode", "modes", "class",
+        }
+        enum_names_list = list(enums_by_name.keys())
+        enum_core_tokens: Dict[str, Set[str]] = {}
+        enum_member_vals: Dict[str, Set[str]] = {}
+        for en_name, en_node in enums_by_name.items():
+            raw_toks = [_normalize_stem(t) for t in _camel_to_snake(en_name).split("_") if t]
+            core_toks = {t for t in raw_toks if t not in enum_generic_suffixes}
+            enum_core_tokens[en_name] = core_toks if core_toks else set(raw_toks)
+            m_vals: Set[str] = set()
+            for st in en_node.body:
+                m_n = get_assigned_name(st)
+                if m_n and m_n.strip().upper() != "OTHER":
+                    val_obj = None
+                    if isinstance(st, ast.Assign) and isinstance(st.value, ast.Constant):
+                        val_obj = st.value.value
+                    elif isinstance(st, ast.AnnAssign) and st.value and isinstance(st.value, ast.Constant):
+                        val_obj = st.value.value
+                    norm_v = str(val_obj if val_obj is not None else m_n).strip().lower()
+                    if norm_v and norm_v != "other":
+                        m_vals.add(norm_v)
+            enum_member_vals[en_name] = m_vals
+
+        enum_alias_map: Dict[str, str] = {}
+        for i_en in range(len(enum_names_list)):
+            primary_en = enum_names_list[i_en]
+            if primary_en not in enums_by_name:
+                continue
+            for j_en in range(i_en + 1, len(enum_names_list)):
+                sec_en = enum_names_list[j_en]
+                if sec_en not in enums_by_name:
+                    continue
+                ct_a = enum_core_tokens[primary_en]
+                ct_b = enum_core_tokens[sec_en]
+                union_ct = ct_a | ct_b
+                name_sim = len(ct_a & ct_b) / len(union_ct) if union_ct else 0.0
+                exact_core = bool(ct_a and ct_a == ct_b)
+
+                mv_a = enum_member_vals[primary_en]
+                mv_b = enum_member_vals[sec_en]
+                shared_mv = len(mv_a & mv_b)
+                min_mv = min(len(mv_a), len(mv_b))
+                mv_containment = shared_mv / max(1, min_mv) if min_mv > 0 else 0.0
+
+                if (exact_core and shared_mv >= 1) or (mv_containment >= 0.60 and shared_mv >= 2 and name_sim >= 0.50):
+                    sec_node = enums_by_name.pop(sec_en)
+                    existing_m = {
+                        get_assigned_name(st)
+                        for st in enums_by_name[primary_en].body
+                        if get_assigned_name(st) is not None
+                    }
+                    for st in sec_node.body:
+                        m_n = get_assigned_name(st)
+                        if m_n and m_n not in existing_m:
+                            enums_by_name[primary_en].body.append(st)
+                            existing_m.add(m_n)
+                    enum_member_vals[primary_en] |= mv_b
+                    enum_alias_map[sec_en] = primary_en
+                    _log_sanitization_detail(
+                        context_label=context_label,
+                        class_name=primary_en,
+                        class_kind="Enum (Synonymous Merge)",
+                        kept_count=len(existing_m),
+                        stripped_items=[f"{sec_en} -> {primary_en}"],
+                        extra_note=f"Merged synonymous Enum '{sec_en}' into '{primary_en}'.",
+                    )
+
+        if enum_alias_map:
+            class _EnumAliasRewriter(ast.NodeTransformer):
+                def visit_Name(self, n: ast.Name) -> ast.AST:
+                    if isinstance(n.ctx, ast.Load) and n.id in enum_alias_map:
+                        return ast.copy_location(ast.Name(id=enum_alias_map[n.id], ctx=ast.Load()), n)
+                    return n
+
+                def visit_Constant(self, n: ast.Constant) -> ast.AST:
+                    if isinstance(n.value, str) and n.value in enum_alias_map:
+                        return ast.copy_location(ast.Constant(value=enum_alias_map[n.value]), n)
+                    return n
+
+            en_rewriter = _EnumAliasRewriter()
+            for m_node in models_by_name.values():
+                for st in m_node.body:
+                    if isinstance(st, ast.AnnAssign) and st.annotation is not None:
+                        st.annotation = en_rewriter.visit(st.annotation)
 
     # Disambiguate Enum vs BaseModel name collisions
     if getattr(ast_cfg, "DISAMBIGUATE_ENUM_BASEMODEL_COLLISIONS", True):

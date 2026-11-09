@@ -17,6 +17,14 @@ class RawTriple(BaseModel):
     theme_association: str = Field(default="Other", description="Mapped Master Theme title or 'Other'.")
     source_quote: str = Field(default="", description="Verbatim sentence from the source text.")
     source_document: Optional[str] = Field(default=None, description="Identifier of the source document.")
+    surface_subject: Optional[str] = Field(
+        default=None,
+        description="Pre-lifted normalized surface subject when taxonomic lifting generalized the subject.",
+    )
+    surface_object: Optional[str] = Field(
+        default=None,
+        description="Pre-lifted normalized surface object when taxonomic lifting generalized the object.",
+    )
 
     @model_validator(mode="before")
     @classmethod

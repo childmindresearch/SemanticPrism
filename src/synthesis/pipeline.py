@@ -1347,6 +1347,124 @@ class SynthesisPipeline:
             "everyone", "everything", "other", "none",
         }
 
+        # Load upstream Stage 2 taxonomic maps (surface hyponym -> lifted hypernym) if available
+        refinement_dir = Path(self.outputs_dir) / "02_refinement"
+        global_hypernym_to_hyponyms: Dict[str, List[str]] = defaultdict(list)
+        for tax_filename in ("taxonomic_map.json", "subject_taxonomic_map.json", "object_taxonomic_map.json"):
+            tax_path = refinement_dir / tax_filename
+            if tax_path.exists():
+                try:
+                    raw_tax = json.loads(tax_path.read_text(encoding="utf-8"))
+                    if isinstance(raw_tax, dict):
+                        for surf_term, lifted_term in raw_tax.items():
+                            s_clean = str(surf_term).strip()
+                            l_clean = str(lifted_term).strip()
+                            if not s_clean or not l_clean:
+                                continue
+                            if s_clean.lower() == l_clean.lower():
+                                continue
+                            if len(s_clean.split()) <= 4 and len(s_clean) <= 35:
+                                l_key = l_clean.lower()
+                                if s_clean.lower() not in {x.lower() for x in global_hypernym_to_hyponyms[l_key]}:
+                                    global_hypernym_to_hyponyms[l_key].append(s_clean)
+                except Exception:
+                    pass
+
+        def _is_concise_categorical_value(val: str) -> bool:
+            v = str(val).strip()
+            if not v or len(v) <= 1 or len(v) > 35:
+                return False
+            v_lower = v.lower()
+            if v_lower in closed_class_pronouns or v_lower.isdigit():
+                return False
+            if not any(ch.isalpha() for ch in v):
+                return False
+            words = [w for w in re.split(r"[\s_-]+", v) if w]
+            return 1 <= len(words) <= 4
+
+        def extract_candidate_categorical_enums(
+            target_nodes: List[str],
+            triplets: List[dict],
+            max_categories: int = 10,
+            max_values_per_category: int = 12,
+        ) -> Dict[str, List[str]]:
+            """
+            Mines optional, corpus-derived categorical value sets from:
+              1. Stage 2 taxonomic hyponym -> hypernym groupings observed in the community.
+              2. Recurring (subject, predicate) -> multiple concise object groupings in community triplets.
+            Returned candidates serve as reference context alongside thematic_observations.
+            """
+            target_nodes_norm = {str(n).lower().strip(): str(n).strip() for n in target_nodes if str(n).strip()}
+            quote_blob_lower = " ".join(str(tr.get("source_quote", "")).lower() for tr in triplets)
+
+            # 1. Collect surface hyponyms per canonical hypernym in this community
+            hypernym_surface_counts: Dict[str, Counter] = defaultdict(Counter)
+            for tr in triplets:
+                for canon_key, surf_key in (("subject", "surface_subject"), ("object", "surface_object")):
+                    canon_val = str(tr.get(canon_key, "")).strip().lower()
+                    surf_val = str(tr.get(surf_key) or "").strip()
+                    if canon_val in target_nodes_norm and _is_concise_categorical_value(surf_val):
+                        if surf_val.lower() != canon_val:
+                            hypernym_surface_counts[canon_val][surf_val] += 2
+
+            for nk in target_nodes_norm:
+                for hyponym in global_hypernym_to_hyponyms.get(nk, []):
+                    if _is_concise_categorical_value(hyponym) and hyponym.lower() != nk:
+                        # Prefer hyponyms that actually appear in this community's quotes
+                        weight = 2 if hyponym.lower() in quote_blob_lower else 1
+                        hypernym_surface_counts[nk][hyponym] += weight
+
+            # 2. Collect multi-valued (subject, predicate) -> concise objects within community triplets
+            sp_object_counts: Dict[Tuple[str, str], Counter] = defaultdict(Counter)
+            for tr in triplets:
+                s_raw = str(tr.get("subject", "")).strip()
+                p_raw = str(tr.get("predicate", "")).strip()
+                o_raw = str(tr.get("object", "")).strip()
+                s_low = s_raw.lower()
+                if s_low in target_nodes_norm and _is_concise_categorical_value(o_raw) and o_raw.lower() != s_low:
+                    if 1 <= len(p_raw.split()) <= 3:
+                        sp_object_counts[(target_nodes_norm[s_low], p_raw)][o_raw] += 1
+
+            scored_candidates: List[Tuple[float, str, List[str]]] = []
+
+            for nk, surf_counter in hypernym_surface_counts.items():
+                # Deduplicate case-insensitively while ordering by frequency
+                seen_lower: set = set()
+                distinct_vals: List[str] = []
+                for val, _ in surf_counter.most_common():
+                    vl = val.lower().strip()
+                    if vl not in seen_lower:
+                        seen_lower.add(vl)
+                        distinct_vals.append(val)
+                    if len(distinct_vals) >= max_values_per_category:
+                        break
+                if 2 <= len(distinct_vals) <= max_values_per_category:
+                    in_quote_hits = sum(1 for v in distinct_vals if v.lower() in quote_blob_lower)
+                    score = float(sum(surf_counter.values())) + 1.5 * in_quote_hits
+                    scored_candidates.append((score, target_nodes_norm[nk], distinct_vals))
+
+            for (subj_label, pred_label), obj_counter in sp_object_counts.items():
+                seen_lower = set()
+                distinct_objs: List[str] = []
+                for val, _ in obj_counter.most_common():
+                    vl = val.lower().strip()
+                    if vl not in seen_lower:
+                        seen_lower.add(vl)
+                        distinct_objs.append(val)
+                    if len(distinct_objs) >= max_values_per_category:
+                        break
+                if 3 <= len(distinct_objs) <= max_values_per_category:
+                    cat_key = f"{subj_label} [{pred_label}]"
+                    score = float(sum(obj_counter.values())) + len(distinct_objs)
+                    scored_candidates.append((score, cat_key, distinct_objs))
+
+            scored_candidates.sort(key=lambda x: x[0], reverse=True)
+            candidate_enums: Dict[str, List[str]] = {}
+            for _, cat_label, vals in scored_candidates[:max_categories]:
+                if cat_label not in candidate_enums:
+                    candidate_enums[cat_label] = vals
+            return candidate_enums
+
         def extract_top_domain_terms(
             target_nodes: List[str],
             triplets: List[dict],
@@ -1446,6 +1564,7 @@ class SynthesisPipeline:
         ) -> Tuple[str, List[str]]:
             capped_subset = subset[:max_triplets_per_target] if max_triplets_per_target > 0 else subset
             top_terms = extract_top_domain_terms(target_nodes, capped_subset, top_k=top_domain_terms_count)
+            candidate_enums = extract_candidate_categorical_enums(target_nodes, capped_subset)
             observations = extract_thematic_observations(
                 capped_subset, target_nodes, max_sentences=max_sentences_per_target
             )
@@ -1484,8 +1603,10 @@ class SynthesisPipeline:
                 "community_id": target_id,
                 "target_domain_focus": domain_focus,
                 "top_domain_terms": top_terms,
-                "thematic_observations": observations,
             }
+            if candidate_enums:
+                payload_dict["candidate_categorical_enums"] = candidate_enums
+            payload_dict["thematic_observations"] = observations
             if merged_from and len(merged_from) > 1:
                 payload_dict["consolidated_sub_communities"] = merged_from
             return json.dumps(payload_dict, indent=2), top_terms

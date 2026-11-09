@@ -1445,6 +1445,11 @@ class RefinementPipeline:
             if final_obj is None:
                 final_obj = lower_obj_tax.get(norm_obj.lower(), norm_obj)
 
+            if norm_subj and final_subj and norm_subj.strip().lower() != final_subj.strip().lower():
+                t.surface_subject = norm_subj
+            if norm_obj and final_obj and norm_obj.strip().lower() != final_obj.strip().lower():
+                t.surface_object = norm_obj
+
             t.subject = final_subj
             t.predicate = final_pred
             t.object = final_obj
