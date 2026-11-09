@@ -6,15 +6,16 @@ Verbatim Chunk Consolidation, and Two-Pass Hardware-Batched Extraction via Prism
 from __future__ import annotations
 
 from collections import defaultdict
-from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
+import gc
 import json
 import logging
 import os
 from pathlib import Path
 import re
 import sys
+import traceback
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 
 # Prevent PyTorch CUDA allocator fragmentation
@@ -457,31 +458,69 @@ def merge_pydantic_instances(
 # MAIN STAGE 5 PIPELINE ORCHESTRATOR (POWERED BY PRISMRUNNER)
 # ============================================================================
 
-@contextmanager
-def _with_hf_offload_folder(offload_dir: Path):
-    """Temporarily injects `offload_folder` into HuggingFace `from_pretrained` calls when `device_map` is used."""
-    offload_dir.mkdir(parents=True, exist_ok=True)
-    patched_classes = []
+def _get_gpu_vram_summary() -> str:
+    """Returns a concise summary of active accelerator memory (free/total VRAM) for diagnostics."""
     try:
-        import transformers as _tf
-        for cls_name in ("AutoModelForCausalLM", "AutoModelForImageTextToText", "AutoModelForMultimodalLM"):
-            target_cls = getattr(_tf, cls_name, None)
-            if target_cls is not None and hasattr(target_cls, "from_pretrained"):
-                orig_bound = target_cls.from_pretrained
-                orig_func = getattr(orig_bound, "__func__", None)
-                if orig_func is not None:
-                    def _make_patched(fn):
-                        def _patched(cls, *args, **kwargs):
-                            if kwargs.get("device_map") is not None and "offload_folder" not in kwargs:
-                                kwargs["offload_folder"] = str(offload_dir)
-                            return fn(cls, *args, **kwargs)
-                        return classmethod(_patched)
-                    target_cls.from_pretrained = _make_patched(orig_func)
-                    patched_classes.append((target_cls, orig_func))
-        yield
-    finally:
-        for target_cls, orig_func in patched_classes:
-            target_cls.from_pretrained = classmethod(orig_func)
+        import torch
+        if torch.cuda.is_available():
+            dev_idx = torch.cuda.current_device()
+            dev_name = torch.cuda.get_device_name(dev_idx)
+            free_b, total_b = torch.cuda.mem_get_info(dev_idx)
+            return f"CUDA GPU '{dev_name}' ({free_b / (1024**3):.1f} GB free / {total_b / (1024**3):.1f} GB total)"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "Apple Silicon (MPS Unified Memory)"
+    except Exception:
+        pass
+    return "CPU Host Memory"
+
+
+def _purge_failed_model_vram(prism_obj: Any, exc: Optional[BaseException] = None) -> str:
+    """
+    Completely releases partially loaded model tensors from GPU/CPU memory after a failed
+    `from_pretrained` call by clearing exception traceback frames (`traceback.clear_frames`)
+    before invoking garbage collection and CUDA/MPS cache flushing.
+    """
+    if prism_obj is not None:
+        prism_obj.engine = None
+        prism_obj.model = None
+        prism_obj.tokenizer = None
+    if exc is not None and getattr(exc, "__traceback__", None) is not None:
+        try:
+            traceback.clear_frames(exc.__traceback__)
+        except Exception:
+            pass
+    gc.collect()
+    gc.collect()
+    clear_device_memory()
+    return _get_gpu_vram_summary()
+
+
+def _validate_no_meta_or_disk_offload(prism_obj: Any, model_label: str) -> None:
+    """
+    Verifies that the loaded model has no parameters on the PyTorch 'meta' (disk-offloaded)
+    device, which would otherwise fail during `model.generate()` with
+    `RuntimeError: Tensor.item() cannot be called on meta tensors`.
+    """
+    dev_str = str(getattr(prism_obj, "device", "") or "")
+    if dev_str.startswith("meta"):
+        raise RuntimeError(
+            f"Model '{model_label}' spilled onto the 'meta' (disk offload) device due to insufficient GPU VRAM."
+        )
+    model = getattr(prism_obj, "model", None)
+    if model is not None:
+        hf_map = getattr(model, "hf_device_map", None)
+        if isinstance(hf_map, dict):
+            offloaded_modules = [k for k, v in hf_map.items() if str(v) in ("disk", "meta")]
+            if offloaded_modules:
+                raise RuntimeError(
+                    f"Model '{model_label}' had {len(offloaded_modules)} module(s) offloaded to disk/meta "
+                    f"(e.g. {offloaded_modules[:3]}) due to insufficient GPU VRAM."
+                )
+        for param in model.parameters():
+            if getattr(param, "is_meta", False) or (getattr(param, "device", None) is not None and param.device.type == "meta"):
+                raise RuntimeError(
+                    f"Model '{model_label}' has parameters on the 'meta' device due to insufficient GPU VRAM."
+                )
 
 
 class SemanticPrismStage5Pipeline:
@@ -530,6 +569,13 @@ class SemanticPrismStage5Pipeline:
         drop_empty_tables: bool = True,
     ):
         self.model_name = model_name
+        self.configured_model_name: str = model_name
+        self.fallback_used: bool = False
+        self.fallback_reason: Optional[str] = None
+        self.fallback_history: List[str] = []
+        self.active_quantization: str = (
+            "4-bit NF4" if load_in_4bit else ("8-bit" if load_in_8bit else f"native ({torch_dtype})")
+        )
         self.device = device
         self.torch_dtype = torch_dtype
         self.load_in_4bit = load_in_4bit
@@ -668,61 +714,138 @@ class SemanticPrismStage5Pipeline:
         )
         return target_schemas
 
+    def _save_model_execution_metadata(self) -> None:
+        """Saves Stage 5 model provenance & fallback details to `outputs/05_extraction/model_execution_metadata.json`."""
+        meta_path = self.stage5_dir / "model_execution_metadata.json"
+        meta_payload = {
+            "stage": "stage_5_mapping",
+            "configured_model": self.configured_model_name,
+            "active_model": self.model_name,
+            "quantization_or_dtype": self.active_quantization,
+            "device": str(getattr(self.prism, "device", self.device)),
+            "effective_context_window": getattr(self.prism, "context_window", 32768),
+            "fallback_used": self.fallback_used,
+            "fallback_reason": self.fallback_reason,
+            "fallback_history": self.fallback_history,
+            "timestamp": datetime.now().isoformat(),
+        }
+        try:
+            with open(meta_path, "w", encoding="utf-8") as mf:
+                json.dump(meta_payload, mf, indent=2)
+        except Exception:
+            pass
+
     def _ensure_engine_loaded(self, dry_run: bool = False) -> None:
-        """Ensures the PrismPipeline engine is loaded with automatic 4-bit and offload_folder resilience."""
-        if dry_run or self.prism.engine is not None:
+        """
+        Ensures the PrismPipeline engine is loaded onto a valid accelerator device (never 'meta'/disk).
+        If the primary model exceeds available GPU VRAM, explicitly purges traceback frames
+        to free 100% of partially allocated GPU tensors before executing the fallback chain.
+        """
+        if dry_run:
+            self._save_model_execution_metadata()
+            return
+        if self.prism.engine is not None:
             return
         if self.manage_vram:
             clear_device_memory()
-        self._log("Phase 3: Engine Init", f"Loading LLM '{self.model_name}' onto device...")
-        offload_dir = self.outputs_dir / ".offload_cache"
-        try:
+        vram_info = _get_gpu_vram_summary()
+        self._log("Phase 3: Engine Init", f"Loading LLM '{self.model_name}' [{vram_info}]...")
+
+        def _try_load(candidate_model: str, use_4bit: bool) -> None:
+            self.prism.config.setdefault("model", {})["name"] = candidate_model
+            self.prism.config["model"]["load_in_4bit"] = use_4bit
             self.prism.init_engine(
+                model_name=candidate_model,
                 batch_size=self.batch_size,
                 max_new_tokens=self.max_new_tokens,
                 temperature=self.temperature,
                 repetition_penalty=self.repetition_penalty,
             )
+            _validate_no_meta_or_disk_offload(self.prism, candidate_model)
+
+        try:
+            _try_load(self.model_name, self.load_in_4bit)
         except Exception as load_err:
-            err_str = str(load_err).lower()
-            is_mem_or_offload = any(
-                k in err_str for k in ("offload_folder", "offloaded to the disk", "out of memory", "cuda error")
+            primary_err_msg = str(load_err).strip()
+            vram_after = _purge_failed_model_vram(self.prism, load_err)
+            del load_err
+            self.fallback_history.append(
+                f"Primary model '{self.configured_model_name}' (4bit={self.load_in_4bit}) failed: {primary_err_msg}"
             )
+            self._log(
+                "Phase 3: Engine Init",
+                f"Warning: Primary model '{self.configured_model_name}' could not fit on device ({primary_err_msg}). "
+                f"VRAM after cleanup: {vram_after}",
+            )
+
             loaded = False
-            if is_mem_or_offload and not self.prism.config.get("model", {}).get("load_in_4bit", False):
+            lower_cfg = self.configured_model_name.lower()
+            is_moe = "moe" in lower_cfg or "-a3b" in lower_cfg
+
+            if not self.load_in_4bit and not is_moe:
                 self._log(
                     "Phase 3: Engine Init",
-                    f"Model '{self.model_name}' exceeded device memory in default precision ({load_err}); "
-                    "retrying with 4-bit quantization (load_in_4bit=True)...",
+                    f"Retrying '{self.configured_model_name}' with 4-bit quantization (load_in_4bit=True)...",
                 )
-                if self.manage_vram:
-                    clear_device_memory()
-                self.prism.config.setdefault("model", {})["load_in_4bit"] = True
                 try:
-                    with _with_hf_offload_folder(offload_dir):
-                        self.prism.init_engine(
-                            batch_size=self.batch_size,
-                            max_new_tokens=self.max_new_tokens,
-                            temperature=self.temperature,
-                            repetition_penalty=self.repetition_penalty,
-                        )
+                    _try_load(self.configured_model_name, use_4bit=True)
                     loaded = True
-                except Exception as q4_err:
-                    self._log("Phase 3: Engine Init", f"4-bit load attempt failed ({q4_err}).")
-                    self.prism.config["model"]["load_in_4bit"] = self.load_in_4bit
-                    if self.manage_vram:
-                        clear_device_memory()
-            if not loaded:
-                self._log("Phase 3: Engine Init", f"Retrying '{self.model_name}' with offload_folder={offload_dir}...")
-                if self.manage_vram:
-                    clear_device_memory()
-                with _with_hf_offload_folder(offload_dir):
-                    self.prism.init_engine(
-                        batch_size=self.batch_size,
-                        max_new_tokens=self.max_new_tokens,
-                        temperature=self.temperature,
-                        repetition_penalty=self.repetition_penalty,
+                    self.model_name = self.configured_model_name
+                    self.fallback_used = True
+                    self.active_quantization = "4-bit NF4 (auto-fallback)"
+                    self.fallback_reason = (
+                        f"Configured model '{self.configured_model_name}' exceeded GPU VRAM in default precision "
+                        f"({primary_err_msg}); automatically loaded in 4-bit NF4 quantization."
                     )
+                except Exception as q4_err:
+                    q4_msg = str(q4_err).strip()
+                    vram_after = _purge_failed_model_vram(self.prism, q4_err)
+                    del q4_err
+                    self.fallback_history.append(f"4-bit '{self.configured_model_name}' failed: {q4_msg}")
+                    self._log("Phase 3: Engine Init", f"4-bit load attempt failed ({q4_msg}). VRAM: {vram_after}")
+
+            if not loaded:
+                for fb_model, fb_desc in (
+                    ("Qwen/Qwen2.5-14B-Instruct", "14B dense fallback (~29 GB VRAM)"),
+                    ("Qwen/Qwen2.5-7B-Instruct", "7B dense fallback (~15 GB VRAM)"),
+                    ("Qwen/Qwen2.5-3B-Instruct", "3B lightweight fallback (~6 GB VRAM)"),
+                ):
+                    if fb_model == self.configured_model_name:
+                        continue
+                    self._log("Phase 3: Engine Init", f"Attempting fallback model '{fb_model}' ({fb_desc})...")
+                    try:
+                        _try_load(fb_model, use_4bit=self.load_in_4bit)
+                        loaded = True
+                        self.model_name = fb_model
+                        self.fallback_used = True
+                        self.active_quantization = (
+                            "4-bit NF4" if self.load_in_4bit else ("8-bit" if self.load_in_8bit else f"native ({self.torch_dtype})")
+                        )
+                        self.fallback_reason = (
+                            f"Configured model '{self.configured_model_name}' failed to load ({primary_err_msg}); "
+                            f"automatically fell back to '{fb_model}' ({fb_desc})."
+                        )
+                        break
+                    except Exception as fb_err:
+                        fb_msg = str(fb_err).strip()
+                        vram_after = _purge_failed_model_vram(self.prism, fb_err)
+                        del fb_err
+                        self.fallback_history.append(f"Fallback '{fb_model}' failed: {fb_msg}")
+                        self._log("Phase 3: Engine Init", f"Fallback '{fb_model}' failed ({fb_msg}). VRAM: {vram_after}")
+
+            if not loaded:
+                raise RuntimeError(
+                    f"Stage 5 could not load configured model '{self.configured_model_name}' or any fallback model.\n"
+                    f"History:\n  - " + "\n  - ".join(self.fallback_history)
+                )
+
+            self._log(
+                "STAGE 5 MODEL FALLBACK NOTICE",
+                f"Configured='{self.configured_model_name}' -> Active='{self.model_name}' [{self.active_quantization}]. "
+                f"Reason: {self.fallback_reason}",
+            )
+
+        self._save_model_execution_metadata()
 
     def _safe_chunk_document(self, text: str) -> List[str]:
         """

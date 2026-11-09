@@ -183,6 +183,28 @@ class RefinementPipeline:
                 },
             )
 
+        try:
+            with open(self.out_dir / "model_execution_metadata.json", "w", encoding="utf-8") as mf:
+                json.dump(
+                    {
+                        "stage": "stage_2_refinement",
+                        "configured_model": self.model_name,
+                        "active_model": self.model_name,
+                        "embedding_model": self.embedding_model,
+                        "quantization_or_dtype": (
+                            "4-bit NF4"
+                            if self.load_in_4bit
+                            else ("8-bit" if self.load_in_8bit else f"native ({self.torch_dtype})")
+                        ),
+                        "fallback_used": False,
+                        "fallback_reason": None,
+                    },
+                    mf,
+                    indent=2,
+                )
+        except Exception:
+            pass
+
     def _resolve_master_domain(self) -> str:
         """Resolve master_domain from INPUT_DIR/master_themes.json (falling back to 'General Subjects')."""
         candidates = [self.in_dir / "master_themes.json", REPO_ROOT / self.in_dir / "master_themes.json"]

@@ -67,16 +67,87 @@ def _extract_ast_classes(py_path: Path) -> Tuple[List[str], List[str]]:
     return basemodels, enums
 
 
+def _format_stage_model_line(meta: Dict[str, Any], default_model: str, extra_info: str = "") -> str:
+    """Formats a human-readable model status line, highlighting fallback usage if any."""
+    active = meta.get("active_model") or default_model
+    configured = meta.get("configured_model") or default_model
+    quant = meta.get("quantization") or "default"
+    fallback_used = bool(meta.get("fallback_used", False))
+    fallback_reason = meta.get("fallback_reason")
+    suffix = f" ({extra_info})" if extra_info else ""
+    if fallback_used:
+        reason_str = f" — Reason: {fallback_reason}" if fallback_reason else ""
+        return (
+            f"{active} [quantization: {quant}]{suffix} "
+            f"⚠️ FALLBACK USED (configured primary: '{configured}'{reason_str})"
+        )
+    return f"{active} [quantization: {quant}]{suffix}"
+
+
 def generate_pipeline_summary(
     outputs_dir: Path = Path("outputs"),
     total_duration: Optional[float] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
-    Collects key metrics and artifacts across Stages 1–4 and writes:
+    Collects key metrics, model provenance, and artifacts across Stages 1–5 and writes:
       - outputs/pipeline_summary.txt
       - outputs/pipeline_summary.json
     """
     outputs_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        from model_config import CODER_MODEL, EMBEDDING_MODEL, MODEL_NAME
+    except Exception:
+        MODEL_NAME = "Qwen/Qwen3.6-27B"
+        EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+        CODER_MODEL = "Qwen/Qwen2.5-Coder-14B-Instruct"
+
+    # =========================================================================
+    # MODEL EXECUTION METADATA ACROSS STAGES
+    # =========================================================================
+    s1_model_meta = _load_json_safe(outputs_dir / "01_extraction" / "model_execution_metadata.json") or {
+        "stage": "Stage 1: Triplet Extraction & Theme Discovery",
+        "configured_model": MODEL_NAME,
+        "active_model": MODEL_NAME,
+        "quantization": "bfloat16 (default)",
+        "fallback_used": False,
+        "fallback_reason": None,
+    }
+    s2_model_meta = _load_json_safe(outputs_dir / "02_refinement" / "model_execution_metadata.json") or {
+        "stage": "Stage 2: Vector Clustering & Taxonomic Lifting",
+        "configured_model": MODEL_NAME,
+        "active_model": MODEL_NAME,
+        "embedding_model": EMBEDDING_MODEL,
+        "quantization": "bfloat16 (default)",
+        "fallback_used": False,
+        "fallback_reason": None,
+    }
+    s3_model_meta = {
+        "stage": "Stage 3: Topology Graphing & Structural Clustering",
+        "configured_model": "NetworkX / Leiden (Deterministic Graph Topology — No LLM)",
+        "active_model": "NetworkX / Leiden (Deterministic Graph Topology — No LLM)",
+        "quantization": "N/A",
+        "fallback_used": False,
+        "fallback_reason": None,
+    }
+    s4_model_meta = _load_json_safe(outputs_dir / "04_synthesis" / "logs" / "model_execution_metadata.json") or {
+        "stage": "Stage 4: Pydantic Schema Synthesis",
+        "configured_model": CODER_MODEL,
+        "active_model": CODER_MODEL,
+        "quantization": "bfloat16 (default)",
+        "fallback_used": False,
+        "fallback_reason": None,
+        "fallback_history": [],
+    }
+    s5_model_meta = _load_json_safe(outputs_dir / "05_extraction" / "model_execution_metadata.json") or {
+        "stage": "Stage 5: Schema-Driven Extraction & Aggregation",
+        "configured_model": MODEL_NAME,
+        "active_model": MODEL_NAME,
+        "quantization": "bfloat16 (default)",
+        "fallback_used": False,
+        "fallback_reason": None,
+        "fallback_history": [],
+    }
 
     # =========================================================================
     # STAGE 1 METRICS
@@ -260,10 +331,31 @@ def generate_pipeline_summary(
     # =========================================================================
     # BUILD HUMAN-READABLE & JSON SUMMARY
     # =========================================================================
+    s1_model_line = _format_stage_model_line(s1_model_meta, MODEL_NAME)
+    s2_embed = s2_model_meta.get("embedding_model") or EMBEDDING_MODEL
+    s2_model_line = _format_stage_model_line(
+        s2_model_meta, MODEL_NAME, extra_info=f"Embedding Model: {s2_embed}"
+    )
+    s3_model_line = "NetworkX / Leiden (Deterministic Graph Topology — No LLM)"
+    s4_model_line = _format_stage_model_line(s4_model_meta, CODER_MODEL)
+    s5_model_line = _format_stage_model_line(s5_model_meta, MODEL_NAME)
+
     summary_data: Dict[str, Any] = {
         "generated_at": datetime.now().isoformat(),
         "total_execution_seconds": round(total_duration, 2) if total_duration is not None else None,
+        "models_used": {
+            "stage_1_extraction": s1_model_meta,
+            "stage_2_refinement": s2_model_meta,
+            "stage_3_topology": s3_model_meta,
+            "stage_4_synthesis": s4_model_meta,
+            "stage_5_mapping": s5_model_meta,
+        },
         "stage_1_extraction": {
+            "model_used": s1_model_meta.get("active_model", MODEL_NAME),
+            "configured_model": s1_model_meta.get("configured_model", MODEL_NAME),
+            "quantization": s1_model_meta.get("quantization", "bfloat16 (default)"),
+            "fallback_used": bool(s1_model_meta.get("fallback_used", False)),
+            "fallback_reason": s1_model_meta.get("fallback_reason"),
             "documents_ingested": docs_ingested_count,
             "themes_identified": themes_identified_count,
             "master_themes_consolidated_count": len(master_themes_list),
@@ -272,6 +364,12 @@ def generate_pipeline_summary(
             "triples_extracted": triples_extracted_count,
         },
         "stage_2_refinement": {
+            "model_used": s2_model_meta.get("active_model", MODEL_NAME),
+            "configured_model": s2_model_meta.get("configured_model", MODEL_NAME),
+            "embedding_model_used": s2_embed,
+            "quantization": s2_model_meta.get("quantization", "bfloat16 (default)"),
+            "fallback_used": bool(s2_model_meta.get("fallback_used", False)),
+            "fallback_reason": s2_model_meta.get("fallback_reason"),
             "subjects_hypernym_lifted": subjects_lifted_count,
             "subjects_unique_hypernyms": subjects_unique_hypernyms,
             "predicates_hypernym_lifted": predicates_lifted_count,
@@ -281,6 +379,7 @@ def generate_pipeline_summary(
             "refined_triplets_total": len(refined_triplets) if isinstance(refined_triplets, list) else 0,
         },
         "stage_3_topology": {
+            "model_used": s3_model_line,
             "raw_graph": {
                 "total_nodes": raw_nodes,
                 "total_directed_edges": raw_dir_edges,
@@ -299,6 +398,12 @@ def generate_pipeline_summary(
             },
         },
         "stage_4_synthesis": {
+            "model_used": s4_model_meta.get("active_model", CODER_MODEL),
+            "configured_model": s4_model_meta.get("configured_model", CODER_MODEL),
+            "quantization": s4_model_meta.get("quantization", "bfloat16 (default)"),
+            "fallback_used": bool(s4_model_meta.get("fallback_used", False)),
+            "fallback_reason": s4_model_meta.get("fallback_reason"),
+            "fallback_history": s4_model_meta.get("fallback_history", []),
             "final_schemas_count": len(schema_names),
             "final_schemas": schema_names,
             "final_basemodels_count": len(final_basemodels),
@@ -307,6 +412,12 @@ def generate_pipeline_summary(
             "consolidated_enums": final_enums,
         },
         "stage_5_mapping": {
+            "model_used": s5_model_meta.get("active_model", MODEL_NAME),
+            "configured_model": s5_model_meta.get("configured_model", MODEL_NAME),
+            "quantization": s5_model_meta.get("quantization", "bfloat16 (default)"),
+            "fallback_used": bool(s5_model_meta.get("fallback_used", False)),
+            "fallback_reason": s5_model_meta.get("fallback_reason"),
+            "fallback_history": s5_model_meta.get("fallback_history", []),
             "documents_processed": s5_docs_processed,
             "total_schema_extractions": s5_total_extractions,
             "populated_schema_extractions": s5_populated_extractions,
@@ -330,8 +441,18 @@ def generate_pipeline_summary(
     lines.append(f"Generated At: {summary_data['generated_at']}")
     lines.append("")
 
+    # Models Used Section
+    lines.append("Models Used Across Pipeline:")
+    lines.append(f"  - Stage 1 (Extraction):  {s1_model_line}")
+    lines.append(f"  - Stage 2 (Refinement):  {s2_model_line}")
+    lines.append(f"  - Stage 3 (Topology):    {s3_model_line}")
+    lines.append(f"  - Stage 4 (Synthesis):   {s4_model_line}")
+    lines.append(f"  - Stage 5 (Mapping):     {s5_model_line}")
+    lines.append("")
+
     # Stage 1
     lines.append("Stage 1: Extraction")
+    lines.append(f"  - Model Used: {s1_model_line}")
     lines.append(f"  - {docs_ingested_count} documents ingested")
     lines.append(f"  - {themes_identified_count} themes identified")
     lines.append(f"  - {len(master_themes_list)} master themes consolidated:")
@@ -346,6 +467,7 @@ def generate_pipeline_summary(
 
     # Stage 2
     lines.append("Stage 2: Refinement")
+    lines.append(f"  - Model Used: {s2_model_line}")
     lines.append(
         f"  - {subjects_lifted_count} Subjects hypernym lifted "
         f"(-> {subjects_unique_hypernyms} canonical concepts)"
@@ -363,6 +485,7 @@ def generate_pipeline_summary(
 
     # Stage 3
     lines.append("Stage 3: Topology")
+    lines.append(f"  - Engine Used: {s3_model_line}")
     lines.append("  Original raw graph details:")
     lines.append(f"    - {raw_nodes} total nodes, {raw_dir_edges} total edges ({raw_undir_edges} undirected)")
     lines.append(
@@ -380,6 +503,7 @@ def generate_pipeline_summary(
 
     # Stage 4
     lines.append("Stage 4: Synthesis")
+    lines.append(f"  - Model Used: {s4_model_line}")
     lines.append(f"  - {len(schema_names)} final schemas created:")
     if schema_names:
         for s_name in schema_names:
@@ -396,6 +520,7 @@ def generate_pipeline_summary(
 
     # Stage 5
     lines.append("Stage 5: Schema-Driven Extraction & Aggregation")
+    lines.append(f"  - Model Used: {s5_model_line}")
     lines.append(f"  - {s5_docs_processed} documents processed")
     lines.append(
         f"  - {s5_populated_extractions}/{s5_total_extractions} populated (document, schema) extraction files"
