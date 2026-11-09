@@ -549,7 +549,7 @@ class SemanticPrismStage5Pipeline:
         enable_triage: bool = True,
         triage_threshold: int = 3,
         fallback_on_empty_triage: bool = False,
-        schema_path: Union[str, Path] = "outputs/04_synthesis/schemas/community/master_ontology.py",
+        schema_path: Union[str, Path] = "outputs/04_synthesis/schemas/master_ontology.py",
         target_class_name: Optional[str] = None,
         extract_mode: str = "top_level",
         outputs_dir: Union[str, Path] = "outputs",

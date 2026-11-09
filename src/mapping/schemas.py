@@ -100,8 +100,8 @@ def resolve_schema_path_with_fallbacks(
     out_base = Path(outputs_dir)
     alt_candidates: List[Path] = [
         repo_root / p,
-        out_base / "04_synthesis" / "schemas" / "community" / p.name,
         out_base / "04_synthesis" / "schemas" / p.name,
+        out_base / "04_synthesis" / "schemas" / "community" / p.name,
         repo_root / p.name,
     ]
     if p.suffix == ".py":

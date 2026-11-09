@@ -7,7 +7,7 @@ powered by PrismRunner's local HuggingFace batch inference engine.
 
 Supported Schema Input Modes (SCHEMA_PATH):
   1. Single .py file with multiple Pydantic BaseModel schemas:
-     e.g., "outputs/04_synthesis/schemas/community/master_ontology.py"
+     e.g., "outputs/04_synthesis/schemas/master_ontology.py"
   2. Directory of multiple .py schema files:
      e.g., "outputs/04_synthesis/schemas/community"
 
@@ -97,9 +97,9 @@ TEXT_COLUMN: str = MASTER_TEXT_COLUMN                  # Document text column na
 DOCUMENT_LIMIT: Optional[int] = MASTER_DOCUMENT_LIMIT  # Optional cap on number of documents to process (None = all)
 
 # --- 3. Schema Input Settings (Supports Single .py File OR Directory of .py Files) ---
-# Option 1 (Single file): "outputs/04_synthesis/schemas/community/master_ontology.py" or "outputs/04_synthesis/schemas/community/comprehensive_ontology.py"
+# Option 1 (Single file): "outputs/04_synthesis/schemas/master_ontology.py"
 # Option 2 (Directory)  : "outputs/04_synthesis/schemas/community"
-SCHEMA_PATH: str = "outputs/04_synthesis/schemas/community/master_ontology.py"
+SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"
 TARGET_CLASS_NAME: Optional[str] = None                # Optional single BaseModel class name filter (None = all eligible)
 EXTRACT_MODE: str = "top_level"                        # "top_level" (recommended), "child", or "all"
 

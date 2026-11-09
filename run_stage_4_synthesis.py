@@ -12,7 +12,7 @@ Workflow Phases & Output Artifacts:
   - Phase 1 : Community Path Schema Synthesis (Single Pass from Raw Source Sentence Text)
               * outputs/04_synthesis/schemas/community/<01_module_name>.py ...
   - Phase 2 : Global Schema Consolidation & AST Class Deduplication
-              * outputs/04_synthesis/schemas/community/master_ontology.py
+              * outputs/04_synthesis/schemas/master_ontology.py
               * outputs/04_synthesis/logs/schema_sanitization.log
               * outputs/04_synthesis/logs/synthesis_community_errors.log
 """

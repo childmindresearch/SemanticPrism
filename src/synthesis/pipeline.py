@@ -1632,13 +1632,14 @@ class SynthesisPipeline:
 
             header = self._build_schema_provenance_header()
 
-            # Remove legacy redundant comprehensive_ontology.py if present from an older run
-            legacy_comp = schema_dir / "comprehensive_ontology.py"
-            if legacy_comp.exists():
-                try:
-                    legacy_comp.unlink()
-                except Exception:
-                    pass
+            # Remove any legacy consolidated files inside schemas/community/ to keep community/ strictly for individual modules
+            for legacy_name in ("master_ontology.py", "comprehensive_ontology.py"):
+                legacy_file = schema_dir / legacy_name
+                if legacy_file.exists():
+                    try:
+                        legacy_file.unlink()
+                    except Exception:
+                        pass
 
             # Step 2A: Lossless Deterministic AST Union across all community modules
             combined_raw = "\n\n".join(f["content"] for f in files_list)
@@ -1647,7 +1648,7 @@ class SynthesisPipeline:
                 context_label="master_ontology",
             )
 
-            # Step 2B: Targeted Cross-Community Semantic Duplicate Merge -> master_ontology.py
+            # Step 2B: Targeted Cross-Community Semantic Duplicate Merge -> schemas/master_ontology.py
             try:
                 master_code, merge_notes = detect_and_merge_semantic_duplicate_classes(
                     comprehensive_code=ast_union_code,
@@ -1670,7 +1671,9 @@ class SynthesisPipeline:
                 master_code = ast_union_code
 
             try:
-                out_master = schema_dir / "master_ontology.py"
+                schemas_root_dir = schema_dir.parent
+                schemas_root_dir.mkdir(parents=True, exist_ok=True)
+                out_master = schemas_root_dir / "master_ontology.py"
                 with open(out_master, "w", encoding="utf-8") as f:
                     f.write(f"{header}\n{master_code.lstrip()}")
                 self._checkpoint("Phase 2: Consolidation", "Saved master_ontology.py", out_master)

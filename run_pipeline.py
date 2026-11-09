@@ -271,9 +271,9 @@ def generate_pipeline_summary(
                 seen_en.add(en)
                 per_schema_enums.append(en)
 
-    master_ontology_path = s4_comm_dir / "master_ontology.py"
+    master_ontology_path = outputs_dir / "04_synthesis" / "schemas" / "master_ontology.py"
     if not master_ontology_path.exists():
-        master_ontology_path = s4_comm_dir / "comprehensive_ontology.py"
+        master_ontology_path = s4_comm_dir / "master_ontology.py"
     consolidated_basemodels, consolidated_enums = _extract_ast_classes(master_ontology_path)
     final_basemodels = consolidated_basemodels if consolidated_basemodels else per_schema_basemodels
     final_enums = consolidated_enums if consolidated_enums else per_schema_enums
