@@ -8,10 +8,16 @@ and source document dataset used across the SemanticPrism pipeline:
   - EMBEDDING_MODEL : SentenceTransformer embedding model used in Stage 1, Stage 2, and Stage 3
   - CODER_MODEL     : Generative Coding LLM used in Stage 4 (Pydantic Schema Synthesis)
   - HF_TOKEN        : Optional Hugging Face Hub access token (e.g. "hf_...") for authenticated downloads & higher rate limits
-  - INPUT_PATH      : Source dataset path (.parquet, .csv, .json, .jsonl, or directory of .txt files)
-  - ID_COLUMN       : Column name containing unique document IDs
-  - TEXT_COLUMN     : Column name containing raw document text
-  - DOCUMENT_LIMIT  : Optional cap on number of documents to process (None = process all)
+  - INPUT_PATH            : Stage 1 source dataset path (.parquet, .csv, .json, .jsonl, or directory of .txt files)
+  - ID_COLUMN             : Stage 1 column name containing unique document IDs
+  - TEXT_COLUMN           : Stage 1 column name containing raw document text
+  - DOCUMENT_LIMIT        : Stage 1 optional cap on number of documents to process (None = process all)
+  - STAGE5_INPUT_PATH     : Stage 5 target dataset path for schema-driven extraction (can differ from Stage 1)
+  - STAGE5_ID_COLUMN      : Stage 5 column name containing unique document IDs
+  - STAGE5_TEXT_COLUMN    : Stage 5 column name containing raw document text
+  - STAGE5_DOCUMENT_LIMIT : Stage 5 optional cap on number of documents to extract (None = process all)
+  - STAGE5_SCHEMA_PATH    : Stage 5 target schema file (e.g. master_ontology.py) or directory of .py schemas
+  - STAGE5_EXTRACT_MODE   : Stage 5 schema selection mode ("top_level", "child", or "all")
 
 Recommended Models by GPU VRAM Tier (bfloat16 / float16):
   - 16–24 GB VRAM : MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"  (~15 GB) | CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  (~15 GB)
@@ -70,10 +76,22 @@ CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"    # Stage 4: Pydantic v2 S
 # CODER_MODEL: str = "Qwen/Qwen2.5-Coder-32B-Instruct"
 
 # =============================================================================
-# 3. SOURCE DOCUMENT INPUT SETTINGS (STAGES 1 & 5)
+# 3. STAGE 1 SOURCE DOCUMENT INPUT SETTINGS (ONTOLOGY DISCOVERY)
 # =============================================================================
-INPUT_PATH: str = "inputs/testdocs.parquet"             # Path to input file (.parquet, .csv, .json, .jsonl) or folder of .txt files
-ID_COLUMN: str = "unique_val"                           # Column containing unique document IDs
-TEXT_COLUMN: str = "report"                             # Column containing raw document text
-DOCUMENT_LIMIT: Optional[int] = None                    # Optional cap on number of documents to process (None = all)
+INPUT_PATH: str = "inputs/testdocs.parquet"             # Path to Stage 1 input file (.parquet, .csv, .json, .jsonl) or folder of .txt files
+ID_COLUMN: str = "unique_val"                           # Column containing unique document IDs for Stage 1
+TEXT_COLUMN: str = "report"                             # Column containing raw document text for Stage 1
+DOCUMENT_LIMIT: Optional[int] = None                    # Optional cap on number of documents to process in Stage 1 (None = all)
+
+# =============================================================================
+# 4. STAGE 5 MAPPING & EXTRACTION INPUT SETTINGS (SCHEMA EXTRACTION)
+# =============================================================================
+# Separate dataset, column, and schema settings for Stage 5 (Schema-Driven Extraction).
+# Can point to the same dataset as Stage 1 or a separate target/production corpus.
+STAGE5_INPUT_PATH: str = "inputs/testdocs.parquet"      # Path to Stage 5 input file (.parquet, .csv, .json, .jsonl) or folder of .txt files
+STAGE5_ID_COLUMN: str = "unique_val"                    # Column containing unique document IDs for Stage 5
+STAGE5_TEXT_COLUMN: str = "report"                      # Column containing raw document text for Stage 5
+STAGE5_DOCUMENT_LIMIT: Optional[int] = None             # Optional cap on number of documents to extract in Stage 5 (None = all)
+STAGE5_SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"  # Single .py file (master_ontology.py) or directory (outputs/04_synthesis/schemas/community)
+STAGE5_EXTRACT_MODE: str = "top_level"                  # "top_level" (recommended), "child", or "all"
 

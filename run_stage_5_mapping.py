@@ -50,11 +50,13 @@ if _SIBLING_PRISMRUNNER.exists() and str(_SIBLING_PRISMRUNNER) not in sys.path:
     sys.path.insert(0, str(_SIBLING_PRISMRUNNER))
 
 from model_config import (
-    DOCUMENT_LIMIT as MASTER_DOCUMENT_LIMIT,
-    ID_COLUMN as MASTER_ID_COLUMN,
-    INPUT_PATH as MASTER_INPUT_PATH,
     MODEL_NAME as MASTER_MODEL_NAME,
-    TEXT_COLUMN as MASTER_TEXT_COLUMN,
+    STAGE5_DOCUMENT_LIMIT as MASTER_STAGE5_DOCUMENT_LIMIT,
+    STAGE5_EXTRACT_MODE as MASTER_STAGE5_EXTRACT_MODE,
+    STAGE5_ID_COLUMN as MASTER_STAGE5_ID_COLUMN,
+    STAGE5_INPUT_PATH as MASTER_STAGE5_INPUT_PATH,
+    STAGE5_SCHEMA_PATH as MASTER_STAGE5_SCHEMA_PATH,
+    STAGE5_TEXT_COLUMN as MASTER_STAGE5_TEXT_COLUMN,
 )
 from src.mapping import (
     DataAggregator,
@@ -90,18 +92,18 @@ CONSTRAIN_JSON: bool = True                            # Force JSON '{' prefix &
 MANAGE_VRAM: bool = True                               # Flush and offload GPU/MPS memory after extraction completes
 DRY_RUN: bool = False                                  # Set True to preview prompts without running LLM generation
 
-# --- 2. Corpus Input Settings (Defaults loaded from model_config.py) ---
-INPUT_PATH: str = MASTER_INPUT_PATH                    # .parquet, .csv, .json, .jsonl, DataFrame, or dir of .txt files
-ID_COLUMN: str = MASTER_ID_COLUMN                      # Document ID column name
-TEXT_COLUMN: str = MASTER_TEXT_COLUMN                  # Document text column name
-DOCUMENT_LIMIT: Optional[int] = MASTER_DOCUMENT_LIMIT  # Optional cap on number of documents to process (None = all)
+# --- 2. Corpus Input Settings (Defaults loaded from model_config.py STAGE5_* settings) ---
+INPUT_PATH: str = MASTER_STAGE5_INPUT_PATH                    # .parquet, .csv, .json, .jsonl, DataFrame, or dir of .txt files
+ID_COLUMN: str = MASTER_STAGE5_ID_COLUMN                      # Document ID column name
+TEXT_COLUMN: str = MASTER_STAGE5_TEXT_COLUMN                  # Document text column name
+DOCUMENT_LIMIT: Optional[int] = MASTER_STAGE5_DOCUMENT_LIMIT  # Optional cap on number of documents to process (None = all)
 
 # --- 3. Schema Input Settings (Supports Single .py File OR Directory of .py Files) ---
 # Option 1 (Single file): "outputs/04_synthesis/schemas/master_ontology.py"
 # Option 2 (Directory)  : "outputs/04_synthesis/schemas/community"
-SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"
-TARGET_CLASS_NAME: Optional[str] = None                # Optional single BaseModel class name filter (None = all eligible)
-EXTRACT_MODE: str = "top_level"                        # "top_level" (recommended), "child", or "all"
+SCHEMA_PATH: str = MASTER_STAGE5_SCHEMA_PATH
+TARGET_CLASS_NAME: Optional[str] = None                       # Optional single BaseModel class name filter (None = all eligible)
+EXTRACT_MODE: str = MASTER_STAGE5_EXTRACT_MODE                # "top_level" (recommended), "child", or "all"
 
 # --- 4. Context Window, Chunking & Triage Settings ---
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"           # "auto" = full native model context window, or int cap
