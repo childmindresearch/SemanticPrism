@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ast
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 import json
 import keyword
@@ -77,8 +78,8 @@ LOAD_IN_8BIT: bool = False                             # Enable 8-bit quantizati
 ATTN_IMPLEMENTATION: str = "auto"                      # "auto", "flash_attention_2", "sdpa", or "eager"
 BATCH_SIZE: Union[int, str] = "auto"                   # "auto" (continuous device-relative) or explicit int
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"           # "auto" = full native model context window (e.g. 262,144 tokens), or int cap
-MAX_NEW_TOKENS: int = 16384                            # Max generated tokens per community schema module
-CONSOLIDATION_MAX_NEW_TOKENS: int = 32768              # Max generated tokens for consolidated master ontology
+MAX_NEW_TOKENS: int = 4096                             # Max generated tokens per community schema module
+CONSOLIDATION_MAX_NEW_TOKENS: int = 8192               # Max generated tokens for consolidated master ontology
 TEMPERATURE: float = 0.0                               # 0.0 for deterministic greedy decoding
 REPETITION_PENALTY: float = 1.08                       # Mild penalty to prevent greedy repetition loops
 CONSTRAIN_JSON: bool = True                            # Force JSON '{' prefix & bracket-balanced early stopping
@@ -389,6 +390,33 @@ class TargetResolver:
 # STAGE 4 SYNTHESIS PIPELINE (Powered by PrismRunner)
 # ============================================================================
 
+@contextmanager
+def _with_hf_offload_folder(offload_dir: Path):
+    """Temporarily injects `offload_folder` into HuggingFace `from_pretrained` calls when `device_map` is used."""
+    offload_dir.mkdir(parents=True, exist_ok=True)
+    patched_classes = []
+    try:
+        import transformers as _tf
+        for cls_name in ("AutoModelForCausalLM", "AutoModelForImageTextToText", "AutoModelForMultimodalLM"):
+            target_cls = getattr(_tf, cls_name, None)
+            if target_cls is not None and hasattr(target_cls, "from_pretrained"):
+                orig_bound = target_cls.from_pretrained
+                orig_func = getattr(orig_bound, "__func__", None)
+                if orig_func is not None:
+                    def _make_patched(fn):
+                        def _patched(cls, *args, **kwargs):
+                            if kwargs.get("device_map") is not None and "offload_folder" not in kwargs:
+                                kwargs["offload_folder"] = str(offload_dir)
+                            return fn(cls, *args, **kwargs)
+                        return classmethod(_patched)
+                    target_cls.from_pretrained = _make_patched(orig_func)
+                    patched_classes.append((target_cls, orig_func))
+        yield
+    finally:
+        for target_cls, orig_func in patched_classes:
+            target_cls.from_pretrained = classmethod(orig_func)
+
+
 class SynthesisPipeline:
     """
     Stage 4 Synthesis Pipeline using PrismRunner for batch local LLM execution.
@@ -477,12 +505,95 @@ class SynthesisPipeline:
             if MANAGE_VRAM:
                 clear_device_memory()
             self._checkpoint(phase_label, f"Loading LLM '{self.model_name}' onto device...")
-            self.prism.init_engine(
-                batch_size=BATCH_SIZE,
-                max_new_tokens=MAX_NEW_TOKENS,
-                temperature=TEMPERATURE,
-                repetition_penalty=REPETITION_PENALTY,
-            )
+            offload_dir = Path(self.config.get("directories", {}).get("outputs", OUTPUTS_DIR)) / ".offload_cache"
+            try:
+                self.prism.init_engine(
+                    batch_size=BATCH_SIZE,
+                    max_new_tokens=MAX_NEW_TOKENS,
+                    temperature=TEMPERATURE,
+                    repetition_penalty=REPETITION_PENALTY,
+                )
+            except Exception as load_err:
+                err_str = str(load_err).lower()
+                is_mem_or_offload = any(
+                    k in err_str for k in ("offload_folder", "offloaded to the disk", "out of memory", "cuda error")
+                )
+                loaded = False
+
+                # Tier 1: If full-precision weights spilled to disk or OOM'd, try 4-bit quantization first
+                if is_mem_or_offload and not self.prism.config.get("model", {}).get("load_in_4bit", False):
+                    print(
+                        f"   [Warning] '{self.model_name}' exceeded device memory in default precision ({load_err}). "
+                        "Retrying with 4-bit quantization (load_in_4bit=True)...",
+                        flush=True,
+                    )
+                    if MANAGE_VRAM:
+                        clear_device_memory()
+                    self.prism.config.setdefault("model", {})["load_in_4bit"] = True
+                    try:
+                        with _with_hf_offload_folder(offload_dir):
+                            self.prism.init_engine(
+                                batch_size=BATCH_SIZE,
+                                max_new_tokens=MAX_NEW_TOKENS,
+                                temperature=TEMPERATURE,
+                                repetition_penalty=REPETITION_PENALTY,
+                            )
+                        loaded = True
+                    except Exception as q4_err:
+                        print(f"   [Warning] 4-bit load attempt failed ({q4_err}).", flush=True)
+                        self.prism.config["model"]["load_in_4bit"] = LOAD_IN_4BIT
+                        if MANAGE_VRAM:
+                            clear_device_memory()
+
+                # Tier 2: Fall back to MODEL_NAME from model_config.py (which succeeded in Stages 1 & 2)
+                if not loaded:
+                    fallback_model: Optional[str] = None
+                    try:
+                        from model_config import MODEL_NAME as FALLBACK_STAGE_MODEL
+                        if FALLBACK_STAGE_MODEL and FALLBACK_STAGE_MODEL != self.model_name:
+                            fallback_model = FALLBACK_STAGE_MODEL
+                    except Exception:
+                        pass
+
+                    if fallback_model:
+                        print(
+                            f"   [Warning] Falling back from CODER_MODEL '{self.model_name}' "
+                            f"to MODEL_NAME '{fallback_model}'...",
+                            flush=True,
+                        )
+                        if MANAGE_VRAM:
+                            clear_device_memory()
+                        self.model_name = fallback_model
+                        self.prism.config["model"]["name"] = fallback_model
+                        try:
+                            with _with_hf_offload_folder(offload_dir):
+                                self.prism.init_engine(
+                                    model_name=fallback_model,
+                                    batch_size=BATCH_SIZE,
+                                    max_new_tokens=MAX_NEW_TOKENS,
+                                    temperature=TEMPERATURE,
+                                    repetition_penalty=REPETITION_PENALTY,
+                                )
+                            loaded = True
+                        except Exception as fb_err:
+                            print(f"   [Warning] Fallback model load failed ({fb_err}).", flush=True)
+
+                # Tier 3: Retry original model with explicit offload_folder enabled
+                if not loaded:
+                    print(
+                        f"   [Warning] Retrying '{self.model_name}' with disk offload_folder={offload_dir}...",
+                        flush=True,
+                    )
+                    if MANAGE_VRAM:
+                        clear_device_memory()
+                    with _with_hf_offload_folder(offload_dir):
+                        self.prism.init_engine(
+                            model_name=self.model_name,
+                            batch_size=BATCH_SIZE,
+                            max_new_tokens=MAX_NEW_TOKENS,
+                            temperature=TEMPERATURE,
+                            repetition_penalty=REPETITION_PENALTY,
+                        )
             eff_ctx = self._apply_context_window_cap()
             self._checkpoint(
                 phase_label,
@@ -547,6 +658,12 @@ class SynthesisPipeline:
             return []
 
         self._ensure_engine_loaded(phase_label)
+        eff_ctx = self._apply_context_window_cap()
+        eff_max_new_tokens = (
+            min(max_new_tokens, max(1024, int(eff_ctx * 0.35)))
+            if not DRY_RUN
+            else max_new_tokens
+        )
 
         rows = [
             {"uid": str(item["id"]), "text": str(item["payload"])}
@@ -625,26 +742,55 @@ class SynthesisPipeline:
                     "raw_text": malformed,
                 }
 
-        results = self.prism.run(
-            task="extract",
-            input_data=rows,
-            text_column="text",
-            id_column="uid",
-            schema_cls=GeneratedModule,
-            prompt_template=module_template,
-            system_prompt=system_prompt,
-            chunk=False,
-            as_array=False,
-            dedup=False,
-            batch_size=BATCH_SIZE,
-            max_new_tokens=max_new_tokens,
-            temperature=TEMPERATURE,
-            repetition_penalty=REPETITION_PENALTY,
-            constrain_json=CONSTRAIN_JSON,
-            dry_run=DRY_RUN,
-            on_batch_start=_on_batch_start,
-            on_chunk_processed=_on_chunk_processed,
-        )
+        try:
+            results = self.prism.run(
+                task="extract",
+                input_data=rows,
+                text_column="text",
+                id_column="uid",
+                schema_cls=GeneratedModule,
+                prompt_template=module_template,
+                system_prompt=system_prompt,
+                chunk=False,
+                as_array=False,
+                dedup=False,
+                batch_size=BATCH_SIZE,
+                max_new_tokens=eff_max_new_tokens,
+                temperature=TEMPERATURE,
+                repetition_penalty=REPETITION_PENALTY,
+                constrain_json=CONSTRAIN_JSON,
+                dry_run=DRY_RUN,
+                on_batch_start=_on_batch_start,
+                on_chunk_processed=_on_chunk_processed,
+            )
+        except Exception as batch_err:
+            self._checkpoint(
+                phase_label,
+                f"Warning: Batch run raised {type(batch_err).__name__} ({batch_err}); retrying with batch_size=1 and reduced token cap...",
+            )
+            if MANAGE_VRAM:
+                clear_device_memory()
+            eff_max_new_tokens = min(2048, eff_max_new_tokens)
+            results = self.prism.run(
+                task="extract",
+                input_data=rows,
+                text_column="text",
+                id_column="uid",
+                schema_cls=GeneratedModule,
+                prompt_template=module_template,
+                system_prompt=system_prompt,
+                chunk=False,
+                as_array=False,
+                dedup=False,
+                batch_size=1,
+                max_new_tokens=eff_max_new_tokens,
+                temperature=TEMPERATURE,
+                repetition_penalty=REPETITION_PENALTY,
+                constrain_json=CONSTRAIN_JSON,
+                dry_run=DRY_RUN,
+                on_batch_start=_on_batch_start,
+                on_chunk_processed=_on_chunk_processed,
+            )
 
         if DRY_RUN:
             for idx, item in enumerate(items):
@@ -726,7 +872,7 @@ class SynthesisPipeline:
                 as_array=False,
                 dedup=False,
                 batch_size=BATCH_SIZE,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=eff_max_new_tokens,
                 temperature=TEMPERATURE,
                 repetition_penalty=REPETITION_PENALTY,
                 constrain_json=CONSTRAIN_JSON,
@@ -1141,7 +1287,11 @@ class SynthesisPipeline:
         self._ensure_engine_loaded("Phase 2: Global Consolidation")
         synthesis_cap = self._apply_context_window_cap()
         sys_tokens = estimate_tokens(CONSOLIDATION_SYSTEM_PROMPT)
-        max_payload_tokens = max(500, synthesis_cap - sys_tokens - CONSOLIDATION_MAX_NEW_TOKENS)
+        eff_consolidation_tokens = min(
+            CONSOLIDATION_MAX_NEW_TOKENS,
+            max(1024, int(synthesis_cap * 0.35)),
+        )
+        max_payload_tokens = max(1500, synthesis_cap - sys_tokens - eff_consolidation_tokens)
 
         def run_consolidation_single(payload: str, label: str) -> str:
             res_list = self._run_module_batch(
@@ -1150,19 +1300,23 @@ class SynthesisPipeline:
                 phase_label=f"Phase 2: Consolidation ({label})",
                 default_module_name="master_ontology",
                 allow_reformat_repair=True,
-                max_new_tokens=CONSOLIDATION_MAX_NEW_TOKENS,
+                max_new_tokens=eff_consolidation_tokens,
             )
             if res_list and res_list[0]["success"]:
                 return res_list[0]["source_code"]
             raise RuntimeError(res_list[0]["error"] if res_list else "Consolidation failed")
 
-        def process_consolidation_sync(files_list: List[dict], schema_dir: Path) -> str:
+        def process_consolidation_sync(
+            files_list: List[dict],
+            schema_dir: Path,
+            _depth: int = 0,
+        ) -> str:
             payload = "\n".join([f"--- File: {f['name']} ---\n{f['content']}\n" for f in files_list])
             save_payload_file(
                 "phase2_consolidation_payload.txt",
                 f"=== SYSTEM PROMPT ===\n{CONSOLIDATION_SYSTEM_PROMPT}\n\n=== USER PAYLOAD ===\n{payload}",
             )
-            if estimate_tokens(payload) <= max_payload_tokens:
+            if estimate_tokens(payload) <= max_payload_tokens or len(files_list) <= 1 or _depth >= 3:
                 return run_consolidation_single(payload, schema_dir.name)
 
             for f in files_list:
@@ -1183,12 +1337,19 @@ class SynthesisPipeline:
             if current_batch:
                 sub_batches.append(current_batch)
 
+            # Prevent infinite recursion if every single file exceeds max_payload_tokens
+            if len(sub_batches) >= len(files_list):
+                sub_batches = [
+                    files_list[i : i + 2]
+                    for i in range(0, len(files_list), 2)
+                ]
+
             intermediate_results = []
             for idx, batch in enumerate(sub_batches, start=1):
-                res = process_consolidation_sync(batch, schema_dir)
+                res = process_consolidation_sync(batch, schema_dir, _depth=_depth + 1)
                 intermediate_results.append({"name": f"intermediate_{idx}.py", "content": res})
 
-            return process_consolidation_sync(intermediate_results, schema_dir)
+            return process_consolidation_sync(intermediate_results, schema_dir, _depth=_depth + 1)
 
         def consolidate_schemas(schema_dir: Path) -> None:
             py_files = sorted([
@@ -1206,6 +1367,15 @@ class SynthesisPipeline:
             try:
                 master_code = process_consolidation_sync(files_list, schema_dir)
                 master_code = deduplicate_consolidated_classes(master_code)
+            except Exception as e:
+                log_error(
+                    f"[Synthesis {path_type}] LLM consolidation encountered error ({e}); "
+                    "falling back to deterministic AST ontology consolidation."
+                )
+                combined_raw = "\n\n".join(f["content"] for f in files_list)
+                master_code = deduplicate_consolidated_classes(combined_raw)
+
+            try:
                 out_master = schema_dir / "master_ontology.py"
                 with open(out_master, "w", encoding="utf-8") as f:
                     f.write(master_code)
@@ -1216,7 +1386,7 @@ class SynthesisPipeline:
                     f.write(master_code)
                 self._checkpoint("Phase 2: Consolidation", "Saved comprehensive_ontology.py", comp_path)
             except Exception as e:
-                log_error(f"[Synthesis {path_type}] Error generating master_ontology: {e}")
+                log_error(f"[Synthesis {path_type}] Error saving consolidated ontology files: {e}")
 
         consolidate_schemas(output_base_dir)
 

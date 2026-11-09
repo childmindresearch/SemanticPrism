@@ -6,6 +6,7 @@ Verbatim Chunk Consolidation, and Two-Pass Hardware-Batched Extraction via Prism
 from __future__ import annotations
 
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime
 from enum import Enum
 import json
@@ -456,6 +457,33 @@ def merge_pydantic_instances(
 # MAIN STAGE 5 PIPELINE ORCHESTRATOR (POWERED BY PRISMRUNNER)
 # ============================================================================
 
+@contextmanager
+def _with_hf_offload_folder(offload_dir: Path):
+    """Temporarily injects `offload_folder` into HuggingFace `from_pretrained` calls when `device_map` is used."""
+    offload_dir.mkdir(parents=True, exist_ok=True)
+    patched_classes = []
+    try:
+        import transformers as _tf
+        for cls_name in ("AutoModelForCausalLM", "AutoModelForImageTextToText", "AutoModelForMultimodalLM"):
+            target_cls = getattr(_tf, cls_name, None)
+            if target_cls is not None and hasattr(target_cls, "from_pretrained"):
+                orig_bound = target_cls.from_pretrained
+                orig_func = getattr(orig_bound, "__func__", None)
+                if orig_func is not None:
+                    def _make_patched(fn):
+                        def _patched(cls, *args, **kwargs):
+                            if kwargs.get("device_map") is not None and "offload_folder" not in kwargs:
+                                kwargs["offload_folder"] = str(offload_dir)
+                            return fn(cls, *args, **kwargs)
+                        return classmethod(_patched)
+                    target_cls.from_pretrained = _make_patched(orig_func)
+                    patched_classes.append((target_cls, orig_func))
+        yield
+    finally:
+        for target_cls, orig_func in patched_classes:
+            target_cls.from_pretrained = classmethod(orig_func)
+
+
 class SemanticPrismStage5Pipeline:
     """
     End-to-end Stage 5 Schema-Driven Extraction and Relational/Wide-Table Aggregation
@@ -639,6 +667,62 @@ class SemanticPrismStage5Pipeline:
             f"Selected {len(target_schemas)} target schema(s) for extraction ({self.extract_mode}): [{schema_names_preview}]",
         )
         return target_schemas
+
+    def _ensure_engine_loaded(self, dry_run: bool = False) -> None:
+        """Ensures the PrismPipeline engine is loaded with automatic 4-bit and offload_folder resilience."""
+        if dry_run or self.prism.engine is not None:
+            return
+        if self.manage_vram:
+            clear_device_memory()
+        self._log("Phase 3: Engine Init", f"Loading LLM '{self.model_name}' onto device...")
+        offload_dir = self.outputs_dir / ".offload_cache"
+        try:
+            self.prism.init_engine(
+                batch_size=self.batch_size,
+                max_new_tokens=self.max_new_tokens,
+                temperature=self.temperature,
+                repetition_penalty=self.repetition_penalty,
+            )
+        except Exception as load_err:
+            err_str = str(load_err).lower()
+            is_mem_or_offload = any(
+                k in err_str for k in ("offload_folder", "offloaded to the disk", "out of memory", "cuda error")
+            )
+            loaded = False
+            if is_mem_or_offload and not self.prism.config.get("model", {}).get("load_in_4bit", False):
+                self._log(
+                    "Phase 3: Engine Init",
+                    f"Model '{self.model_name}' exceeded device memory in default precision ({load_err}); "
+                    "retrying with 4-bit quantization (load_in_4bit=True)...",
+                )
+                if self.manage_vram:
+                    clear_device_memory()
+                self.prism.config.setdefault("model", {})["load_in_4bit"] = True
+                try:
+                    with _with_hf_offload_folder(offload_dir):
+                        self.prism.init_engine(
+                            batch_size=self.batch_size,
+                            max_new_tokens=self.max_new_tokens,
+                            temperature=self.temperature,
+                            repetition_penalty=self.repetition_penalty,
+                        )
+                    loaded = True
+                except Exception as q4_err:
+                    self._log("Phase 3: Engine Init", f"4-bit load attempt failed ({q4_err}).")
+                    self.prism.config["model"]["load_in_4bit"] = self.load_in_4bit
+                    if self.manage_vram:
+                        clear_device_memory()
+            if not loaded:
+                self._log("Phase 3: Engine Init", f"Retrying '{self.model_name}' with offload_folder={offload_dir}...")
+                if self.manage_vram:
+                    clear_device_memory()
+                with _with_hf_offload_folder(offload_dir):
+                    self.prism.init_engine(
+                        batch_size=self.batch_size,
+                        max_new_tokens=self.max_new_tokens,
+                        temperature=self.temperature,
+                        repetition_penalty=self.repetition_penalty,
+                    )
 
     def _safe_chunk_document(self, text: str) -> List[str]:
         """
@@ -865,6 +949,8 @@ class SemanticPrismStage5Pipeline:
         if not all_chunk_records:
             self._log("Phase 3: Extraction", "All documents and schemas are already completed.")
             return
+
+        self._ensure_engine_loaded(dry_run=dry_run)
 
         # Pass 3a: Fast Relevance Triage
         chunk_to_schemas = self._run_triage_pass(

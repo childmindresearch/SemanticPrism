@@ -25,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import traceback
 from typing import Any, Dict, Union
 
 # Prevent PyTorch CUDA allocator fragmentation
@@ -75,8 +76,8 @@ LOAD_IN_8BIT: bool = False                             # Enable 8-bit quantizati
 ATTN_IMPLEMENTATION: str = "auto"                      # "auto", "flash_attention_2", "sdpa", or "eager"
 BATCH_SIZE: Union[int, str] = "auto"                   # "auto" (continuous device-relative) or explicit int
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"           # "auto" = full native model context window (e.g. 262,144 tokens), or int cap
-MAX_NEW_TOKENS: int = 16384                            # Max generated tokens per community schema module
-CONSOLIDATION_MAX_NEW_TOKENS: int = 32768              # Max generated tokens for consolidated master ontology
+MAX_NEW_TOKENS: int = 4096                             # Max generated tokens per community schema module
+CONSOLIDATION_MAX_NEW_TOKENS: int = 8192               # Max generated tokens for consolidated master ontology
 TEMPERATURE: float = 0.0                               # 0.0 for deterministic greedy decoding
 REPETITION_PENALTY: float = 1.08                       # Mild penalty to prevent greedy repetition loops
 CONSTRAIN_JSON: bool = True                            # Force JSON '{' prefix & bracket-balanced early stopping
@@ -286,7 +287,8 @@ def main() -> None:
         )
         print("=== Stage 4 Synthesis Completed Successfully ===")
     except Exception as e:
-        print(f"Error during Stage 4 Synthesis execution: {e}")
+        print(f"Error during Stage 4 Synthesis execution: {e}", flush=True)
+        traceback.print_exc()
         sys.exit(1)
 
 

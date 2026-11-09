@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+from collections import deque
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -416,26 +418,60 @@ def generate_pipeline_summary(
     return report_text, summary_data
 
 
-def run_stage(script_name: str, stage_desc: str, extra_args: List[str] | None = None) -> None:
-    print("\n" + "=" * 60)
-    print(f"🚀 INITIATING {stage_desc.upper()}")
-    print("=" * 60)
+def run_stage(
+    stage_num: int,
+    script_name: str,
+    stage_desc: str,
+    extra_args: List[str] | None = None,
+) -> None:
+    print("\n" + "=" * 60, flush=True)
+    print(f"🚀 INITIATING {stage_desc.upper()}", flush=True)
+    print("=" * 60, flush=True)
 
     start_time = time.time()
-    cmd = [sys.executable, script_name]
+    cmd = [sys.executable, "-u", script_name]
     if extra_args:
         cmd.extend(extra_args)
 
+    log_dir = Path("outputs") / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    stage_log_path = log_dir / f"stage_{stage_num:02d}_console.log"
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    recent_lines: deque[str] = deque(maxlen=40)
+
     try:
-        # Run the script as a subprocess, piping output directly to the main terminal
-        subprocess.run(cmd, check=True, text=True)
-    except subprocess.CalledProcessError:
-        print(f"\n❌ CRITICAL ERROR in {script_name}!")
-        print(f"Pipeline halted at {stage_desc}.")
+        with open(stage_log_path, "w", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                env=env,
+            )
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                print(line, end="", flush=True)
+                log_file.write(line)
+                log_file.flush()
+                recent_lines.append(line.rstrip("\n"))
+            return_code = proc.wait()
+            if return_code != 0:
+                raise subprocess.CalledProcessError(return_code, cmd)
+    except subprocess.CalledProcessError as err:
+        print(f"\n❌ CRITICAL ERROR in {script_name} (exit code {err.returncode})!", flush=True)
+        if recent_lines:
+            print("--- Last output lines from stage ---", flush=True)
+            for rl in recent_lines:
+                print(f"  {rl}", flush=True)
+            print(f"Full stage console log saved to: {stage_log_path}", flush=True)
+        print(f"Pipeline halted at {stage_desc}.", flush=True)
         sys.exit(1)
 
     duration = time.time() - start_time
-    print(f"\n✅ {stage_desc} completed in {duration:.2f} seconds.")
+    print(f"\n✅ {stage_desc} completed in {duration:.2f} seconds.", flush=True)
 
 
 def main() -> None:
@@ -477,7 +513,7 @@ def main() -> None:
         if stage_num not in args.stages:
             continue
         stage_args = ["--dry-run"] if (args.dry_run and supports_dry_run) else []
-        run_stage(script, desc, stage_args)
+        run_stage(stage_num, script, desc, stage_args)
 
     global_duration = time.time() - global_start
     report_text, _ = generate_pipeline_summary(total_duration=global_duration)
