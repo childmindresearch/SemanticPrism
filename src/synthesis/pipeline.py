@@ -474,6 +474,7 @@ class SynthesisPipeline:
         if overrides:
             configure_synthesis_defaults(**overrides)
         self.config = config
+        self.outputs_dir: str = str(config.get("directories", {}).get("outputs", OUTPUTS_DIR))
         self.model_name = (
             config.get("synthesis", {}).get("llm", {}).get("model_name")
             or config.get("llm", {}).get("model_name")
@@ -1348,7 +1349,7 @@ class SynthesisPipeline:
         }
 
         # Load upstream Stage 2 taxonomic maps (surface hyponym -> lifted hypernym) if available
-        refinement_dir = Path(self.outputs_dir) / "02_refinement"
+        refinement_dir = Path(outputs_dir) / "02_refinement"
         global_hypernym_to_hyponyms: Dict[str, List[str]] = defaultdict(list)
         for tax_filename in ("taxonomic_map.json", "subject_taxonomic_map.json", "object_taxonomic_map.json"):
             tax_path = refinement_dir / tax_filename
