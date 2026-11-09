@@ -80,7 +80,7 @@ MAX_NEW_TOKENS: int = 4096                             # Max generated tokens pe
 CONSOLIDATION_MAX_NEW_TOKENS: int = 8192               # Max generated tokens for consolidated master ontology
 TEMPERATURE: float = 0.0                               # 0.0 for deterministic greedy decoding
 REPETITION_PENALTY: float = 1.08                       # Mild penalty to prevent greedy repetition loops
-CONSTRAIN_JSON: bool = True                            # Force JSON '{' prefix & bracket-balanced early stopping
+CONSTRAIN_JSON: bool = False                           # Keep False for Python code synthesis so '{'/'}'/docstrings inside source_code do not trigger early stopping
 MANAGE_VRAM: bool = True                               # Flush and offload GPU/MPS memory after synthesis completes
 DRY_RUN: bool = False                                  # Set True to preview prompts without running LLM generation
 

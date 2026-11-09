@@ -38,8 +38,8 @@ CRITICAL MODELING RULES:
    - If `'Other'` / `OTHER` is included in any `Enum` or `Literal`, ALWAYS place `'Other'` last regardless of how many values are included.
    - NEVER encode full sentences, prepositional clauses, or multi-attribute combinations inside `Enum` values; decompose distinct dimensions into separate `BaseModel` fields.
 4. **Class Docstrings, Field Descriptions & Optionality:**
-   - Every `BaseModel` class MUST begin with a descriptive triple-quoted docstring (`\"\"\"...\"\"\"`) explaining what the model entails and its role in the domain.
-   - Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the domain meaning derived from `thematic_observations`.
+   - Every `BaseModel` class MUST begin with a descriptive triple-single-quoted docstring (`'''...'''`) explaining what the model entails and its role in the domain (using single-quoted `'''...'''` inside the JSON `"source_code"` string prevents unescaped `"` from breaking JSON parsing).
+   - Declare model attributes using `Field(default=None, description="...")`, providing a concise explanation of the domain meaning derived from `thematic_observations`. Do NOT use unescaped double quotes (`"`) inside `description="..."` strings (use single quotes `'...'` for any inner quoted terms).
    - Field names MUST be valid Python identifiers in `snake_case` (alphanumeric and underscores only, NEVER hyphens like `field-name`).
 5. **Self-Contained & Valid Imports:** The source code must include all necessary imports:
    `from pydantic import BaseModel, Field`
@@ -52,9 +52,9 @@ CRITICAL MODELING RULES:
    Any class that attempts to model the prompt structure itself is strictly invalid.
 
 OUTPUT SCHEMA INSTRUCTIONS:
-Return a JSON object conforming to the GeneratedModule schema:
+Return ONLY a valid JSON object conforming to the GeneratedModule schema:
 - `module_name` (string): A specific 2-to-4 word `snake_case` name anchored to this cluster's `top_domain_terms` and primary `BaseModel` class (e.g., "resource_allocation_workflow"). Do NOT copy the broad macro theme header and do NOT append generic suffixes like "_schema", "_module", or "_model".
-- `source_code` (string): The complete, executable Python code defining the Pydantic BaseModels (each with a descriptive `\"\"\"...\"\"\"` class docstring) and any field-referenced Enums."""
+- `source_code` (string): The complete, executable Python code defining the Pydantic BaseModels (each with a descriptive `'''...'''` class docstring) and any field-referenced Enums. Properly escape all newlines as `\\n` and double-quotes as `\\"` inside the JSON string."""
 
 
 def get_consolidation_system_prompt(
@@ -75,14 +75,14 @@ CRITICAL RULES:
    - Consolidate repetitive boolean flags or prefixed sub-attributes into clean `List[str]` / `Enum` fields or composed child models rather than bloating a single class past {max_basemodel_fields} fields.
 2. **Atomic Enum Hygiene:** Embed and deduplicate `Enum` classes at the top of the file (`<= {max_enum_members}` members per Enum, `<= 4` words / `<= 35` characters per member, with `OTHER = "Other"` always placed last when present). Discard any verbose sentence-fragment Enum members.
 3. **Preserve Hierarchy & Relationships:** Maintain valid class inheritance and typed cross-model references.
-4. **Preserve Class Docstrings & Field Descriptions:** Ensure every `BaseModel` class begins with a descriptive triple-quoted docstring (`\"\"\"...\"\"\"`) explaining what it entails, and retain attributes declared as `Field(default=None, description="...")`, preserving the most detailed `description` string across merged attributes.
+4. **Preserve Class Docstrings & Field Descriptions:** Ensure every `BaseModel` class begins with a descriptive triple-single-quoted docstring (`'''...'''`) explaining what it entails, and retain attributes declared as `Field(default=None, description="...")` (avoiding unescaped double quotes inside `description="..."`), preserving the most detailed `description` string across merged attributes.
 5. **Valid Python Identifiers:** All attribute names must be valid Python identifiers in `snake_case` (alphanumeric and underscores only, NEVER hyphens).
 6. **Self-Contained Imports:** Ensure all necessary Pydantic and typing imports are included at the top of the file.
 
 OUTPUT SCHEMA INSTRUCTIONS:
-Return a JSON object conforming to the GeneratedModule schema:
+Return ONLY a valid JSON object conforming to the GeneratedModule schema:
 - `module_name`: Set strictly to "master_ontology".
-- `source_code`: The complete, consolidated Python source code."""
+- `source_code`: The complete, consolidated Python source code (properly JSON-escaped)."""
 
 
 def get_schema_reformat_system_prompt(
@@ -107,7 +107,7 @@ TARGET SCHEMA:
 
 REPAIR RULES:
 1. Fix all Python syntax errors, indentation issues, or missing imports (`from pydantic import BaseModel, Field`, `from enum import Enum`, `from typing import ...`).
-2. Ensure every `BaseModel` class includes a descriptive triple-quoted docstring (`\"\"\"...\"\"\"`), all Pydantic fields use valid syntax (`field_name: Optional[Type] = Field(default=None, description="...")`), and each `BaseModel` class has **at most {max_basemodel_fields} fields** (removing repetitive prefixed sub-fields or boolean flag series).
+2. Ensure every `BaseModel` class includes a descriptive triple-single-quoted docstring (`'''...'''`), all Pydantic fields use valid syntax (`field_name: Optional[Type] = Field(default=None, description="...")` with NO unescaped double quotes inside `description`), and each `BaseModel` class has **at most {max_basemodel_fields} fields** (removing repetitive prefixed sub-fields or boolean flag series).
 3. Ensure Enum member names use valid `UPPER_SNAKE_CASE` identifiers, inherit from `(str, Enum)`, and contain **at most {max_enum_members} concise atomic members (`<= 4` words / `<= 35` characters each)**, placing `OTHER = "Other"` last if present. Strip any multi-clause phrase Enum members.
 4. ABSOLUTE BAN ON META-MODELS: If the malformed input or code contains meta-models like `class ThemeObservation` or `class GeneratedModule` inside `source_code`, DISCARD them completely. Replace them with substantive domain Pydantic models based on the domain concepts and key terms.
 5. Return pure JSON matching the GeneratedModule schema only. Do NOT output markdown explanations or conversational text."""

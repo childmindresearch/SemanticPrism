@@ -83,7 +83,7 @@ MAX_NEW_TOKENS: int = 4096                             # Max generated tokens pe
 CONSOLIDATION_MAX_NEW_TOKENS: int = 8192               # Max generated tokens for consolidated master ontology
 TEMPERATURE: float = 0.0                               # 0.0 for deterministic greedy decoding
 REPETITION_PENALTY: float = 1.08                       # Mild penalty to prevent greedy repetition loops
-CONSTRAIN_JSON: bool = True                            # Force JSON '{' prefix & bracket-balanced early stopping
+CONSTRAIN_JSON: bool = False                           # Keep False for Python code synthesis so '{'/'}'/docstrings inside source_code do not trigger early stopping
 MANAGE_VRAM: bool = True                               # Flush and offload GPU/MPS memory after synthesis completes
 DRY_RUN: bool = False                                  # Set True to preview prompts without running LLM generation
 
@@ -754,24 +754,172 @@ class SynthesisPipeline:
             clear_device_memory()
 
     @staticmethod
-    def _extract_generated_module(items: List[Any], fallback_name: str) -> Tuple[Optional[str], Optional[str]]:
-        """Extracts (module_name, cleaned_source_code) from parsed PrismRunner items."""
+    def _extract_module_from_raw_text(raw_text: str, fallback_name: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Multi-strategy fallback parser that extracts `(module_name, cleaned_source_code)` directly
+        from raw LLM text whenever PrismRunner's JSON parser fails (e.g., due to unescaped triple-quoted
+        docstrings, unescaped quotes inside Field descriptions, literal newlines inside JSON strings,
+        or direct ```python ... ``` markdown code fences emitted by Coder models).
+        """
+        if not raw_text or not raw_text.strip():
+            return None, None
+
+        # Strip <think>...</think> blocks if any
+        text = re.sub(r"<think>[\s\S]*?</think>", "", raw_text, flags=re.IGNORECASE)
+        if "</think>" in text.lower():
+            idx = text.lower().rfind("</think>")
+            text = text[idx + len("</think>") :]
+        text = text.strip()
+        if not text:
+            return None, None
+
+        # Extract module_name hint if present anywhere in the JSON-like text
+        m_mod = re.search(r'"module_name"\s*:\s*["\']([^"\'\r\n]+)["\']', text)
+        extracted_mod = sanitize_module_name(m_mod.group(1), fallback=fallback_name) if m_mod else fallback_name
+
+        # Strategy 1: Repair JSON string control characters & triple-quotes and run json.loads
+        stripped_fences = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+        stripped_fences = re.sub(r"\s*```$", "", stripped_fences, flags=re.MULTILINE).strip()
+        first_brace, last_brace = stripped_fences.find("{"), stripped_fences.rfind("}")
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            json_cand = stripped_fences[first_brace : last_brace + 1]
+            json_cand = re.sub(r",\s*([\]}])", r"\1", json_cand)
+            if '"""' in json_cand:
+                json_cand = re.sub(r'(?<!\\)"""', r'\"\"\"', json_cand)
+
+            # Escape literal newlines/tabs inside JSON string literals
+            escaped_chars: List[str] = []
+            in_str = False
+            esc = False
+            for ch in json_cand:
+                if esc:
+                    escaped_chars.append(ch)
+                    esc = False
+                    continue
+                if ch == "\\" and in_str:
+                    escaped_chars.append(ch)
+                    esc = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    escaped_chars.append(ch)
+                    continue
+                if in_str and ch == "\n":
+                    escaped_chars.append("\\n")
+                    continue
+                if in_str and ch == "\r":
+                    escaped_chars.append("\\r")
+                    continue
+                if in_str and ch == "\t":
+                    escaped_chars.append("\\t")
+                    continue
+                escaped_chars.append(ch)
+
+            for attempt_str in (json_cand, "".join(escaped_chars)):
+                try:
+                    loaded = json.loads(attempt_str)
+                    if isinstance(loaded, dict) and loaded.get("source_code"):
+                        mod_val = sanitize_module_name(str(loaded.get("module_name") or extracted_mod), fallback=fallback_name)
+                        code_val = clean_python_code(str(loaded["source_code"]), context_label=mod_val)
+                        if code_val:
+                            return mod_val, code_val
+                except Exception:
+                    pass
+
+        # Strategy 2: Direct delimiter slicing of "source_code": "..." (immune to unescaped inner quotes)
+        m_src = re.search(r'"source_code"\s*:\s*("""|\'\'\'|"|\')', stripped_fences)
+        if m_src:
+            quote_delim = m_src.group(1)
+            start_pos = m_src.end()
+            m_after = re.search(r'["\']\s*,\s*"module_name"\s*:', stripped_fences[start_pos:])
+            if m_after:
+                raw_code_slice = stripped_fences[start_pos : start_pos + m_after.start()]
+            else:
+                end_brace = stripped_fences.rfind("}")
+                tail = (
+                    stripped_fences[start_pos:end_brace].rstrip()
+                    if end_brace > start_pos
+                    else stripped_fences[start_pos:].rstrip()
+                )
+                if tail.endswith(","):
+                    tail = tail[:-1].rstrip()
+                if tail.endswith(quote_delim):
+                    raw_code_slice = tail[: -len(quote_delim)]
+                elif tail.endswith(('"""', "'''", '"', "'")):
+                    raw_code_slice = tail[:-1]
+                else:
+                    raw_code_slice = tail
+
+            code_val = clean_python_code(raw_code_slice, context_label=extracted_mod)
+            if code_val and ("class " in code_val or "import " in code_val):
+                if not m_mod:
+                    bms = _extract_ast_basemodel_names(code_val)
+                    if bms:
+                        extracted_mod = sanitize_module_name(bms[0], fallback=fallback_name)
+                return extracted_mod, code_val
+
+        # Strategy 3: Direct ```python ... ``` code fence or raw Python module extraction
+        py_blocks = re.findall(r"```(?:python|py)\s*([\s\S]*?)```", text, flags=re.IGNORECASE)
+        if not py_blocks:
+            py_blocks = [
+                blk for blk in re.findall(r"```\s*([\s\S]*?)```", text)
+                if "class " in blk and ("BaseModel" in blk or "Enum" in blk)
+            ]
+        if not py_blocks and "class " in text and "BaseModel" in text and not text.lstrip().startswith("{"):
+            py_blocks = [text]
+
+        for blk in py_blocks:
+            code_val = clean_python_code(blk, context_label=extracted_mod)
+            if code_val and "class " in code_val:
+                if not m_mod:
+                    bms = _extract_ast_basemodel_names(code_val)
+                    if bms:
+                        extracted_mod = sanitize_module_name(bms[0], fallback=fallback_name)
+                return extracted_mod, code_val
+
+        return None, None
+
+    @classmethod
+    def _extract_generated_module(
+        cls,
+        items: List[Any],
+        fallback_name: str,
+        raw_text: str = "",
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Extracts (module_name, cleaned_source_code) from parsed PrismRunner items or raw LLM output."""
+        best_invalid: Tuple[Optional[str], Optional[str]] = (None, None)
         for item in items:
             if isinstance(item, GeneratedModule):
                 mod_name = sanitize_module_name(item.module_name, fallback=fallback_name)
                 code = clean_python_code(item.source_code, context_label=mod_name or fallback_name)
                 if code:
-                    return mod_name, code
+                    is_valid, _ = validate_python_syntax(code)
+                    if is_valid:
+                        return mod_name, code
+                    if best_invalid[1] is None:
+                        best_invalid = (mod_name, code)
             elif isinstance(item, dict):
                 try:
                     parsed = GeneratedModule.model_validate(item)
                     mod_name = sanitize_module_name(parsed.module_name, fallback=fallback_name)
                     code = clean_python_code(parsed.source_code, context_label=mod_name or fallback_name)
                     if code:
-                        return mod_name, code
+                        is_valid, _ = validate_python_syntax(code)
+                        if is_valid:
+                            return mod_name, code
+                        if best_invalid[1] is None:
+                            best_invalid = (mod_name, code)
                 except Exception:
                     pass
-        return None, None
+
+        if raw_text:
+            raw_mod, raw_code = cls._extract_module_from_raw_text(raw_text, fallback_name=fallback_name)
+            if raw_code:
+                is_valid, _ = validate_python_syntax(raw_code)
+                if is_valid or best_invalid[1] is None:
+                    return raw_mod, raw_code
+
+        return best_invalid
 
     def _run_module_batch(
         self,
@@ -849,7 +997,11 @@ class SynthesisPipeline:
             fallback_name = item.get("fallback_module_name", default_module_name)
             p_items = chunk_res.get("parsed_items") or chunk_res.get("extracted_items") or []
             raw_out = str(chunk_res.get("raw_output") or "")
-            mod_name, cleaned_code = self._extract_generated_module(p_items, fallback_name)
+            mod_name, cleaned_code = self._extract_generated_module(
+                p_items,
+                fallback_name,
+                raw_text=raw_out,
+            )
 
             with lock:
                 if uid in notified_uids:
@@ -1024,19 +1176,28 @@ class SynthesisPipeline:
             for (idx, item, _, _), rep_res in zip(repair_candidates, repair_results):
                 fallback_name = item.get("fallback_module_name", default_module_name)
                 rep_items = rep_res.get("extracted_items") or rep_res.get("parsed_items") or []
-                mod_name, cleaned_code = self._extract_generated_module(rep_items, fallback_name)
+                rep_raw_out = (rep_res.get("raw_outputs") or [""])[0] if rep_res.get("raw_outputs") else str(rep_res.get("raw_output") or "")
+                mod_name, cleaned_code = self._extract_generated_module(
+                    rep_items,
+                    fallback_name,
+                    raw_text=rep_raw_out,
+                )
                 if cleaned_code:
-                    parsed_outputs[idx] = {
-                        "id": item["id"],
-                        "success": True,
-                        "module_name": mod_name or fallback_name,
-                        "source_code": cleaned_code,
-                        "error": None,
-                        "raw_text": (rep_res.get("raw_outputs") or [""])[0] if rep_res.get("raw_outputs") else "",
-                    }
-                    print(f"            -> Reformat successful for {item['id']}!")
-                    if on_valid_module_ready is not None:
-                        on_valid_module_ready(item, mod_name or fallback_name, cleaned_code)
+                    is_valid, syntax_err = validate_python_syntax(cleaned_code)
+                    if is_valid:
+                        parsed_outputs[idx] = {
+                            "id": item["id"],
+                            "success": True,
+                            "module_name": mod_name or fallback_name,
+                            "source_code": cleaned_code,
+                            "error": None,
+                            "raw_text": rep_raw_out,
+                        }
+                        print(f"            -> Reformat successful for {item['id']}!")
+                        if on_valid_module_ready is not None:
+                            on_valid_module_ready(item, mod_name or fallback_name, cleaned_code)
+                    else:
+                        parsed_outputs[idx]["error"] = syntax_err or str(rep_res.get("warning") or parsed_outputs[idx]["error"])
                 else:
                     parsed_outputs[idx]["error"] = str(rep_res.get("warning") or parsed_outputs[idx]["error"])
 

@@ -745,7 +745,7 @@ def _sanitize_ast_models(
                 modified = True
             defined_so_far.add(m.name)
 
-    if not modified:
+    if not modified and "'''" not in code:
         return code
 
     try:
@@ -760,19 +760,40 @@ def clean_python_code(code: str, context_label: str = "schema") -> str:
         return ""
     code = code.strip()
     if getattr(ast_cfg, "STRIP_MARKDOWN_CODE_FENCES", True):
-        if code.startswith("```python"):
-            code = code[9:]
-        elif code.startswith("```"):
-            code = code[3:]
-        if code.endswith("```"):
-            code = code[:-3]
+        fenced_py = re.search(r"```(?:python|py)?\s*([\s\S]*?)\s*```", code, flags=re.IGNORECASE)
+        if fenced_py and ("class " in fenced_py.group(1) or "import " in fenced_py.group(1)):
+            code = fenced_py.group(1).strip()
+        else:
+            if code.startswith("```python"):
+                code = code[9:]
+            elif code.startswith("```"):
+                code = code[3:]
+            if code.endswith("```"):
+                code = code[:-3]
+            code = code.strip()
 
     if getattr(ast_cfg, "UNESCAPE_QUOTES_AND_NEWLINES", True):
-        # Fix over-escaped quotes caused by LLM JSON serialization
-        code = code.replace('\\"', '"')
+        # Only unescape literal \n and \" if the code is single-line JSON-escaped or fails ast.parse as-is
+        needs_unescape = "\n" not in code and "\\n" in code
+        if not needs_unescape and ("\\n" in code or '\\"' in code):
+            try:
+                ast.parse(code)
+            except SyntaxError:
+                needs_unescape = True
 
-        # Replace literal \n escape sequences that some LLMs emit outside raw strings
-        code = code.replace("\\n", "\n")
+        if needs_unescape:
+            candidate_unescaped = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ").replace('\\"', '"')
+            try:
+                ast.parse(candidate_unescaped)
+                code = candidate_unescaped
+            except SyntaxError:
+                # If only \n was escaped outside strings, try unescaping \n without breaking inner \"
+                line_unescaped = code.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "    ")
+                try:
+                    ast.parse(line_unescaped)
+                    code = line_unescaped
+                except SyntaxError:
+                    code = candidate_unescaped
 
     python_keywords = set(keyword.kwlist) | {"async", "await"}
     keyword_renames: List[str] = []
