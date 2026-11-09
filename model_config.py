@@ -32,9 +32,28 @@ from typing import Optional
 # =============================================================================
 # 1. MODEL SELECTION
 # =============================================================================
-MODEL_NAME: str = "Qwen/Qwen2.5-3B-Instruct"            # Stages 1, 2 & 5: Theme Discovery, Triple Extraction, Taxonomic Lifting & Schema Mapping (Recommended 48GB+: "Qwen/Qwen3.6-27B")
-EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"               # Stages 1, 2 & 3: Vector Clustering & Grounding (Recommended: "BAAI/bge-large-en-v1.5")
+# Default High-Accuracy Server Configuration (48–60 GB+ GPU VRAM):
+MODEL_NAME: str = "Qwen/Qwen3.6-27B"                    # Stages 1, 2 & 5: Theme Discovery, Triple Extraction, Taxonomic Lifting & Schema Mapping (~54 GB bf16)
+EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"         # Stages 1, 2 & 3: Vector Clustering & Grounding (~1.3 GB)
 CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"    # Stage 4: Pydantic v2 Schema Synthesis (~29 GB bf16; auto-falls back to MODEL_NAME if VRAM is exceeded)
+
+# -----------------------------------------------------------------------------
+# Copy-and-Paste Presets for Smaller Machines (uncomment to override above):
+# -----------------------------------------------------------------------------
+# --- Lightweight / Laptop / Single 8–12 GB GPU ---
+# MODEL_NAME: str = "Qwen/Qwen2.5-3B-Instruct"
+# EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
+# CODER_MODEL: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+# --- Mid-Range Workstation / Single 16–24 GB GPU ---
+# MODEL_NAME: str = "Qwen/Qwen2.5-7B-Instruct"
+# EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
+# CODER_MODEL: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
+
+# --- Ultra-Large Server / 80 GB+ GPU (A100-80GB / H100) ---
+# MODEL_NAME: str = "Qwen/Qwen3.6-27B"
+# EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
+# CODER_MODEL: str = "Qwen/Qwen2.5-Coder-32B-Instruct"
 
 # =============================================================================
 # 2. SOURCE DOCUMENT INPUT SETTINGS (STAGES 1 & 5)
