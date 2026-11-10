@@ -17,7 +17,7 @@ and source document dataset used across the SemanticPrism pipeline:
   - STAGE5_TEXT_COLUMN    : Stage 5 column name containing raw document text
   - STAGE5_DOCUMENT_LIMIT : Stage 5 optional cap on number of documents to extract (None = process all)
   - STAGE5_SCHEMA_PATH    : Stage 5 target schema file (e.g. master_ontology.py) or directory of .py schemas
-  - STAGE5_EXTRACT_MODE   : Stage 5 schema selection mode ("top_level", "child", or "all")
+  - STAGE5_EXTRACT_MODE   : Stage 5 schema selection mode ("unified", "top_level", "child", or "all")
 
 Recommended Models by GPU VRAM Tier (bfloat16 / float16):
   - 16–24 GB VRAM : MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"  (~15 GB) | CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  (~15 GB)
@@ -93,5 +93,5 @@ STAGE5_ID_COLUMN: str = "unique_val"                    # Column containing uniq
 STAGE5_TEXT_COLUMN: str = "report"                      # Column containing raw document text for Stage 5
 STAGE5_DOCUMENT_LIMIT: Optional[int] = None             # Optional cap on number of documents to extract in Stage 5 (None = all)
 STAGE5_SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"  # Single .py file (master_ontology.py) or directory (outputs/04_synthesis/schemas/community)
-STAGE5_EXTRACT_MODE: str = "top_level"                  # "top_level" (recommended), "child", or "all"
+STAGE5_EXTRACT_MODE: str = "unified"                    # "unified" (recommended single-pass envelope), "top_level", "child", or "all"
 

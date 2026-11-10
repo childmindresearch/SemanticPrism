@@ -15,7 +15,7 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union, get_args, get_origin
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, create_model
 from pydantic._internal._decorators import Decorator, ModelValidatorDecoratorInfo
 
 logger = logging.getLogger("SemanticPrism5")
@@ -278,7 +278,12 @@ def resolve_schema_path_with_fallbacks(
             _log_discovery(f"Resolved '{schema_path}' -> '{cand}' via fallback lookup.")
             return cand
 
-    raise FileNotFoundError(f"Schema path does not exist: {schema_path}")
+    raise FileNotFoundError(
+        f"Schema path does not exist: '{schema_path}'. "
+        f"Run Stage 4 first (`python3 run_stage_4_synthesis.py`) to generate "
+        f"'outputs/04_synthesis/schemas/master_ontology.py', or set `STAGE5_SCHEMA_PATH` "
+        f"in `model_config.py` (or pass `--schema-path <path>`) to an existing .py schema file or directory."
+    )
 
 
 # Backward-compatible alias
@@ -460,3 +465,143 @@ def get_top_level_schemas(schemas: List[SchemaMeta]) -> List[SchemaMeta]:
 def get_child_schemas(schemas: List[SchemaMeta]) -> List[SchemaMeta]:
     """Returns only child (sub-component) schemas referenced by other schemas."""
     return [s for s in schemas if s.is_child]
+
+
+def _validate_single_subschema_safely(
+    raw_sub: Any,
+    schema_cls: Type[BaseModel],
+) -> Optional[BaseModel]:
+    """
+    Validates a raw sub-object against `schema_cls` resiliently:
+      - If `raw_sub` is already an instance of `schema_cls`, returns it.
+      - If `raw_sub` is a list of dicts, validates each item and returns the first valid dict/instance
+        (or merges non-null fields across list items).
+      - If validation of a dict fails due to an invalid individual field, strips only the invalid
+        field(s) so valid sibling fields in that schema are preserved.
+    """
+    if raw_sub is None:
+        return None
+    if isinstance(raw_sub, schema_cls):
+        return raw_sub
+    if isinstance(raw_sub, list):
+        merged_dict: Dict[str, Any] = {}
+        for item in raw_sub:
+            if isinstance(item, dict):
+                for k, v in item.items():
+                    if v is not None and v != [] and v != {} and v != "":
+                        if k not in merged_dict or merged_dict[k] in (None, [], {}, ""):
+                            merged_dict[k] = v
+                        elif isinstance(merged_dict[k], list) and isinstance(v, list):
+                            merged_dict[k] = merged_dict[k] + v
+        raw_sub = merged_dict if merged_dict else None
+    if not isinstance(raw_sub, dict) or not raw_sub:
+        return None
+
+    try:
+        return schema_cls.model_validate(raw_sub)
+    except Exception:
+        # Field-by-field fallback so a single malformed field doesn't discard valid sibling fields
+        clean_sub: Dict[str, Any] = {}
+        for k, v in raw_sub.items():
+            if k not in schema_cls.model_fields:
+                continue
+            try:
+                test_inst = schema_cls.model_validate({**clean_sub, k: v})
+                clean_sub[k] = getattr(test_inst, k)
+            except Exception:
+                continue
+        if clean_sub:
+            try:
+                return schema_cls.model_validate(clean_sub)
+            except Exception:
+                return None
+        return None
+
+
+def build_unified_envelope_model(
+    target_schemas: List[SchemaMeta],
+    bundle_index: int = 0,
+) -> Tuple[Type[BaseModel], Dict[str, SchemaMeta]]:
+    """
+    Dynamically constructs a unified Pydantic BaseModel (`UnifiedExtractionEnvelope`) that wraps
+    multiple target schemas as optional top-level fields (`Optional[SchemaCls] = None`).
+    Returns `(envelope_cls, field_key_to_schema_meta)`.
+    """
+    field_map: Dict[str, SchemaMeta] = {}
+    used_keys: Set[str] = set()
+    field_definitions: Dict[str, Any] = {}
+
+    for meta in target_schemas:
+        key = meta.name
+        if key in used_keys:
+            key = f"{meta.module_name}__{meta.name}"
+        used_keys.add(key)
+        field_map[key] = meta
+        doc = (meta.schema_cls.__doc__ or "").strip()
+        first_line = doc.splitlines()[0].strip() if doc else f"Extracted `{meta.name}` data if present in text, else null."
+        field_definitions[key] = (
+            Optional[meta.schema_cls],
+            Field(default=None, description=first_line),
+        )
+
+    slug_to_key: Dict[str, str] = {}
+    for key, meta in field_map.items():
+        slug_to_key[_norm_enum_slug(key)] = key
+        slug_to_key[_norm_enum_slug(meta.name)] = key
+        slug_to_key[_norm_enum_slug(meta.qualified_name)] = key
+
+    def _coerce_envelope_before(cls: Type[BaseModel], data: Any) -> Any:
+        if not isinstance(data, dict) or not data:
+            return {}
+        normalized: Dict[str, Any] = {}
+        unmatched_top_keys: Dict[str, Any] = {}
+
+        for raw_k, raw_v in data.items():
+            if raw_k in field_map:
+                target_k = raw_k
+            else:
+                target_k = slug_to_key.get(_norm_enum_slug(raw_k))
+            if target_k is not None:
+                meta = field_map[target_k]
+                validated_sub = _validate_single_subschema_safely(raw_v, meta.schema_cls)
+                if validated_sub is not None:
+                    normalized[target_k] = validated_sub
+            else:
+                unmatched_top_keys[raw_k] = raw_v
+
+        # Fallback: if the LLM emitted fields directly at top level without the envelope key wrapper,
+        # route matching top-level fields into any schema that claims them.
+        if unmatched_top_keys and not normalized:
+            for target_k, meta in field_map.items():
+                schema_fields = set(meta.schema_cls.model_fields.keys())
+                overlap = {k: v for k, v in unmatched_top_keys.items() if k in schema_fields}
+                if overlap:
+                    validated_sub = _validate_single_subschema_safely(overlap, meta.schema_cls)
+                    if validated_sub is not None:
+                        normalized[target_k] = validated_sub
+
+        return normalized
+
+    envelope_name = (
+        "UnifiedExtractionEnvelope"
+        if bundle_index <= 0
+        else f"UnifiedExtractionEnvelope_{bundle_index}"
+    )
+    envelope_cls: Type[BaseModel] = create_model(
+        envelope_name,
+        **field_definitions,
+    )
+    try:
+        setattr(envelope_cls, "_sp5_coerce_envelope", classmethod(_coerce_envelope_before))
+        envelope_cls.__pydantic_decorators__.model_validators["_sp5_coerce_envelope"] = Decorator.build(
+            envelope_cls,
+            cls_var_name="_sp5_coerce_envelope",
+            shim=None,
+            info=ModelValidatorDecoratorInfo(mode="before"),
+        )
+        envelope_cls.model_rebuild(force=True)
+    except Exception as e:
+        logger.warning(f"Could not attach envelope pre-validator on {envelope_name}: {e}")
+
+    return envelope_cls, field_map
+

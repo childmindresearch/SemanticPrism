@@ -41,10 +41,15 @@ from prismrunner import (
 )
 
 from src.mapping.aggregator import DataAggregator
-from src.mapping.prompts import build_extraction_prompt, build_triage_prompt
+from src.mapping.prompts import (
+    build_extraction_prompt,
+    build_triage_prompt,
+    build_unified_extraction_prompt,
+)
 from src.mapping.schemas import (
     SchemaMeta,
     TriageResult,
+    build_unified_envelope_model,
     get_child_schemas,
     get_top_level_schemas,
     load_schemas,
@@ -176,27 +181,55 @@ def load_input_documents(
 
 def chunk_text(
     text: str,
-    chunk_size_words: int = 300,
-    chunk_overlap_words: int = 20,
+    chunk_size_words: int = 1500,
+    chunk_overlap_words: int = 100,
 ) -> List[str]:
     """
-    Splits a document's text into overlapping word chunks.
+    Adaptive document chunker:
+      - Whole-Document Fast-Path: Any document with `<= chunk_size_words` words (all small and
+        medium documents) is returned intact as `[text.strip()]`, preserving all original
+        newlines, paragraphs, bullet lists, and section formatting.
+      - Sentence-Boundary Windowing + Tail Absorption: For very long documents exceeding
+        `chunk_size_words`, splits on sentence boundaries within a bounded lookahead window
+        and absorbs tiny trailing remainders so no tiny orphan tail chunks are created.
     """
     if not text or not text.strip():
         return []
 
-    words = text.split()
+    stripped = text.strip()
+    words = stripped.split()
     if len(words) <= chunk_size_words:
-        return [" ".join(words)]
+        return [stripped]
+
+    sentence_endings = (".", "!", "?", '."', '!"', '?"', ".'", "!'", "?'", ".)", "!)")
+    max_lookahead = min(80, max(10, chunk_size_words // 10))
+    tail_absorption_words = max(chunk_overlap_words, chunk_size_words // 10)
 
     chunks: List[str] = []
-    step = max(1, chunk_size_words - chunk_overlap_words)
+    start = 0
+    total_words = len(words)
 
-    for i in range(0, len(words), step):
-        chunk_words = words[i : i + chunk_size_words]
-        chunks.append(" ".join(chunk_words))
-        if i + chunk_size_words >= len(words):
+    while start < total_words:
+        base_end = min(start + chunk_size_words, total_words)
+        end = base_end
+
+        if end < total_words:
+            # If the remaining tail after base_end is small, absorb it into this chunk
+            if (total_words - base_end) <= tail_absorption_words:
+                end = total_words
+            else:
+                lookahead_limit = min(total_words, base_end + max_lookahead)
+                while end < lookahead_limit and not words[end - 1].endswith(sentence_endings):
+                    end += 1
+                if end == lookahead_limit and not words[end - 1].endswith(sentence_endings):
+                    end = base_end
+                if (total_words - end) <= tail_absorption_words:
+                    end = total_words
+
+        chunks.append(" ".join(words[start:end]))
+        if end >= total_words:
             break
+        start = max(start + 1, end - chunk_overlap_words)
 
     return chunks
 
@@ -578,16 +611,17 @@ class SemanticPrismStage5Pipeline:
         repetition_penalty: float = 1.05,
         constrain_json: bool = True,
         context_window_cap: Union[int, str] = "auto",
-        max_new_tokens: int = 1536,
+        max_new_tokens: int = 2048,
         triage_max_new_tokens: int = 256,
-        chunk_size_words: int = 300,
-        chunk_overlap_words: int = 20,
+        chunk_size_words: int = 1500,
+        chunk_overlap_words: int = 100,
         enable_triage: bool = True,
         triage_threshold: int = 6,
+        max_schemas_per_envelope: int = 6,
         fallback_on_empty_triage: bool = False,
         schema_path: Union[str, Path] = "outputs/04_synthesis/schemas/master_ontology.py",
         target_class_name: Optional[str] = None,
-        extract_mode: str = "top_level",
+        extract_mode: str = "unified",
         outputs_dir: Union[str, Path] = "outputs",
         save_llm_payloads: bool = True,
         resume_mode: str = "skip",
@@ -628,6 +662,7 @@ class SemanticPrismStage5Pipeline:
         self.chunk_overlap_words = chunk_overlap_words
         self.enable_triage = enable_triage
         self.triage_threshold = triage_threshold
+        self.max_schemas_per_envelope = max(1, int(max_schemas_per_envelope))
         self.fallback_on_empty_triage = fallback_on_empty_triage
         self.schema_path = Path(schema_path)
         self.target_class_name = target_class_name
@@ -729,8 +764,8 @@ class SemanticPrismStage5Pipeline:
 
         if self.target_class_name:
             target_schemas = all_schemas
-        elif self.extract_mode == "top_level":
-            target_schemas = top_level
+        elif self.extract_mode in ("unified", "top_level"):
+            target_schemas = top_level if top_level else all_schemas
         elif self.extract_mode == "child":
             target_schemas = children
         else:
@@ -923,6 +958,7 @@ class SemanticPrismStage5Pipeline:
             self.enable_triage
             and len(target_schemas) >= self.triage_threshold
             and self.target_class_name is None
+            and not (self.extract_mode == "unified" and len(target_schemas) <= self.max_schemas_per_envelope)
         )
 
         if not use_triage:
@@ -1144,6 +1180,8 @@ class SemanticPrismStage5Pipeline:
         doc_chunks_map: Dict[str, List[str]] = {}
         doc_pending_schemas: Dict[str, List[SchemaMeta]] = {}
         all_chunk_records: List[Dict[str, Any]] = []
+        doc_word_counts: List[int] = []
+        whole_doc_count = 0
 
         skipped_doc_schemas = 0
         for doc in documents:
@@ -1163,6 +1201,11 @@ class SemanticPrismStage5Pipeline:
                     self.tracker.save_extraction(doc_id, s, [])
                 continue
 
+            doc_words = len(text.split())
+            doc_word_counts.append(doc_words)
+            if len(chunks) == 1:
+                whole_doc_count += 1
+
             doc_chunks_map[doc_id] = chunks
             doc_pending_schemas[doc_id] = pending
 
@@ -1176,6 +1219,19 @@ class SemanticPrismStage5Pipeline:
                         "pending_schemas": pending,
                     }
                 )
+
+        if doc_word_counts:
+            sorted_wc = sorted(doc_word_counts)
+            min_w = sorted_wc[0]
+            med_w = sorted_wc[len(sorted_wc) // 2]
+            max_w = sorted_wc[-1]
+            whole_pct = (100.0 * whole_doc_count) / max(1, len(doc_word_counts))
+            self._log(
+                "Phase 2: Corpus Chunking",
+                f"Prepared {len(all_chunk_records)} chunk(s) across {len(doc_word_counts)} pending doc(s) "
+                f"(words/doc: min={min_w}, median={med_w}, max={max_w}; "
+                f"{whole_doc_count}/{len(doc_word_counts)} [{whole_pct:.1f}%] kept as whole single-chunk docs).",
+            )
 
         if skipped_doc_schemas > 0:
             self._log(
@@ -1206,10 +1262,27 @@ class SemanticPrismStage5Pipeline:
         # Store chunk-level BaseModel results in memory: (doc_id, qualified_name) -> List[BaseModel]
         extracted_chunk_models: Dict[Tuple[str, str], List[BaseModel]] = defaultdict(list)
         schema_work_queues: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        unified_bundle_queues: Dict[Tuple[str, ...], List[Dict[str, Any]]] = defaultdict(list)
         remaining_doc_schema_chunks: Dict[Tuple[str, str], int] = defaultdict(int)
         finalized_doc_schemas: Set[Tuple[str, str]] = set()
         consolidated_count = 0
         non_empty_count = 0
+
+        def _compute_adaptive_max_new_tokens(work_list: List[Dict[str, Any]], num_schemas_in_call: int) -> int:
+            """
+            Adaptively sizes `max_new_tokens` for corpora with smaller documents while
+            scaling up smoothly for multi-schema unified envelopes on larger excerpts.
+            """
+            if not work_list:
+                return self.max_new_tokens
+            word_Lengths = sorted(len(w["text"].split()) for w in work_list)
+            p90_words = word_Lengths[min(len(word_Lengths) - 1, int(0.9 * len(word_Lengths)))]
+            if p90_words <= 250:
+                estimated = 512 + (192 * num_schemas_in_call)
+                return min(self.max_new_tokens, max(768, estimated))
+            if num_schemas_in_call > 1:
+                return max(self.max_new_tokens, min(3072, 512 * num_schemas_in_call))
+            return self.max_new_tokens
 
         def _finalize_doc_schema_if_ready(doc_id_val: str, s_meta_val: SchemaMeta) -> None:
             nonlocal consolidated_count, non_empty_count
@@ -1237,6 +1310,7 @@ class SemanticPrismStage5Pipeline:
 
         for (doc_id, chunk_idx), selected_schemas in chunk_to_schemas.items():
             ch_text = chunk_text_lookup[(doc_id, chunk_idx)]
+            uncached_for_chunk: List[SchemaMeta] = []
             for s_meta in selected_schemas:
                 if self.tracker.is_chunk_completed(doc_id, s_meta, chunk_idx):
                     cached_inst = self.tracker.load_chunk_result(doc_id, s_meta, chunk_idx)
@@ -1244,6 +1318,39 @@ class SemanticPrismStage5Pipeline:
                         extracted_chunk_models[(doc_id, s_meta.qualified_name)].append(cached_inst)
                 else:
                     remaining_doc_schema_chunks[(doc_id, s_meta.qualified_name)] += 1
+                    uncached_for_chunk.append(s_meta)
+
+            if not uncached_for_chunk:
+                continue
+
+            if self.extract_mode == "unified" and len(uncached_for_chunk) > 1:
+                max_per_env = max(1, self.max_schemas_per_envelope)
+                for b_start in range(0, len(uncached_for_chunk), max_per_env):
+                    sub_bundle = uncached_for_chunk[b_start : b_start + max_per_env]
+                    if len(sub_bundle) == 1:
+                        only_s = sub_bundle[0]
+                        schema_work_queues[only_s.qualified_name].append(
+                            {
+                                "id": f"{doc_id}::chunk_{chunk_idx}::{only_s.qualified_name}",
+                                "text": ch_text,
+                                "doc_id": doc_id,
+                                "chunk_idx": chunk_idx,
+                                "qualified_name": only_s.qualified_name,
+                            }
+                        )
+                    else:
+                        qname_sig = tuple(s.qualified_name for s in sub_bundle)
+                        unified_bundle_queues[qname_sig].append(
+                            {
+                                "id": f"{doc_id}::chunk_{chunk_idx}::bundle_{b_start // max_per_env}",
+                                "text": ch_text,
+                                "doc_id": doc_id,
+                                "chunk_idx": chunk_idx,
+                                "schemas": sub_bundle,
+                            }
+                        )
+            else:
+                for s_meta in uncached_for_chunk:
                     schema_work_queues[s_meta.qualified_name].append(
                         {
                             "id": f"{doc_id}::chunk_{chunk_idx}::{s_meta.qualified_name}",
@@ -1261,7 +1368,138 @@ class SemanticPrismStage5Pipeline:
                     if remaining_doc_schema_chunks.get((doc_id, s_meta.qualified_name), 0) == 0:
                         _finalize_doc_schema_if_ready(doc_id, s_meta)
 
-        # Pass 3b: Targeted Single-Schema Deep Extraction
+        # Pass 3b (Part 1): Unified Envelope Single-Pass Multi-Schema Extraction
+        total_unified_bundles = len(unified_bundle_queues)
+        for b_idx, (qname_sig, bundle_work_items) in enumerate(unified_bundle_queues.items(), start=1):
+            if not bundle_work_items:
+                continue
+            bundle_schemas = [schema_by_qname[qn] for qn in qname_sig]
+            envelope_cls, field_to_schema = build_unified_envelope_model(bundle_schemas, bundle_index=b_idx)
+            sys_prompt = build_unified_extraction_prompt(field_to_schema)
+            schema_names_str = ", ".join(f"`{s.name}`" for s in bundle_schemas)
+            instruction = (
+                f"Extract all information matching the {len(bundle_schemas)} domain schemas "
+                f"({schema_names_str}) from the document excerpt above into the unified JSON object. "
+                f"Use exact verbatim mentions and set any absent fields or absent domain schemas to null."
+            )
+
+            # Sort work items by word count so similar-length documents batch together with minimal padding
+            sorted_work_items = sorted(bundle_work_items, key=lambda w: len(w["text"].split()))
+            effective_max_tokens = _compute_adaptive_max_new_tokens(sorted_work_items, len(bundle_schemas))
+
+            self._maybe_save_payload(
+                f"unified_envelope_bundle_{b_idx}",
+                sys_prompt,
+                f"Document Excerpt:\n{sorted_work_items[0]['text']}\n\nInstruction:\n{instruction}",
+            )
+
+            total_bundle_chunks = len(sorted_work_items)
+            bundle_label = "+".join(s.name for s in bundle_schemas)
+            self._log(
+                "Phase 3b: Unified Extraction",
+                f"[Bundle {b_idx}/{total_unified_bundles}] Extracting {len(bundle_schemas)} schemas simultaneously "
+                f"({bundle_label}) across {total_bundle_chunks} chunk(s) (max_new_tokens={effective_max_tokens})...",
+            )
+
+            work_meta_by_id = {w["id"]: w for w in sorted_work_items}
+            prism_inputs = [{"id": w["id"], "text": w["text"]} for w in sorted_work_items]
+            bundle_start_ts = time.time()
+            bundle_done_chunks = 0
+
+            def _on_unified_batch_start(
+                batch_idx: int,
+                total_batches: int,
+                batch_records: List[Any],
+                _b_idx: int = b_idx,
+                _label: str = bundle_label,
+            ) -> None:
+                self._log(
+                    "Phase 3b: Unified Extraction",
+                    f"[Bundle {_b_idx}/{total_unified_bundles} '{_label}'] "
+                    f"Batch {batch_idx + 1}/{total_batches} starting (batch_size={len(batch_records)} chunk(s))...",
+                )
+
+            def _on_unified_chunk_done(
+                annotated_chunk: Dict[str, Any],
+                _b_idx: int = b_idx,
+                _total_chunks: int = total_bundle_chunks,
+                _field_map: Dict[str, SchemaMeta] = field_to_schema,
+                _lookup: Dict[str, Dict[str, Any]] = work_meta_by_id,
+            ) -> None:
+                nonlocal bundle_done_chunks
+                rec_id = str(annotated_chunk.get("record_id") or annotated_chunk.get("id") or "")
+                w_info = _lookup.get(rec_id, {})
+                c_doc_id = w_info.get("doc_id")
+                c_idx = w_info.get("chunk_idx")
+                parsed_items = annotated_chunk.get("parsed_items", [])
+                if c_doc_id is None or c_idx is None:
+                    return
+                bundle_done_chunks += 1
+                valid_envelopes = [m for m in parsed_items if isinstance(m, BaseModel)]
+
+                populated_schema_names: List[str] = []
+                for f_name, s_meta in _field_map.items():
+                    sub_instances: List[BaseModel] = []
+                    for env_m in valid_envelopes:
+                        sub_val = getattr(env_m, f_name, None)
+                        if isinstance(sub_val, BaseModel) and has_extracted_content(sub_val):
+                            sub_instances.append(sub_val)
+                    merged_sub_inst = (
+                        merge_pydantic_instances(sub_instances, s_meta.schema_cls)
+                        if sub_instances
+                        else None
+                    )
+                    self.tracker.save_chunk_result(c_doc_id, s_meta, c_idx, merged_sub_inst)
+                    if merged_sub_inst is not None:
+                        extracted_chunk_models[(c_doc_id, s_meta.qualified_name)].append(merged_sub_inst)
+                        populated_schema_names.append(s_meta.name)
+
+                elapsed = max(0.001, time.time() - bundle_start_ts)
+                rate = bundle_done_chunks / elapsed
+                rem = max(0, _total_chunks - bundle_done_chunks)
+                eta_s = int(rem / rate) if rate > 0 else 0
+                pct = (100.0 * bundle_done_chunks) / max(1, _total_chunks)
+                pop_summary = (
+                    f"populated: {', '.join(populated_schema_names)}"
+                    if populated_schema_names
+                    else f"0/{len(_field_map)} populated"
+                )
+                self._log(
+                    "Phase 3b: Unified Extraction",
+                    f"[Bundle {_b_idx}/{total_unified_bundles} | "
+                    f"Chunk {bundle_done_chunks}/{_total_chunks} ({pct:.1f}%) | "
+                    f"{rate:.2f} ch/s | ETA {eta_s}s] "
+                    f"Doc '{c_doc_id}' chunk #{c_idx} ({pop_summary})",
+                )
+
+                for s_meta in _field_map.values():
+                    key = (c_doc_id, s_meta.qualified_name)
+                    remaining_doc_schema_chunks[key] = max(0, remaining_doc_schema_chunks.get(key, 1) - 1)
+                    if remaining_doc_schema_chunks[key] == 0 and not dry_run:
+                        _finalize_doc_schema_if_ready(c_doc_id, s_meta)
+
+            self.prism.run(
+                input_data=prism_inputs,
+                id_column="id",
+                text_column="text",
+                task="extract",
+                schema_cls=envelope_cls,
+                system_prompt=sys_prompt,
+                instruction=instruction,
+                max_new_tokens=effective_max_tokens,
+                temperature=self.temperature,
+                repetition_penalty=self.repetition_penalty,
+                batch_size=self.batch_size,
+                chunk=False,
+                as_array=False,
+                constrain_json=self.constrain_json,
+                dedup=False,
+                dry_run=dry_run,
+                on_batch_start=_on_unified_batch_start,
+                on_chunk_processed=_on_unified_chunk_done,
+            )
+
+        # Pass 3b (Part 2): Targeted Single-Schema Deep Extraction
         total_schemas_with_work = len(schema_work_queues)
         for s_idx, (qname, work_items) in enumerate(schema_work_queues.items(), start=1):
             s_meta = schema_by_qname[qname]
@@ -1271,22 +1509,25 @@ class SemanticPrismStage5Pipeline:
                 f"Use exact verbatim mentions and set any absent fields to null."
             )
 
-            if work_items:
+            sorted_work_items = sorted(work_items, key=lambda w: len(w["text"].split()))
+            effective_max_tokens = _compute_adaptive_max_new_tokens(sorted_work_items, 1)
+
+            if sorted_work_items:
                 self._maybe_save_payload(
                     s_meta.name,
                     sys_prompt,
-                    f"Document Excerpt:\n{work_items[0]['text']}\n\nInstruction:\n{instruction}",
+                    f"Document Excerpt:\n{sorted_work_items[0]['text']}\n\nInstruction:\n{instruction}",
                 )
 
-            total_schema_chunks = len(work_items)
+            total_schema_chunks = len(sorted_work_items)
             self._log(
                 "Phase 3b: Deep Extraction",
                 f"[{s_idx}/{total_schemas_with_work}] Extracting schema '{s_meta.qualified_name}' "
-                f"across {total_schema_chunks} relevant chunk(s)...",
+                f"across {total_schema_chunks} relevant chunk(s) (max_new_tokens={effective_max_tokens})...",
             )
 
-            work_meta_by_id = {w["id"]: w for w in work_items}
-            prism_inputs = [{"id": w["id"], "text": w["text"]} for w in work_items]
+            work_meta_by_id = {w["id"]: w for w in sorted_work_items}
+            prism_inputs = [{"id": w["id"], "text": w["text"]} for w in sorted_work_items]
             schema_start_ts = time.time()
             schema_done_chunks = 0
 
@@ -1359,7 +1600,7 @@ class SemanticPrismStage5Pipeline:
                 schema_cls=s_meta.schema_cls,
                 system_prompt=sys_prompt,
                 instruction=instruction,
-                max_new_tokens=self.max_new_tokens,
+                max_new_tokens=effective_max_tokens,
                 temperature=self.temperature,
                 repetition_penalty=self.repetition_penalty,
                 batch_size=self.batch_size,

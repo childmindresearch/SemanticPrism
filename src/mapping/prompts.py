@@ -144,3 +144,37 @@ def build_extraction_prompt(schema_cls: Type[BaseModel]) -> str:
         f"{fields_section}\n\n"
         f"{EXTRACTION_RULES}"
     )
+
+
+def build_unified_extraction_prompt(
+    schema_field_map: Dict[str, SchemaMeta],
+) -> str:
+    """
+    Constructs a single-pass Unified Envelope system prompt that presents all target domain
+    schemas side-by-side so the LLM extracts and routes facts into the appropriate schema keys
+    in a single inference pass per chunk.
+    """
+    sections: List[str] = []
+    for idx, (field_key, meta) in enumerate(schema_field_map.items(), start=1):
+        schema_cls = meta.schema_cls
+        doc = (schema_cls.__doc__ or "").strip()
+        doc_line = f" — {doc}" if doc else ""
+        fields_section = format_schema_field_instructions(schema_cls, indent=1)
+        sections.append(
+            f"### {idx}. Envelope Key `{field_key}` (Schema `{schema_cls.__name__}`){doc_line}\n"
+            f"{fields_section}"
+        )
+
+    all_sections_str = "\n\n".join(sections)
+    envelope_keys_str = ", ".join(f"`{k}`" for k in schema_field_map.keys())
+
+    return (
+        "You are an expert precision multi-schema data extraction agent.\n"
+        "Extract structured factual data from the document excerpt into the unified JSON object.\n"
+        f"Top-level JSON keys correspond to the domain schemas ({envelope_keys_str}).\n"
+        "- Route each fact in the text to the domain schema where it best belongs.\n"
+        "- If an entire domain schema has no supporting evidence in the text excerpt, set its top-level key to `null`.\n\n"
+        f"{all_sections_str}\n\n"
+        f"{EXTRACTION_RULES}"
+    )
+

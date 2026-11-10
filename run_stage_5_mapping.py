@@ -103,15 +103,16 @@ DOCUMENT_LIMIT: Optional[int] = MASTER_STAGE5_DOCUMENT_LIMIT  # Optional cap on 
 # Option 2 (Directory)  : "outputs/04_synthesis/schemas/community"
 SCHEMA_PATH: str = MASTER_STAGE5_SCHEMA_PATH
 TARGET_CLASS_NAME: Optional[str] = None                       # Optional single BaseModel class name filter (None = all eligible)
-EXTRACT_MODE: str = MASTER_STAGE5_EXTRACT_MODE                # "top_level" (recommended), "child", or "all"
+EXTRACT_MODE: str = MASTER_STAGE5_EXTRACT_MODE                # "unified" (recommended), "top_level", "child", or "all"
 
 # --- 4. Context Window, Chunking & Triage Settings ---
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"           # "auto" = full native model context window, or int cap
-MAX_NEW_TOKENS: int = 1536                             # Max generated tokens per schema extraction call
+MAX_NEW_TOKENS: int = 2048                             # Max generated tokens per extraction call (adaptively scaled for short docs)
 TRIAGE_MAX_NEW_TOKENS: int = 256                       # Max generated tokens for fast schema relevance triage
-CHUNK_SIZE_WORDS: int = 300                            # Target word count per text chunk
-CHUNK_OVERLAP_WORDS: int = 20                          # Overlapping words between consecutive chunks
-ENABLE_TRIAGE: bool = True                             # Run fast triage pass to skip irrelevant schemas per chunk
+CHUNK_SIZE_WORDS: int = 1500                           # Target word count per chunk (keeps docs <= 1500 words whole)
+CHUNK_OVERLAP_WORDS: int = 100                         # Overlapping words between consecutive chunks on very long docs
+MAX_SCHEMAS_PER_ENVELOPE: int = 6                      # Max top-level schemas bundled into a single unified pass
+ENABLE_TRIAGE: bool = True                             # Run fast triage pass when candidate schemas exceed envelope cap
 TRIAGE_THRESHOLD: int = 6                              # Only run triage when candidate schema count >= threshold
 FALLBACK_ON_EMPTY_TRIAGE: bool = False                 # False = skip chunk if triage selects 0 schemas; True = run all
 
@@ -157,9 +158,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extract-mode",
         type=str,
-        choices=["top_level", "child", "all"],
+        choices=["unified", "top_level", "child", "all"],
         default=EXTRACT_MODE,
-        help="Which schema hierarchy tier to extract ('top_level' recommended).",
+        help="Which schema extraction mode to use ('unified' recommended).",
     )
     parser.add_argument(
         "--input-path",
@@ -268,6 +269,7 @@ def main() -> None:
             triage_max_new_tokens=TRIAGE_MAX_NEW_TOKENS,
             chunk_size_words=CHUNK_SIZE_WORDS,
             chunk_overlap_words=CHUNK_OVERLAP_WORDS,
+            max_schemas_per_envelope=MAX_SCHEMAS_PER_ENVELOPE,
             enable_triage=not args.no_triage and ENABLE_TRIAGE,
             triage_threshold=TRIAGE_THRESHOLD,
             fallback_on_empty_triage=FALLBACK_ON_EMPTY_TRIAGE,
