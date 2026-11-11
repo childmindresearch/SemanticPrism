@@ -123,11 +123,7 @@ Cleans up messy wording by grouping synonyms (for example, *"heart attack"* and 
 ### Stage 3: Graph Topology (`src/topology/`)
 Connects all refined facts into a network map and organizes them into clear, non-overlapping subject areas (communities).
 - **Filtering Out Generic "Hub" Words**: Broad words that connect to everything (like *"patient"*, *"report"*, or *"system"*) are separated from core topic clusters so they don't blur boundaries between distinct subjects.
-- **Smart Multi-Signal Community Merging**: Groups tightly connected concepts together (using resolution-aware Leiden clustering) and then automatically merges split or overlapping communities by checking **four signals together**:
-  1. *Meaning similarity* of each group's core concepts,
-  2. *Shared sentences and documents* (catches related jargon or short-note topics that appear together),
-  3. *Direct network links* between groups, and
-  4. *Shared Stage 1 themes*—while preventing unrelated chapters of long documents from accidentally merging into one giant group.
+- **Leiden Clustering + Embedding Merge Pass**: Groups tightly connected concepts into communities using Leiden modularity, then runs a second pass that merges redundant or split communities only when their centered concept-embedding centroids exceed the similarity threshold (`0.70` by default).
 - **Interactive 3D Visuals**: Creates standalone HTML files you can open in any browser (including `cluster_3d_galaxy_visualization.html`) to explore your topics visually.
 
 ### Stage 4: Schema Synthesis (`src/synthesis/`)
