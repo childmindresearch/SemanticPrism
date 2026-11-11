@@ -40,11 +40,11 @@ topology:
     #          agglomeration convergence based on graph size |V| and edge density rho.
     auto_scale_detection: true
 
-    # 4. Agglomeration Similarity Threshold Override (Centroid Cosine Similarity Cutoff)
-    #    - When set (uncommented): Explicitly overrides the profile preset.
-    #    - To use automatic profile presets: Simply comment out this line (or set to null).
-    #      Preset defaults: "macro" = 0.65, "balanced" = 0.70, "granular" = 0.75.
-    agglomeration_similarity_threshold: null # Defaults to active profile preset (0.70 for balanced)
+    # 4. Agglomeration Threshold Override (Optional)
+    #    - When set (uncommented): Explicitly overrides the profile preset hybrid threshold.
+    #    - To use automatic profile presets: Keep set to null.
+    #      Hybrid preset defaults: "macro" = 0.48, "balanced" = 0.54, "granular" = 0.62.
+    agglomeration_similarity_threshold: null # Defaults to active profile preset (0.54 hybrid for balanced)
 
   # ----------------------------------------------------------------------------
   # SECTION 0.1: PIPELINE EXECUTION & TABULAR DIAGNOSTIC REPORTS
@@ -143,12 +143,19 @@ topology:
     refugee_margin_delta: 0.06         # Required excess affinity: sim(foreign) - sim(home) >= 0.06
     require_structural_neighbor: true  # Node must possess at least 1 structural graph edge to foreign community
 
-    # --- 3.7 Hierarchical Community Agglomeration ---
-    # Iteratively consolidates redundant or split communities with near-identical centroids:
+    # --- 3.7 Dynamic Multi-Signal Macro Community Agglomeration ---
+    # Iteratively consolidates redundant or split communities using a 4-signal corpus-adaptive
+    # affinity model (core-weighted semantic centroids, source-quote overlap, structural boundary
+    # conductance, and Stage 1 theme alignment) with shrinkage de-biasing and anti-snowball guards:
     enable_community_agglomeration: true
-    agglomeration_similarity_threshold: 0.70 # Centroid cosine similarity cutoff for merging communities
-    max_agglomeration_passes: 15      # Iterative convergence ceiling
-    center_agglomeration_embeddings: true # Subtract corpus mean vector mu to eliminate anisotropic baseline shift
+    agglomeration_mode: "hybrid_adaptive"     # "hybrid_adaptive" (recommended 4-signal) or "centroid_only" (legacy 1D cosine)
+    agglomeration_hybrid_threshold: 0.54      # Composite 4-signal affinity cutoff ("macro": 0.48, "balanced": 0.54, "granular": 0.62)
+    agglomeration_similarity_threshold: 0.70  # Legacy 1D centroid cosine cutoff (used only when agglomeration_mode == "centroid_only")
+    agglomeration_quote_overlap_rescue: 0.38  # Contextual sentence overlap cutoff for rescuing complex-vocab / short-form splits
+    disconnected_pair_semantic_floor: 0.68    # Pure-semantic floor required on mid/large graphs when 2 clusters share 0 edges & 0 quotes
+    max_merged_community_share: 0.48          # Anti-snowball cap on max node share of a merged macro-cluster while K > 3
+    max_agglomeration_passes: 15              # Base pass floor (dynamically scales up with 0.75 * initial community count)
+    center_agglomeration_embeddings: true     # Shrinkage-calibrated corpus mean centering (prevents small-corpus hemisphere flip)
 
     # --- 3.8 Disjoint Triplet Payload Partitioning ---
     triplet_payload_mode: "strictly_intra_only" # "include_boundary" or "strictly_intra_only"

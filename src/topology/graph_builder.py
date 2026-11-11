@@ -83,6 +83,29 @@ def _calculate_betweenness(dg: nx.DiGraph) -> Dict[str, float]:
     return nx.betweenness_centrality(dg)
 
 
+def _run_leiden_partition(
+    g_int: nx.Graph,
+    weights_param: Optional[str] = None,
+    resolution: Optional[float] = None,
+):
+    """
+    Executes Leiden community detection via cdlib.
+    Uses `algorithms.rb_pots` when a non-1.0 `resolution` parameter is specified
+    (since `algorithms.leiden` in cdlib hardcodes gamma=1.0), falling back cleanly
+    to `algorithms.leiden` if `rb_pots` is unavailable.
+    """
+    if resolution is not None and abs(float(resolution) - 1.0) > 1e-6 and hasattr(algorithms, "rb_pots"):
+        try:
+            return algorithms.rb_pots(
+                g_int,
+                weights=weights_param,
+                resolution_parameter=float(resolution),
+            )
+        except Exception:
+            pass
+    return algorithms.leiden(g_int, weights=weights_param)
+
+
 class TopologyPipeline:
     def __init__(self, config: Dict[str, Any]):
         self.full_config = config
@@ -128,8 +151,13 @@ class TopologyPipeline:
         self.refugee_margin_delta = float(self.semantic_cfg.get('refugee_margin_delta', 0.06))
         self.require_structural_neighbor = self.semantic_cfg.get('require_structural_neighbor', True)
         self.enable_community_agglomeration = bool(self.semantic_cfg.get('enable_community_agglomeration', True))
-        self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.75))
-        self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 5))
+        self.agglomeration_mode = str(self.semantic_cfg.get('agglomeration_mode', 'hybrid_adaptive')).lower()
+        self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.70))
+        self.agglomeration_hybrid_threshold = float(self.semantic_cfg.get('agglomeration_hybrid_threshold', 0.54))
+        self.agglomeration_quote_overlap_rescue = float(self.semantic_cfg.get('agglomeration_quote_overlap_rescue', 0.38))
+        self.disconnected_pair_semantic_floor = float(self.semantic_cfg.get('disconnected_pair_semantic_floor', 0.68))
+        self.max_merged_community_share = float(self.semantic_cfg.get('max_merged_community_share', 0.48))
+        self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 15))
         self.center_agglomeration_embeddings = bool(self.semantic_cfg.get('center_agglomeration_embeddings', True))
 
         # Dedicated Visualization Engine
@@ -161,19 +189,29 @@ class TopologyPipeline:
         if granularity == "macro":
             base_leiden_res = 0.55
             self.agglomeration_similarity_threshold = 0.65
+            self.agglomeration_hybrid_threshold = 0.48
+            self.max_merged_community_share = 0.60
             self.max_agglomeration_passes = 20
         elif granularity == "granular":
             base_leiden_res = 1.05
             self.agglomeration_similarity_threshold = 0.75
-            self.max_agglomeration_passes = 5
+            self.agglomeration_hybrid_threshold = 0.62
+            self.max_merged_community_share = 0.35
+            self.max_agglomeration_passes = 8
         else:  # "balanced"
             base_leiden_res = 0.75
             self.agglomeration_similarity_threshold = 0.70
+            self.agglomeration_hybrid_threshold = 0.54
+            self.max_merged_community_share = 0.48
             self.max_agglomeration_passes = 15
 
         # Allow explicit override from macro_dials block if specified:
         if "agglomeration_similarity_threshold" in macro_cfg and macro_cfg["agglomeration_similarity_threshold"] is not None:
-            self.agglomeration_similarity_threshold = float(macro_cfg["agglomeration_similarity_threshold"])
+            explicit_tau = float(macro_cfg["agglomeration_similarity_threshold"])
+            self.agglomeration_similarity_threshold = explicit_tau
+            self.agglomeration_hybrid_threshold = explicit_tau
+        if "agglomeration_hybrid_threshold" in macro_cfg and macro_cfg["agglomeration_hybrid_threshold"] is not None:
+            self.agglomeration_hybrid_threshold = float(macro_cfg["agglomeration_hybrid_threshold"])
 
         # 2. Dynamic Scale Auto-Detection
         if auto_scale:
@@ -222,7 +260,12 @@ class TopologyPipeline:
         print(f"   ==> [Macro Dials Auto-Calibration] Active Mode: '{granularity}' granularity, '{separation}' separation (Auto-Scale: {auto_scale})")
         print(f"       -> Graph Profile: {num_nodes} nodes, {num_edges} edges, Density: {density:.6f}")
         print(f"       -> Calibrated Hyperparameters: leiden_res={self.leiden_res:.2f}, hub_deg_floor={self.min_hub_degree}, hub_p_thresh={self.hub_p_thresh:.2f}, max_hubs={self.max_global_hubs}")
-        print(f"       -> Calibrated Clustering: absorption_size={self.absorption_size_threshold}, agglomeration_tau={self.agglomeration_similarity_threshold:.2f} (max passes: {self.max_agglomeration_passes}), alpha={self.hybrid_semantic_alpha:.2f}")
+        active_tau_disp = (
+            self.agglomeration_hybrid_threshold
+            if self.agglomeration_mode == "hybrid_adaptive"
+            else self.agglomeration_similarity_threshold
+        )
+        print(f"       -> Calibrated Clustering: absorption_size={self.absorption_size_threshold}, agglomeration_mode='{self.agglomeration_mode}', agglomeration_tau={active_tau_disp:.2f} (base max passes: {self.max_agglomeration_passes}), alpha={self.hybrid_semantic_alpha:.2f}")
 
     def execute(self, refined_triplets: List[Dict[str, Any]]) -> Dict[str, TopologyResult]:
         print("=== SemanticPrism Stage 3: Topology Pipeline (Rebuilt 3-Stage Architecture) ===")
@@ -907,7 +950,7 @@ class TopologyPipeline:
                 rev_mapping = {idx: n for idx, n in enumerate(node_list)}
                 g_int = nx.relabel_nodes(cluster_ug, mapping)
                 weights_param = "weight" if self.enable_weighted_leiden else None
-                coms = algorithms.leiden(g_int, weights=weights_param)
+                coms = _run_leiden_partition(g_int, weights_param=weights_param, resolution=self.leiden_res)
                 for i, c_nodes in enumerate(coms.communities):
                     orig_nodes = [rev_mapping[n] for n in c_nodes]
                     communities.append(CommunityPartition(community_id=i, nodes=orig_nodes))
@@ -1247,6 +1290,17 @@ class TopologyPipeline:
                             "delta": round(best_foreign_sim - home_sim, 4)
                         })
 
+        # Normalize Pre-Agglomeration Communities by Size Descending so baseline IDs (0..K_base-1)
+        # align deterministically with `merged_from` lineage in topology_partitions.json
+        communities = [c for c in communities if len(c.nodes) > 0]
+        communities.sort(key=lambda x: len(x.nodes), reverse=True)
+        for base_idx, c in enumerate(communities):
+            c.community_id = base_idx
+            c.nodes = sorted(list(set(c.nodes)))
+            c.merged_from = [base_idx]
+        comm_lookup = {c.community_id: c for c in communities}
+        comm_map = {n: c.community_id for c in communities for n in c.nodes}
+
         # Snapshot Baseline Pre-Agglomeration Communities
         baseline_communities = [
             CommunityPartition(community_id=c.community_id, nodes=list(c.nodes), merged_from=[c.community_id])
@@ -1264,61 +1318,384 @@ class TopologyPipeline:
             json.dump(baseline_result.model_dump(), f, indent=2)
 
         # -------------------------------------------------------------
-        # Pass 5: Semantic Community Agglomeration (Hierarchical Centroid Merging)
+        # Pass 5: Dynamic Multi-Signal Macro Community Agglomeration
         # -------------------------------------------------------------
-        for c in communities:
-            if not getattr(c, "merged_from", None):
-                c.merged_from = [c.community_id]
-
         agglomeration_records = []
         if self.enable_community_agglomeration and len(communities) > 1:
-            concept_vecs_agglom = concept_vecs
+            from collections import Counter as _Counter
 
-            overall_max_sim = -1.0
+            # 1. Cluster-count-aware shrinkage centering:
+            #    Anisotropic cone removal depends on initial cluster diversity K_init (not just |V|),
+            #    because with small K (e.g. 3-6 macro topics) full mean subtraction forces sibling
+            #    topics into ~120-degree simplex separation regardless of node count.
+            k_init = len(communities)
+            if self.center_agglomeration_embeddings and raw_concept_vecs:
+                lam_k = float(max(1, k_init - 1)) / float(k_init + 4.0)
+                effective_shrink_scale = len(raw_concept_vecs) * ((1.0 - lam_k) / max(1e-6, lam_k))
+                concept_vecs_agglom, _ = TargetResolver.center_concept_embeddings(
+                    raw_concept_vecs,
+                    shrinkage_scale=effective_shrink_scale,
+                )
+            else:
+                concept_vecs_agglom = raw_concept_vecs
+
+            # 2. Extract empirical node-level context from refined_triplets (quarantining global hubs)
+            hub_norm_set = {str(h).lower().strip() for h in global_hubs}
+            node_quotes_map: Dict[str, set] = defaultdict(set)
+            node_docs_map: Dict[str, set] = defaultdict(set)
+            node_themes_map: Dict[str, _Counter] = defaultdict(_Counter)
+            node_fidelities_map: Dict[str, List[float]] = defaultdict(list)
+            quote_word_lengths: List[int] = []
+            distinct_quotes_seen: set = set()
+
+            for tr in refined_triplets:
+                s_norm = str(tr.get("subject", "")).lower().strip()
+                o_norm = str(tr.get("object", "")).lower().strip()
+                if not s_norm or not o_norm:
+                    continue
+                if s_norm in hub_norm_set or o_norm in hub_norm_set:
+                    continue
+
+                fid_val = float(tr.get("contextual_fidelity", 0.50) or 0.50)
+                node_fidelities_map[s_norm].append(fid_val)
+                node_fidelities_map[o_norm].append(fid_val)
+
+                q_raw = str(tr.get("source_quote", "")).strip()
+                if q_raw:
+                    q_norm = " ".join(q_raw.lower().split())
+                    node_quotes_map[s_norm].add(q_norm)
+                    node_quotes_map[o_norm].add(q_norm)
+                    if q_norm not in distinct_quotes_seen:
+                        distinct_quotes_seen.add(q_norm)
+                        quote_word_lengths.append(len(q_norm.split()))
+
+                doc_ref = tr.get("doc_id") or tr.get("document_id") or tr.get("source_id")
+                if doc_ref is not None and str(doc_ref).strip():
+                    d_norm = str(doc_ref).strip()
+                    node_docs_map[s_norm].add(d_norm)
+                    node_docs_map[o_norm].add(d_norm)
+
+                th_raw = str(tr.get("theme_association", "")).strip()
+                if th_raw and th_raw.lower() not in ("other", "unassigned", "general domain observations"):
+                    th_norm = th_raw.lower()
+                    node_themes_map[s_norm][th_norm] += 1
+                    node_themes_map[o_norm][th_norm] += 1
+
+            node_avg_fidelity: Dict[str, float] = {
+                nk: float(np.mean(vals)) for nk, vals in node_fidelities_map.items() if vals
+            }
+
+            # 3. Detect Intrinsic Corpus Profile (Short-Form vs Complex-Vocab vs Large Multi-Section)
+            median_quote_words = float(np.median(quote_word_lengths)) if quote_word_lengths else 25.0
+            edge_raw_cosines: List[float] = []
+            for u_e, v_e in cluster_ug.edges():
+                vu_r = raw_concept_vecs.get(str(u_e).lower().strip())
+                vv_r = raw_concept_vecs.get(str(v_e).lower().strip())
+                if vu_r is not None and vv_r is not None:
+                    edge_raw_cosines.append(float(np.dot(vu_r, vv_r)))
+            median_edge_raw_cos = float(np.median(edge_raw_cosines)) if edge_raw_cosines else 0.50
+
+            num_graph_nodes = len(dg)
+            is_short_or_sparse = (num_graph_nodes < 120) or (median_quote_words <= 14.0)
+            is_complex_vocab = median_edge_raw_cos < 0.42
+            is_large_corpus = num_graph_nodes >= 500
+
+            if self.agglomeration_mode == "centroid_only":
+                signal_weights = {"semantic": 1.0, "quote_overlap": 0.0, "structural": 0.0, "theme": 0.0}
+                effective_threshold = self.agglomeration_similarity_threshold
+                corpus_regime = "legacy_centroid_only"
+            else:
+                if is_short_or_sparse:
+                    signal_weights = {"semantic": 0.44, "quote_overlap": 0.28, "structural": 0.18, "theme": 0.10}
+                    corpus_regime = "short_form_or_sparse"
+                elif is_complex_vocab:
+                    signal_weights = {"semantic": 0.42, "quote_overlap": 0.26, "structural": 0.22, "theme": 0.10}
+                    corpus_regime = "complex_specialized_vocab"
+                elif is_large_corpus:
+                    signal_weights = {"semantic": 0.52, "quote_overlap": 0.20, "structural": 0.18, "theme": 0.10}
+                    corpus_regime = "large_multi_section"
+                else:
+                    signal_weights = {"semantic": 0.50, "quote_overlap": 0.22, "structural": 0.18, "theme": 0.10}
+                    corpus_regime = "standard_balanced"
+                effective_threshold = self.agglomeration_hybrid_threshold
+
+            # Core graph (non-hub) for structural boundary conductance
+            non_hub_ug = nx.Graph()
+            for u_nh, v_nh, d_nh in dg.edges(data=True):
+                if u_nh in hub_norm_set or v_nh in hub_norm_set or u_nh in global_hubs or v_nh in global_hubs:
+                    continue
+                w_nh = float(d_nh.get("weight", 1.0))
+                if non_hub_ug.has_edge(u_nh, v_nh):
+                    non_hub_ug[u_nh][v_nh]["weight"] += w_nh
+                else:
+                    non_hub_ug.add_edge(u_nh, v_nh, weight=w_nh)
+
+            total_partitioned_nodes = max(1, sum(len(c.nodes) for c in communities))
+            effective_min_comm_floor = TargetResolver.resolve_effective_min_cluster_size(
+                {"global_hubs": global_hubs, "communities": [{"nodes": c.nodes} for c in communities]},
+                self.full_config.get("synthesis", {}).get("min_cluster_size", 15) if isinstance(self.full_config, dict) else 15,
+            )
+            effective_max_passes = max(self.max_agglomeration_passes, int(len(communities) * 0.75))
+
+            def _compute_community_features(comm_obj: CommunityPartition) -> Dict[str, Any]:
+                c_nodes_set = set(comm_obj.nodes)
+                weighted_entries: List[Tuple[float, np.ndarray, Optional[np.ndarray]]] = []
+                quotes_union: set = set()
+                docs_union: set = set()
+                themes_counter: _Counter = _Counter()
+                vol_core = 0.0
+
+                for n_raw in comm_obj.nodes:
+                    nk = str(n_raw).lower().strip()
+                    quotes_union.update(node_quotes_map.get(nk, ()))
+                    docs_union.update(node_docs_map.get(nk, ()))
+                    themes_counter.update(node_themes_map.get(nk, {}))
+
+                    deg_int = 0.0
+                    if n_raw in non_hub_ug:
+                        for nbr in non_hub_ug.neighbors(n_raw):
+                            ew = float(non_hub_ug[n_raw][nbr].get("weight", 1.0))
+                            vol_core += ew
+                            if nbr in c_nodes_set:
+                                deg_int += ew
+
+                    fid_u = max(0.25, node_avg_fidelity.get(nk, 0.50))
+                    w_node = (1.0 + math.log(1.0 + deg_int)) * fid_u
+                    v_agglom = concept_vecs_agglom.get(nk)
+                    v_raw = raw_concept_vecs.get(nk)
+                    if v_agglom is not None:
+                        weighted_entries.append((w_node, v_agglom, v_raw))
+
+                # Anchor centroid on top 75% core concepts when community has >= 8 nodes to prevent leaf dilution
+                cent_vec = None
+                raw_cent_vec = None
+                if weighted_entries:
+                    weighted_entries.sort(key=lambda item: item[0], reverse=True)
+                    if len(weighted_entries) >= 8:
+                        keep_k = max(4, int(math.ceil(len(weighted_entries) * 0.75)))
+                        core_slice = weighted_entries[:keep_k]
+                    else:
+                        core_slice = weighted_entries
+
+                    c_sum = np.sum([w * va for w, va, _ in core_slice], axis=0)
+                    c_norm = np.linalg.norm(c_sum)
+                    cent_vec = c_sum / c_norm if c_norm > 1e-9 else c_sum
+
+                    raw_valid = [(w, vr) for w, _, vr in core_slice if vr is not None]
+                    if raw_valid:
+                        r_sum = np.sum([w * vr for w, vr in raw_valid], axis=0)
+                        r_norm = np.linalg.norm(r_sum)
+                        raw_cent_vec = r_sum / r_norm if r_norm > 1e-9 else r_sum
+
+                return {
+                    "nodes_set": c_nodes_set,
+                    "centroid": cent_vec,
+                    "raw_centroid": raw_cent_vec,
+                    "quotes": quotes_union,
+                    "docs": docs_union,
+                    "themes": themes_counter,
+                    "volume": vol_core,
+                }
+
+            overall_max_score = -1.0
             overall_closest_pair = None
-            initial_pairwise_sims = []
+            initial_pairwise_candidates: List[Dict[str, Any]] = []
+            baseline_sem_mean: Optional[float] = None
+            baseline_sem_std: Optional[float] = None
+            baseline_raw_median: float = 0.35
 
-            for pass_idx in range(self.max_agglomeration_passes):
+            for pass_idx in range(effective_max_passes):
                 active_comms = [c for c in communities if len(c.nodes) > 0]
                 if len(active_comms) < 2:
                     break
 
-                cent_map = {}
-                for c in active_comms:
-                    vecs = [concept_vecs_agglom[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs_agglom]
-                    if vecs:
-                        c_sum = np.sum(vecs, axis=0)
-                        c_norm = np.linalg.norm(c_sum)
-                        cent_map[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+                feat_map: Dict[int, Dict[str, Any]] = {
+                    c.community_id: _compute_community_features(c)
+                    for c in active_comms
+                }
+                c_ids = [cid for cid, f in feat_map.items() if f["centroid"] is not None]
+                if len(c_ids) < 2:
+                    break
 
-                best_pair = None
-                best_sim = self.agglomeration_similarity_threshold
-                pass_max_sim = -1.0
+                # Measure initial pairwise centroid distribution on Pass 0 for model-agnostic calibration
+                if pass_idx == 0:
+                    pass0_sems: List[float] = []
+                    pass0_raws: List[float] = []
+                    for i_idx in range(len(c_ids)):
+                        for j_idx in range(i_idx + 1, len(c_ids)):
+                            ca, cb = c_ids[i_idx], c_ids[j_idx]
+                            pass0_sems.append(float(np.dot(feat_map[ca]["centroid"], feat_map[cb]["centroid"])))
+                            if feat_map[ca]["raw_centroid"] is not None and feat_map[cb]["raw_centroid"] is not None:
+                                pass0_raws.append(float(np.dot(feat_map[ca]["raw_centroid"], feat_map[cb]["raw_centroid"])))
+                    if pass0_raws:
+                        baseline_raw_median = max(0.0, min(0.75, float(np.median(pass0_raws))))
+                    if len(pass0_sems) >= 6:
+                        baseline_sem_mean = float(np.mean(pass0_sems))
+                        baseline_sem_std = max(0.08, float(np.std(pass0_sems)))
+
+                best_candidate: Optional[Dict[str, Any]] = None
+                best_score_so_far = -1.0
+                pass_max_score = -1.0
                 pass_closest_pair = None
 
-                c_ids = list(cent_map.keys())
                 for i_idx in range(len(c_ids)):
                     for j_idx in range(i_idx + 1, len(c_ids)):
                         cid_a = c_ids[i_idx]
                         cid_b = c_ids[j_idx]
-                        sim = float(np.dot(cent_map[cid_a], cent_map[cid_b]))
-                        if pass_idx == 0:
-                            initial_pairwise_sims.append((cid_a, cid_b, sim))
-                        if sim > pass_max_sim:
-                            pass_max_sim = sim
-                            pass_closest_pair = (cid_a, cid_b, sim)
-                        if sim > best_sim:
-                            best_sim = sim
-                            best_pair = (cid_a, cid_b, sim)
+                        fa = feat_map[cid_a]
+                        fb = feat_map[cid_b]
 
-                if pass_closest_pair and pass_max_sim > overall_max_sim:
-                    overall_max_sim = pass_max_sim
+                        # Signal 1: Core-Weighted Semantic Centroid Similarity (+ simplex & distribution calibration)
+                        sem_sim = float(np.dot(fa["centroid"], fb["centroid"]))
+                        raw_sem_sim = (
+                            float(np.dot(fa["raw_centroid"], fb["raw_centroid"]))
+                            if fa["raw_centroid"] is not None and fb["raw_centroid"] is not None
+                            else sem_sim
+                        )
+                        if self.agglomeration_mode != "centroid_only":
+                            raw_floor = 0.55 * baseline_raw_median
+                            excess_raw = (
+                                max(0.0, raw_sem_sim - raw_floor) / max(0.15, 1.0 - raw_floor)
+                                if raw_sem_sim > raw_floor else 0.0
+                            )
+                            eff_sem = max(sem_sim, 0.55 * max(0.0, sem_sim) + 0.45 * excess_raw)
+                            if (
+                                baseline_sem_mean is not None
+                                and baseline_sem_std is not None
+                                and sem_sim > 0.15
+                                and raw_sem_sim > 0.35
+                            ):
+                                z_val = (sem_sim - baseline_sem_mean) / baseline_sem_std
+                                rel_aff = 1.0 / (1.0 + math.exp(-1.15 * (z_val - 0.5)))
+                                eff_sem = max(eff_sem, 0.65 * sem_sim + 0.35 * rel_aff)
+                        else:
+                            eff_sem = sem_sim
+
+                        # Signal 2: Contextual Source-Quote (& Document) Overlap
+                        qa, qb = fa["quotes"], fb["quotes"]
+                        shared_quotes = len(qa & qb)
+                        if qa and qb:
+                            quote_ov = shared_quotes / (max(1, min(len(qa), len(qb))) + 2.0)
+                        else:
+                            quote_ov = 0.0
+
+                        da, db = fa["docs"], fb["docs"]
+                        if len(da) > 1 or len(db) > 1:
+                            doc_union = len(da | db)
+                            doc_jaccard = (len(da & db) / doc_union) if doc_union > 0 else 0.0
+                            ctx_overlap = 0.85 * quote_ov + 0.15 * doc_jaccard
+                        else:
+                            ctx_overlap = quote_ov
+
+                        # Signal 3: Structural Boundary Conductance in Core Graph
+                        smaller_set, larger_set = (
+                            (fa["nodes_set"], fb["nodes_set"])
+                            if len(fa["nodes_set"]) <= len(fb["nodes_set"])
+                            else (fb["nodes_set"], fa["nodes_set"])
+                        )
+                        cross_weight = 0.0
+                        for u_s in smaller_set:
+                            if u_s in non_hub_ug:
+                                for nbr_s in non_hub_ug.neighbors(u_s):
+                                    if nbr_s in larger_set:
+                                        cross_weight += float(non_hub_ug[u_s][nbr_s].get("weight", 1.0))
+                        min_vol = min(fa["volume"], fb["volume"])
+                        conductance = cross_weight / (min_vol + 2.0) if cross_weight > 0 else 0.0
+                        struct_score = 1.0 - math.exp(-3.5 * conductance) if conductance > 0 else 0.0
+
+                        # Signal 4: Stage 1 Thematic Distribution Cosine Alignment
+                        ta, tb = fa["themes"], fb["themes"]
+                        if ta and tb:
+                            common_th = set(ta.keys()) & set(tb.keys())
+                            dot_th = sum(float(ta[k] * tb[k]) for k in common_th)
+                            norm_ta = math.sqrt(sum(float(v * v) for v in ta.values()))
+                            norm_tb = math.sqrt(sum(float(v * v) for v in tb.values()))
+                            theme_sim = dot_th / (norm_ta * norm_tb) if (norm_ta > 0 and norm_tb > 0) else 0.0
+                        else:
+                            theme_sim = 0.0
+
+                        if self.agglomeration_mode == "centroid_only":
+                            hybrid_score = sem_sim
+                        else:
+                            hybrid_score = (
+                                signal_weights["semantic"] * max(0.0, eff_sem)
+                                + signal_weights["quote_overlap"] * ctx_overlap
+                                + signal_weights["structural"] * struct_score
+                                + signal_weights["theme"] * theme_sim
+                            )
+
+                        pair_info = {
+                            "cid_a": cid_a,
+                            "cid_b": cid_b,
+                            "hybrid_score": hybrid_score,
+                            "centroid_similarity": sem_sim,
+                            "raw_centroid_similarity": raw_sem_sim,
+                            "quote_overlap": ctx_overlap,
+                            "shared_quotes": shared_quotes,
+                            "structural_conductance": struct_score,
+                            "cross_edge_weight": cross_weight,
+                            "theme_alignment": theme_sim,
+                        }
+
+                        if pass_idx == 0:
+                            initial_pairwise_candidates.append(pair_info)
+
+                        if hybrid_score > pass_max_score:
+                            pass_max_score = hybrid_score
+                            pass_closest_pair = pair_info
+
+                        # Evaluate Merge Eligibility & Corpus Safety Guardrails
+                        merge_trigger: Optional[str] = None
+                        if self.agglomeration_mode == "centroid_only":
+                            if sem_sim > effective_threshold:
+                                merge_trigger = "centroid_threshold"
+                        else:
+                            # Guardrail A (Large-Document Disconnected-Section Veto):
+                            # Prevent merging two completely disconnected sections of a mid/large corpus unless pure semantic synonymy is very high.
+                            disconnected_veto = (
+                                num_graph_nodes >= 120
+                                and cross_weight == 0.0
+                                and shared_quotes == 0
+                                and sem_sim < self.disconnected_pair_semantic_floor
+                            )
+                            if not disconnected_veto:
+                                sem_ok = (sem_sim >= 0.12) or (raw_sem_sim >= 0.45)
+                                if hybrid_score >= effective_threshold and sem_ok:
+                                    merge_trigger = "hybrid_affinity"
+                                elif (
+                                    sem_ok
+                                    and ctx_overlap >= self.agglomeration_quote_overlap_rescue
+                                    and (struct_score >= 0.30 or (theme_sim >= 0.75 and shared_quotes >= 2))
+                                ):
+                                    merge_trigger = "empirical_overlap_rescue"
+
+                        # Guardrail B (Anti-Snowball / Max Community Share Cap):
+                        if merge_trigger is not None and len(active_comms) > 3:
+                            combined_len = len(comm_lookup[cid_a].nodes) + len(comm_lookup[cid_b].nodes)
+                            min_len = min(len(comm_lookup[cid_a].nodes), len(comm_lookup[cid_b].nodes))
+                            combined_share = combined_len / float(total_partitioned_nodes)
+                            if (
+                                combined_share > self.max_merged_community_share
+                                and min_len >= effective_min_comm_floor
+                                and hybrid_score < (effective_threshold + 0.16)
+                            ):
+                                merge_trigger = None
+
+                        if merge_trigger is not None and hybrid_score > best_score_so_far:
+                            best_score_so_far = hybrid_score
+                            pair_info_selected = dict(pair_info)
+                            pair_info_selected["merge_trigger"] = merge_trigger
+                            best_candidate = pair_info_selected
+
+                if pass_closest_pair and pass_max_score > overall_max_score:
+                    overall_max_score = pass_max_score
                     overall_closest_pair = pass_closest_pair
 
-                if not best_pair:
+                if best_candidate is None:
                     break
 
-                cid_a, cid_b, sim_val = best_pair
+                cid_a = best_candidate["cid_a"]
+                cid_b = best_candidate["cid_b"]
                 comm_a = comm_lookup[cid_a]
                 comm_b = comm_lookup[cid_b]
 
@@ -1333,7 +1710,7 @@ class TopologyPipeline:
                 for n in absorbed_nodes:
                     comm_map[n] = cid_a
 
-                # Preserve and extend merge lineage
+                # Preserve and extend baseline merge lineage
                 a_m = comm_a.merged_from if getattr(comm_a, "merged_from", None) else [cid_a]
                 b_m = comm_b.merged_from if getattr(comm_b, "merged_from", None) else [cid_b]
                 comm_a.merged_from = sorted(list(set(a_m + b_m)))
@@ -1346,38 +1723,79 @@ class TopologyPipeline:
                     "target_community": cid_a,
                     "merged_community": cid_b,
                     "nodes_merged": len(absorbed_nodes),
-                    "centroid_similarity": round(sim_val, 4)
+                    "hybrid_score": round(best_candidate["hybrid_score"], 4),
+                    "centroid_similarity": round(best_candidate["centroid_similarity"], 4),
+                    "raw_centroid_similarity": round(best_candidate["raw_centroid_similarity"], 4),
+                    "quote_overlap": round(best_candidate["quote_overlap"], 4),
+                    "structural_conductance": round(best_candidate["structural_conductance"], 4),
+                    "theme_alignment": round(best_candidate["theme_alignment"], 4),
+                    "merge_trigger": best_candidate["merge_trigger"],
                 })
 
             if agglomeration_records:
-                print(f"      -> Community Agglomeration: {len(agglomeration_records)} community merges completed (tau >= {self.agglomeration_similarity_threshold})")
+                print(
+                    f"      -> Community Agglomeration [{corpus_regime}]: {len(agglomeration_records)} macro merge(s) completed "
+                    f"(hybrid_tau >= {effective_threshold:.2f}, max_passes={effective_max_passes})"
+                )
             else:
-                closest_str = f" (closest pair: Comm #{overall_closest_pair[0]} & Comm #{overall_closest_pair[1]} at sim={overall_closest_pair[2]:.4f})" if overall_closest_pair else ""
-                print(f"      -> Community Agglomeration: 0 community merges completed (tau >= {self.agglomeration_similarity_threshold}){closest_str}")
+                closest_str = (
+                    f" (closest pair: Comm #{overall_closest_pair['cid_a']} & Comm #{overall_closest_pair['cid_b']} "
+                    f"at hybrid={overall_closest_pair['hybrid_score']:.4f}, cent_sim={overall_closest_pair['centroid_similarity']:.4f})"
+                    if overall_closest_pair else ""
+                )
+                print(
+                    f"      -> Community Agglomeration [{corpus_regime}]: 0 macro merges completed "
+                    f"(hybrid_tau >= {effective_threshold:.2f}){closest_str}"
+                )
 
-            initial_pairwise_sims.sort(key=lambda x: x[2], reverse=True)
-            with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
-                json.dump({
-                    "enabled": self.enable_community_agglomeration,
-                    "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
-                    "max_agglomeration_passes": self.max_agglomeration_passes,
-                    "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
-                    "total_merges": len(agglomeration_records),
-                    "max_observed_similarity": round(overall_max_sim, 4) if overall_max_sim >= -1.0 else None,
-                    "closest_unmerged_pair": {
-                        "community_a": overall_closest_pair[0],
-                        "community_b": overall_closest_pair[1],
-                        "similarity": round(overall_closest_pair[2], 4)
-                    } if overall_closest_pair and not agglomeration_records else None,
-                    "top_candidate_pairs": [
-                        {"community_a": a, "community_b": b, "similarity": round(s, 4)}
-                        for a, b, s in initial_pairwise_sims[:5]
-                    ] if initial_pairwise_sims else [],
-                    "merges": agglomeration_records
-                }, f, indent=2)
+            initial_pairwise_candidates.sort(key=lambda x: x["hybrid_score"], reverse=True)
+            agglom_report_payload = {
+                "enabled": self.enable_community_agglomeration,
+                "agglomeration_mode": self.agglomeration_mode,
+                "corpus_regime": corpus_regime,
+                "signal_weights": signal_weights,
+                "effective_hybrid_threshold": round(effective_threshold, 4),
+                "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
+                "agglomeration_quote_overlap_rescue": self.agglomeration_quote_overlap_rescue,
+                "disconnected_pair_semantic_floor": self.disconnected_pair_semantic_floor,
+                "max_merged_community_share": self.max_merged_community_share,
+                "max_agglomeration_passes": self.max_agglomeration_passes,
+                "effective_max_passes": effective_max_passes,
+                "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
+                "corpus_profile": {
+                    "num_graph_nodes": num_graph_nodes,
+                    "median_quote_words": round(median_quote_words, 2),
+                    "median_edge_raw_cosine": round(median_edge_raw_cos, 4),
+                },
+                "total_merges": len(agglomeration_records),
+                "max_observed_similarity": round(overall_max_score, 4) if overall_max_score >= -1.0 else None,
+                "closest_unmerged_pair": {
+                    "community_a": overall_closest_pair["cid_a"],
+                    "community_b": overall_closest_pair["cid_b"],
+                    "similarity": round(overall_closest_pair["centroid_similarity"], 4),
+                    "hybrid_score": round(overall_closest_pair["hybrid_score"], 4),
+                    "quote_overlap": round(overall_closest_pair["quote_overlap"], 4),
+                    "structural_conductance": round(overall_closest_pair["structural_conductance"], 4),
+                } if overall_closest_pair and not agglomeration_records else None,
+                "top_candidate_pairs": [
+                    {
+                        "community_a": item["cid_a"],
+                        "community_b": item["cid_b"],
+                        "hybrid_score": round(item["hybrid_score"], 4),
+                        "similarity": round(item["centroid_similarity"], 4),
+                        "quote_overlap": round(item["quote_overlap"], 4),
+                        "structural_conductance": round(item["structural_conductance"], 4),
+                        "theme_alignment": round(item["theme_alignment"], 4),
+                    }
+                    for item in initial_pairwise_candidates[:8]
+                ] if initial_pairwise_candidates else [],
+                "merges": agglomeration_records,
+            }
+        else:
+            agglom_report_payload = None
 
         # -------------------------------------------------------------
-        # Re-index & Normalize Communities by Size Descending
+        # Re-index & Normalize Final Communities by Size Descending
         # -------------------------------------------------------------
         communities.sort(key=lambda x: len(x.nodes), reverse=True)
         old_to_new_cid = {}
@@ -1387,6 +1805,17 @@ class TopologyPipeline:
             c.nodes = sorted(list(set(c.nodes)))
             if not getattr(c, "merged_from", None):
                 c.merged_from = [new_idx]
+
+        if agglom_report_payload is not None:
+            # Annotate merge records with post-sort final_community_id for seamless lineage tracing
+            baseline_to_final_cid = {}
+            for c in communities:
+                for base_id in c.merged_from:
+                    baseline_to_final_cid[base_id] = c.community_id
+            for rec in agglom_report_payload["merges"]:
+                rec["final_community_id"] = baseline_to_final_cid.get(rec["target_community"], rec["target_community"])
+            with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
+                json.dump(agglom_report_payload, f, indent=2)
 
         # Update comm_map with normalized community IDs
         comm_map = {}

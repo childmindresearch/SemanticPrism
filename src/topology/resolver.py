@@ -372,13 +372,15 @@ class TargetResolver:
     @staticmethod
     def center_concept_embeddings(
         concept_vecs: Dict[str, np.ndarray],
-        mean_vec: Optional[np.ndarray] = None
+        mean_vec: Optional[np.ndarray] = None,
+        shrinkage_scale: Optional[float] = None,
     ) -> Tuple[Dict[str, np.ndarray], np.ndarray]:
         """
         Centers concept embeddings by subtracting the corpus mean vector μ and L2-normalizing:
-            v_centered = (v - μ) / ||v - μ||_2
-        This removes the dominant anisotropic background component (common to models like BGE-Large and MiniLM),
-        preventing multi-node community centroids from collapsing into the common corpus mean (~0.99 similarity).
+            v_centered = (v - λ * μ) / ||v - λ * μ||_2
+        When `shrinkage_scale` is provided (e.g. 80.0), applies empirical Bayes shrinkage
+        λ = N / (N + shrinkage_scale) so small/short-form corpora do not suffer hemisphere
+        inversion while large corpora receive full anisotropic background removal.
 
         Returns:
             Tuple of (centered_concept_vecs_dict, corpus_mean_vec)
@@ -390,9 +392,15 @@ class TargetResolver:
             all_arr = np.array(list(concept_vecs.values()))
             mean_vec = np.mean(all_arr, axis=0)
 
+        lam = 1.0
+        if shrinkage_scale is not None and shrinkage_scale > 0:
+            n_concepts = len(concept_vecs)
+            lam = float(n_concepts) / float(n_concepts + shrinkage_scale)
+
+        effective_mean = lam * mean_vec
         centered_dict = {}
         for k, v in concept_vecs.items():
-            diff = v - mean_vec
+            diff = v - effective_mean
             norm = np.linalg.norm(diff)
             centered_dict[k] = diff / norm if norm > 1e-9 else diff
 

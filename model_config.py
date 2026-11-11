@@ -1,35 +1,25 @@
 """
-SemanticPrism Master Model & Input Configuration
-================================================
-Centralized configuration file for selecting the generative LLMs, embedding model,
-and source document dataset used across the SemanticPrism pipeline:
+SemanticPrism Master Model & Input Configuration (`model_config.py`)
+====================================================================
+Edit this single file to choose your AI models and point SemanticPrism to your documents.
 
-  - MODEL_NAME      : Generative LLM used in Stage 1 (Extraction), Stage 2 (Refinement), and Stage 5 (Schema Mapping)
-  - EMBEDDING_MODEL : SentenceTransformer embedding model used in Stage 1, Stage 2, and Stage 3
-  - CODER_MODEL     : Generative Coding LLM used in Stage 4 (Pydantic Schema Synthesis)
-  - HF_TOKEN        : Optional Hugging Face Hub access token (e.g. "hf_...") for authenticated downloads & higher rate limits
-  - INPUT_PATH            : Stage 1 source dataset path (.parquet, .csv, .json, .jsonl, or directory of .txt files)
-  - ID_COLUMN             : Stage 1 column name containing unique document IDs
-  - TEXT_COLUMN           : Stage 1 column name containing raw document text
-  - DOCUMENT_LIMIT        : Stage 1 optional cap on number of documents to process (None = process all)
-  - STAGE5_INPUT_PATH     : Stage 5 target dataset path for schema-driven extraction (can differ from Stage 1)
-  - STAGE5_ID_COLUMN      : Stage 5 column name containing unique document IDs
-  - STAGE5_TEXT_COLUMN    : Stage 5 column name containing raw document text
-  - STAGE5_DOCUMENT_LIMIT : Stage 5 optional cap on number of documents to extract (None = process all)
-  - STAGE5_SCHEMA_PATH    : Stage 5 target schema file (e.g. master_ontology.py) or directory of .py schemas
-  - STAGE5_EXTRACT_MODE   : Stage 5 schema selection mode ("unified", "top_level", "child", or "all")
+Quick Guide to the 4 Sections Below:
+  1. Hugging Face Token (Optional) : Speeds up model downloads and avoids rate limits.
+  2. AI Model Selection            : Picks the AI models based on your computer's GPU memory (VRAM).
+  3. Stage 1 Discovery Dataset     : The documents used in Stages 1–4 to discover topics and build schemas.
+  4. Stage 5 Extraction Dataset    : The documents used in Stage 5 to extract structured CSV/Parquet/SQLite tables
+                                     (can be the exact same dataset as Stage 1, or a separate/larger batch of files).
 
-Recommended Models by GPU VRAM Tier (bfloat16 / float16):
-  - 16–24 GB VRAM : MODEL_NAME = "Qwen/Qwen2.5-7B-Instruct"  (~15 GB) | CODER_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"  (~15 GB)
-  - 48–60 GB VRAM : MODEL_NAME = "Qwen/Qwen3.6-27B"          (~54 GB) | CODER_MODEL = "Qwen/Qwen2.5-Coder-14B-Instruct" (~29 GB)
-  - 80 GB+ VRAM   : MODEL_NAME = "Qwen/Qwen3.6-27B"          (~54 GB) | CODER_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct" (~65 GB)
+Choosing Models for Your Hardware (GPU Memory / VRAM):
+  - Laptop / Small GPU (8–12 GB)   : Uncomment the "Lightweight" preset in Section 2.
+  - Workstation GPU (16–24 GB)     : Uncomment the "Mid-Range" preset in Section 2.
+  - Server GPU (48–60 GB)          : Uncomment the "Standard Server" preset in Section 2 (or rely on automatic 4-bit compression).
+  - Large Server GPU (80 GB+, default): Uses the default 27B + 32B models as-is.
 
-Note on Automatic Fallback:
-  If CODER_MODEL in Stage 4 exceeds available GPU VRAM (or spills weights onto the 'meta'/disk device),
-  Stage 4 automatically purges partial GPU allocations, attempts 4-bit quantization (for dense models),
-  and falls back to MODEL_NAME (or "Qwen/Qwen2.5-Coder-7B-Instruct"). Any fallback is logged to
-  outputs/04_synthesis/logs/model_execution_metadata.json, outputs/04_synthesis/logs/synthesis_community_errors.log,
-  and the final outputs/pipeline_summary.txt report.
+Automatic Memory Safety:
+  If `CODER_MODEL` in Stage 4 is too large for your GPU memory, SemanticPrism automatically
+  clears GPU memory, tries a compressed (4-bit) version, or switches to a smaller backup model
+  and notes the change in `outputs/pipeline_summary.txt`.
 """
 
 from __future__ import annotations
@@ -40,9 +30,8 @@ from typing import Optional
 # =============================================================================
 # 1. HUGGING FACE HUB AUTHENTICATION (OPTIONAL)
 # =============================================================================
-# Paste your Hugging Face access token (e.g., "hf_xxxxxxxxxxxxxxxxxxxx") here
-# to enable authenticated Hub requests, higher rate limits, and faster model downloads
-# across all stages. Leave as None (or "") to fall back to the shell's HF_TOKEN env var.
+# Optional: Paste a Hugging Face token (e.g., "hf_xxxxxxxxxxxxxxxxxxxx") for faster
+# model downloads. Leave as None to use public access or your terminal's HF_TOKEN variable.
 HF_TOKEN: Optional[str] = None
 
 if HF_TOKEN and HF_TOKEN.strip():
@@ -50,15 +39,19 @@ if HF_TOKEN and HF_TOKEN.strip():
     os.environ["HUGGING_FACE_HUB_TOKEN"] = HF_TOKEN.strip()
 
 # =============================================================================
-# 2. MODEL SELECTION
+# 2. AI MODEL SELECTION
 # =============================================================================
-# Default High-Accuracy Server Configuration (48–60 GB+ GPU VRAM):
-MODEL_NAME: str = "Qwen/Qwen3.6-27B"                    # Stages 1, 2 & 5: Theme Discovery, Triple Extraction, Taxonomic Lifting & Schema Mapping (~54 GB bf16)
-EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"         # Stages 1, 2 & 3: Vector Clustering & Grounding (~1.3 GB)
-CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"    # Stage 4: Pydantic v2 Schema Synthesis (~29 GB bf16; auto-falls back to MODEL_NAME if VRAM is exceeded)
+# - MODEL_NAME      : Reads text, finds facts, and extracts structured data (Stages 1, 2 & 5)
+# - EMBEDDING_MODEL : Converts concepts into numbers to group similar ideas together (Stages 1, 2 & 3)
+# - CODER_MODEL     : Writes clean Python data schemas from discovered topics (Stage 4)
+
+# Default High-Accuracy Server Preset (80 GB+ GPU VRAM, or 48 GB+ with auto 4-bit compression):
+MODEL_NAME: str = "Qwen/Qwen3.6-27B"                    # Main text & extraction LLM (~54 GB memory)
+EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"         # Concept similarity model (~1.3 GB memory)
+CODER_MODEL: str = "Qwen/Qwen2.5-Coder-32B-Instruct"    # Schema code-writing LLM (~65 GB bf16 / ~19 GB 4-bit; auto-falls back if needed)
 
 # -----------------------------------------------------------------------------
-# Copy-and-Paste Presets for Smaller Machines (uncomment to override above):
+# Ready-to-Use Hardware Presets (remove the '#' on the 3 model lines to use):
 # -----------------------------------------------------------------------------
 # --- Lightweight / Laptop / Single 8–12 GB GPU ---
 # MODEL_NAME: str = "Qwen/Qwen2.5-3B-Instruct"
@@ -70,28 +63,35 @@ CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"    # Stage 4: Pydantic v2 S
 # EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
 # CODER_MODEL: str = "Qwen/Qwen2.5-Coder-7B-Instruct"
 
-# --- Ultra-Large Server / 80 GB+ GPU (A100-80GB / H100) ---
+# --- Standard Server / 48–60 GB GPU ---
 # MODEL_NAME: str = "Qwen/Qwen3.6-27B"
 # EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
-# CODER_MODEL: str = "Qwen/Qwen2.5-Coder-32B-Instruct"
+# CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"
 
 # =============================================================================
-# 3. STAGE 1 SOURCE DOCUMENT INPUT SETTINGS (ONTOLOGY DISCOVERY)
+# 3. STAGE 1 DISCOVERY DATASET (USED TO LEARN TOPICS & BUILD SCHEMAS)
 # =============================================================================
-INPUT_PATH: str = "inputs/testdocs.parquet"             # Path to Stage 1 input file (.parquet, .csv, .json, .jsonl) or folder of .txt files
-ID_COLUMN: str = "unique_val"                           # Column containing unique document IDs for Stage 1
-TEXT_COLUMN: str = "report"                             # Column containing raw document text for Stage 1
-DOCUMENT_LIMIT: Optional[int] = None                    # Optional cap on number of documents to process in Stage 1 (None = all)
+# Supports .parquet, .csv, .json, .jsonl files, or a folder of plain .txt files.
+INPUT_PATH: str = "inputs/testdocs.parquet"             # File or folder of documents to analyze in Stage 1
+ID_COLUMN: str = "unique_val"                           # Column name containing each document's unique ID
+TEXT_COLUMN: str = "report"                             # Column name containing the document text
+DOCUMENT_LIMIT: Optional[int] = None                    # Max documents to read (None = read all documents)
 
 # =============================================================================
-# 4. STAGE 5 MAPPING & EXTRACTION INPUT SETTINGS (SCHEMA EXTRACTION)
+# 4. STAGE 5 EXTRACTION DATASET & SCHEMA SETTINGS (USED TO POPULATE TABLES)
 # =============================================================================
-# Separate dataset, column, and schema settings for Stage 5 (Schema-Driven Extraction).
-# Can point to the same dataset as Stage 1 or a separate target/production corpus.
-STAGE5_INPUT_PATH: str = "inputs/testdocs.parquet"      # Path to Stage 5 input file (.parquet, .csv, .json, .jsonl) or folder of .txt files
-STAGE5_ID_COLUMN: str = "unique_val"                    # Column containing unique document IDs for Stage 5
-STAGE5_TEXT_COLUMN: str = "report"                      # Column containing raw document text for Stage 5
-STAGE5_DOCUMENT_LIMIT: Optional[int] = None             # Optional cap on number of documents to extract in Stage 5 (None = all)
-STAGE5_SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"  # Single .py file (master_ontology.py) or directory (outputs/04_synthesis/schemas/community)
-STAGE5_EXTRACT_MODE: str = "unified"                    # "unified" (recommended single-pass envelope), "top_level", "child", or "all"
+# Can point to the same dataset as Stage 1 above, or a new/full dataset you want to extract into tables.
+STAGE5_INPUT_PATH: str = "inputs/testdocs.parquet"      # File or folder of documents to extract in Stage 5
+STAGE5_ID_COLUMN: str = "unique_val"                    # Column name containing each document's unique ID
+STAGE5_TEXT_COLUMN: str = "report"                      # Column name containing the document text
+STAGE5_DOCUMENT_LIMIT: Optional[int] = None             # Max documents to extract (None = extract all documents)
 
+# Which Python schema file (or folder of .py schema files) Stage 5 should use:
+STAGE5_SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"
+
+# Extraction mode options:
+#   - "unified"   (Recommended): Extracts all main schemas together in a single pass per document (fastest & most accurate).
+#   - "top_level"              : Extracts each main schema in its own separate pass (automatically includes nested sub-items).
+#   - "child"                  : Extracts only nested sub-schemas.
+#   - "all"                    : Extracts both main schemas and nested sub-schemas separately.
+STAGE5_EXTRACT_MODE: str = "unified"

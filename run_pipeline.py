@@ -100,7 +100,7 @@ def generate_pipeline_summary(
     except Exception:
         MODEL_NAME = "Qwen/Qwen3.6-27B"
         EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
-        CODER_MODEL = "Qwen/Qwen2.5-Coder-14B-Instruct"
+        CODER_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 
     # =========================================================================
     # MODEL EXECUTION METADATA ACROSS STAGES

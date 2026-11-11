@@ -72,7 +72,7 @@ from src.synthesis.sanitizers import (
 #                  "Qwen/Qwen3-Coder-Next", or "Qwen/Qwen2.5-Coder-32B-Instruct").
 
 # --- 1. Generative LLM & Hardware Settings ---
-MODEL_NAME: str = "Qwen/Qwen2.5-Coder-14B-Instruct"    # Causal/Coding LLM for Stage 4 (~29 GB bf16, 128K native context)
+MODEL_NAME: str = "Qwen/Qwen2.5-Coder-32B-Instruct"    # Causal/Coding LLM for Stage 4 (~65 GB bf16, 128K native context)
 DEVICE: str = "auto"                                   # "auto", "cuda", "mps", or "cpu"
 TORCH_DTYPE: str = "auto"                              # "auto", "bfloat16", "float16", or "float32"
 LOAD_IN_4BIT: bool = False                             # Enable 4-bit NF4 quantization (CUDA bitsandbytes)
