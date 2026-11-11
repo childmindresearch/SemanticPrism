@@ -21,6 +21,7 @@ from src.extraction.schemas import (
     Theme,
     ThemeDiscoveryResult,
     TripleExtractionResult,
+    salvage_partial_triples,
 )
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     "MasterThemeSynthesisResult",
     "RawTriple",
     "TripleExtractionResult",
+    "salvage_partial_triples",
     "THEME_DISCOVERY_SYSTEM_PROMPT",
     "THEME_DISCOVERY_USER_PROMPT",
     "CLUSTER_MAP_SYSTEM_PROMPT",

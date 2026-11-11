@@ -84,10 +84,11 @@ PRINT_CHECKPOINTS: bool = True                          # Print real-time chunk,
 
 # --- 3. Chunking, Token & Theme Clustering Settings ---
 THEME_CHUNK_MAX_WORDS: int = 1800                       # Max words per chunk during Phase 1 Theme Discovery
-TRIPLE_CHUNK_MAX_WORDS: int = 300                       # Max words per chunk during Phase 3 SVO Triple Extraction
+TRIPLE_CHUNK_MAX_WORDS: Union[int, str] = "auto"        # "auto" (240w <=4B, 380w 7B-16B, 600w 20B+) or explicit int
+TRIPLE_CHUNK_OVERLAP_WORDS: Union[int, str] = "auto"    # "auto" (30-50w sentence/line overlap) or explicit int
 THEME_MAX_NEW_TOKENS: int = 512                         # Max generated tokens per theme discovery chunk
 MASTER_SYNTHESIS_MAX_NEW_TOKENS: int = 512              # Max generated tokens for cluster map/reduce synthesis
-TRIPLE_MAX_NEW_TOKENS: int = 768                        # Max generated tokens per triple extraction chunk
+TRIPLE_MAX_NEW_TOKENS: Union[int, str] = "auto"         # "auto" (1280 <=4B, 1792 7B-16B, 2560 20B+) or explicit int
 MAP_MAX_THEMES_PER_CLUSTER: int = 150                   # Max themes sent to Map specialist per cluster
 MANIFOLD_EDGE_THRESHOLD: float = 0.35                   # Minimum cosine similarity for kNN theme graph edges
 MICRO_CLUSTER_RATIO: float = 0.01                       # Clusters smaller than 1% of N are absorbed into nearest dominant centroid
@@ -142,6 +143,7 @@ def main() -> None:
             print_checkpoints=PRINT_CHECKPOINTS,
             theme_chunk_max_words=THEME_CHUNK_MAX_WORDS,
             triple_chunk_max_words=TRIPLE_CHUNK_MAX_WORDS,
+            triple_chunk_overlap_words=TRIPLE_CHUNK_OVERLAP_WORDS,
             theme_max_new_tokens=THEME_MAX_NEW_TOKENS,
             master_synthesis_max_new_tokens=MASTER_SYNTHESIS_MAX_NEW_TOKENS,
             triple_max_new_tokens=TRIPLE_MAX_NEW_TOKENS,

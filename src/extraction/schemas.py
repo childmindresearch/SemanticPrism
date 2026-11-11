@@ -4,7 +4,9 @@ SemanticPrism Stage 1: Pydantic Schemas
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
+import json
+import re
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
@@ -100,9 +102,18 @@ class MasterThemeSynthesisResult(BaseModel):
 class RawTriple(BaseModel):
     """Extracts a high-fidelity subject-predicate-object relationship."""
 
-    subject: str = Field(..., description="The primary entity or concept exactly as it appears in the source text.")
-    predicate: str = Field(..., description="The relationship or action connecting subject and object.")
-    object: str = Field(..., description="The target entity, concept, or value.")
+    subject: str = Field(
+        ...,
+        description=(
+            "The primary entity, actor, or concept (concise and explicit; resolve bare pronouns "
+            "like 'he', 'she', 'it', or 'they' to their named referent in the text)."
+        ),
+    )
+    predicate: str = Field(..., description="The active, specific relationship or action connecting subject and object.")
+    object: str = Field(
+        ...,
+        description="The target entity, concept, outcome, or measured value (concise and explicit; avoid bare pronouns).",
+    )
     source_quote: str = Field(default="", description="The EXACT, verbatim substring from the text confirming this relationship.")
     theme_association: Optional[str] = Field(default="Other", description="The master theme this triple most closely aligns with.")
 
@@ -130,14 +141,80 @@ class RawTriple(BaseModel):
                     if k in data:
                         data["source_quote"] = data[k]
                         break
+            if "theme_association" not in data:
+                for k in ("theme", "master_theme", "category"):
+                    if k in data:
+                        data["theme_association"] = data[k]
+                        break
         return data
 
     @field_validator("subject", "predicate", "object")
     @classmethod
     def prevent_empty(cls, v: Any) -> str:
-        if not v or len(str(v).strip()) == 0:
+        cleaned = re.sub(r"\s+", " ", str(v or "")).strip()
+        if not cleaned:
             raise ValueError("Fields cannot be empty strings")
+        return cleaned
+
+    @field_validator("source_quote", mode="before")
+    @classmethod
+    def clean_source_quote(cls, v: Any) -> str:
+        if v is None:
+            return ""
         return str(v).strip()
+
+
+def salvage_partial_triples(raw_text: str) -> List[RawTriple]:
+    """
+    Recover complete RawTriple JSON objects from a truncated or partially malformed
+    LLM JSON output stream (e.g., when a smaller model hits max_new_tokens mid-array).
+    """
+    if not raw_text or not isinstance(raw_text, str):
+        return []
+
+    brace_stack: List[int] = []
+    candidate_spans: List[Tuple[int, str]] = []
+    in_string = False
+    escape = False
+
+    for idx, ch in enumerate(raw_text):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            brace_stack.append(idx)
+        elif ch == "}" and brace_stack:
+            start_idx = brace_stack.pop()
+            candidate_spans.append((start_idx, raw_text[start_idx : idx + 1]))
+
+    candidate_spans.sort(key=lambda pair: pair[0])
+    salvaged: List[RawTriple] = []
+    wrapper_keys = {"triples", "triplets", "relationships", "items", "results", "extractions"}
+
+    for _, snippet in candidate_spans:
+        cleaned_snippet = re.sub(r",\s*}", "}", snippet)
+        try:
+            obj = json.loads(cleaned_snippet)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if any(wk in obj and isinstance(obj[wk], list) for wk in wrapper_keys):
+            continue
+        try:
+            salvaged.append(RawTriple.model_validate(obj))
+        except Exception:
+            continue
+
+    return salvaged
 
 
 class TripleExtractionResult(BaseModel):
@@ -148,6 +225,8 @@ class TripleExtractionResult(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def align_triples(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"triples": salvage_partial_triples(data)}
         if isinstance(data, list):
             return {"triples": data}
         if isinstance(data, dict):

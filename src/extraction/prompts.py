@@ -58,15 +58,15 @@ CLUSTER_REDUCE_USER_PROMPT = """Review the following {cluster_count} cluster can
 
 {cluster_blocks}"""
 
-TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a High-Precision Triple Extractor Agent running schema-mapped knowledge discovery.
-Your objective is to comprehensively extract all factual assertions, clinical findings, behaviors, diagnoses, relationships, and actions from the source text into atomic (Subject, Predicate, Object) triples.
+TRIPLE_EXTRACTION_SYSTEM_PROMPT = """You are a High-Precision Triple Extractor Agent performing schema-mapped knowledge discovery.
+Your objective is to comprehensively extract all factual assertions, clinical findings, behaviors, diagnoses, psychometric scores, relationships, and actions from `<source_text>` into atomic (Subject, Predicate, Object) triples.
 
 ### EXTRACTION OBJECTIVES:
-1. Comprehensive Recall & Graph Density: Extract EVERY meaningful relationship across the entire text chunk. Do not stop after 2 or 3 triples. A rich, informative document chunk typically contains 10 to 30 valid factual triples.
-2. Atomic Entities: Keep subjects and objects clear and concise (e.g., "patient", "WISC-V evaluation", "ADHD", "morning drop-offs", "processing speed bottleneck") so they form clean, connected knowledge graph nodes.
-3. Descriptive Predicates: Use active, meaningful relationships (e.g., "was diagnosed with", "demonstrates", "yielded Full Scale IQ of", "impairs", "resides with", "was referred by", "presents with"). Never empty.
-4. Source Quote (Verbatim): For EVERY extracted relationship, you MUST provide the exact, verbatim substring from the source text confirming it. Do NOT summarize, shorten, or alter the quote.
-5. Theme Association: Set `theme_association` to the exact matching string from the 'Allowed theme_association values' list. If none fit cleanly, set `theme_association` to "Other".
+1. Comprehensive Recall & Graph Density: Extract EVERY meaningful factual relationship stated in `<source_text>`. Do not stop after 2 or 3 triples; a rich document chunk typically contains 10 to 30 valid factual triples.
+2. Explicit, Self-Contained Entities (Resolve Pronouns): Keep `subject` and `object` clear and concise (e.g., "patient", "WISC-V evaluation", "ADHD", "morning drop-offs", "processing speed bottleneck") so they form clean knowledge-graph nodes. Replace bare pronouns ("he", "she", "they", "it", "this") with the explicit entity or clinical role they refer to using `<source_text>` (and `<context_anchor>` if provided).
+3. Descriptive Predicates: Use active, meaningful relationships (e.g., "meets diagnostic criteria for", "was diagnosed with", "demonstrates", "yielded Full Scale IQ of", "impairs", "resides with", "presents with"). Never leave empty.
+4. Verbatim Source Quote: For EVERY triple, set `source_quote` to the exact, unaltered substring from `<source_text>` confirming that relationship. Never extract triples solely from `<context_anchor>`.
+5. Theme Association: Set `theme_association` to the exact matching title from `Allowed theme_association values`. If none fit cleanly, set `theme_association` to "Other".
 
 ### EXAMPLE STRUCTURE:
 ```json
@@ -76,7 +76,7 @@ Your objective is to comprehensively extract all factual assertions, clinical fi
       "subject": "patient",
       "predicate": "meets diagnostic criteria for",
       "object": "Separation Anxiety Disorder",
-      "source_quote": "Patient meets diagnostic criteria for Attention-Deficit/Hyperactivity Disorder, Combined Presentation, and Separation Anxiety Disorder.",
+      "source_quote": "He meets diagnostic criteria for Attention-Deficit/Hyperactivity Disorder, Combined Presentation, and Separation Anxiety Disorder.",
       "theme_association": "Clinical Diagnoses"
     },
     {
@@ -91,8 +91,8 @@ Your objective is to comprehensively extract all factual assertions, clinical fi
 ```
 
 ### CRITICAL RULES:
-- Output ALL extracted triples in the `triples` array. Do NOT summarize, abbreviate, or use ellipses ("...").
-- Do not invent facts not stated in the text. Every triple must be grounded by its verbatim `source_quote`."""
+- Return a single valid JSON object with key `"triples"`. Output ALL extracted triples without abbreviations or ellipses ("...").
+- Never invent or extrapolate facts not explicitly stated in `<source_text>`."""
 
 TRIPLE_EXTRACTION_USER_PROMPT = """Extract all atomic relationship triples from the following text:
 

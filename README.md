@@ -112,8 +112,9 @@ SemanticPrism automatically adjusts to your dataset—whether you have short not
 
 ### Stage 1: Extraction (`src/extraction/`)
 Reads your documents, identifies broad themes, and pulls out simple **Subject – Action – Object** facts tied to exact quotes from the text.
+- **Model-Aware, Structure-Preserving Chunking**: Automatically scales chunk sizes, overlap, and output token budgets to match your chosen AI model (compact chunks for lightweight 3B laptop models, mid-sized chunks for 7B–14B models, and larger section-level chunks for 27B+ server models) while keeping section headers, bullet lists, and tables intact and carrying forward a brief context header so pronouns like *"he"*, *"she"*, or *"it"* resolve cleanly.
+- **Small-Model Safety Net**: Automatically salvages valid facts if a smaller model cuts off mid-output, splits dense failed passages in half for a clean retry, and removes duplicate facts across chunk overlaps.
 - **Self-Adjusting Theme Grouping**: Automatically adapts similarity cutoffs to your dataset so topics neither lump into one giant bucket nor split into dozens of tiny ones.
-- **Balanced Examples**: Picks clear, non-repetitive examples from each theme so common phrases don't drown out important details.
 
 ### Stage 2: Refinement (`src/refinement/`)
 Cleans up messy wording by grouping synonyms (for example, *"heart attack"* and *"myocardial infarction"*) under clean standard labels.
