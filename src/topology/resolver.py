@@ -107,11 +107,12 @@ class TargetResolver:
         max_triplets_cap: int = 1800,
         target_id: Any = "global",
         path_type: str = "community",
-        config: Dict[str, Any] = None
+        config: Dict[str, Any] = None,
+        concept_embeddings: Optional[Dict[str, np.ndarray]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Filters triplets incident to target_nodes and prioritizes them using a
-        pure Local Community Centrality engine.
+        coverage-balanced Local Centrality + Contextual Fidelity + Embedding Prototypicality engine.
         
         Strict Separation & Quarantine Rules:
         1. Pure Intra-Community (Default): Both subject and object MUST be community members.
@@ -159,7 +160,26 @@ class TargetResolver:
             elif not strictly_intra and (is_subj_in or is_obj_in):
                 edge_frequencies[(subj, pred, obj)] += 1
 
-        # 2. Score candidate triplets using Local Community Priority
+        # 1b. Compute per-node embedding prototypicality to core-weighted community centroid (if available)
+        proto_map: Dict[str, float] = {}
+        if concept_embeddings:
+            weighted_vecs = []
+            for nk in target_nodes_norm:
+                v_emb = concept_embeddings.get(nk)
+                if v_emb is not None:
+                    w_n = 1.0 + math.log(1.0 + local_degree.get(nk, 0))
+                    weighted_vecs.append((w_n, v_emb))
+            if weighted_vecs:
+                c_sum = np.sum([w * vec for w, vec in weighted_vecs], axis=0)
+                c_norm = float(np.linalg.norm(c_sum))
+                if c_norm > 1e-9:
+                    cent_vec = c_sum / c_norm
+                    for nk in target_nodes_norm:
+                        v_emb = concept_embeddings.get(nk)
+                        if v_emb is not None:
+                            proto_map[nk] = max(0.0, float(np.dot(v_emb, cent_vec)))
+
+        # 2. Score candidate triplets using Centrality + Contextual Fidelity + Prototypicality
         scored_triplets = []
         for t in triplets:
             subj = str(t.get('subject', '')).lower().strip()
@@ -186,24 +206,66 @@ class TargetResolver:
             pred = str(t.get('predicate', '')).strip()
             freq = edge_frequencies.get((subj, pred, obj), 1)
             freq_boost = 1.0 + 0.1 * min(10, freq - 1)
+            fid = max(0.15, min(1.0, float(t.get('contextual_fidelity', 0.70) or 0.70)))
+            proto_pair = 0.5 * (proto_map.get(subj, 0.50) + proto_map.get(obj, 0.50))
+            quality_mult = (0.60 + 0.40 * fid) * (0.75 + 0.25 * proto_pair)
 
             if is_subj_in and is_obj_in:
                 # Tier 1: Pure Intra-Community (Base 1000.0 guarantees absolute priority)
                 local_sum = local_degree[subj] + local_degree[obj]
-                rank_score = 1000.0 + (local_sum * freq_boost)
+                rank_score = 1000.0 + ((local_sum * freq_boost) * quality_mult) + (12.0 * fid) + (8.0 * proto_pair)
             else:
                 # Tier 2: Boundary Context (only used if strictly_intra is false)
                 internal_node = subj if is_subj_in else obj
                 anchor_degree = local_degree[internal_node]
-                rank_score = 1.0 + (anchor_degree * freq_boost)
+                rank_score = 1.0 + ((anchor_degree * freq_boost) * (0.60 + 0.40 * fid)) + (4.0 * fid)
 
             t_copy = dict(t)
             t_copy["triplet_rank_score"] = round(float(rank_score), 4)
-            scored_triplets.append((rank_score, t_copy))
+            scored_triplets.append((rank_score, subj, pred.lower(), obj, t_copy))
 
-        # 3. Sort descending by community-centric rank score and slice up to cap
+        # 3. Coverage-Balanced Selection:
+        #    Pass A ensures every community concept gets up to 2 high-fidelity distinct triplets first;
+        #    Pass B fills remaining capacity with mild diminishing returns on duplicate (s, p, o) triples.
         scored_triplets.sort(key=lambda x: x[0], reverse=True)
-        return [t for _, t in scored_triplets[:max_triplets_cap]]
+        if max_triplets_cap <= 0:
+            return []
+
+        selected: List[Dict[str, Any]] = []
+        picked_indices: set = set()
+        node_coverage: Counter = Counter()
+        seen_triples: Counter = Counter()
+
+        for idx, (score, s_k, p_k, o_k, t_item) in enumerate(scored_triplets):
+            if len(selected) >= max_triplets_cap:
+                break
+            triple_key = (s_k, p_k, o_k)
+            if (node_coverage[s_k] < 2 or node_coverage[o_k] < 2) and seen_triples[triple_key] == 0:
+                selected.append(t_item)
+                picked_indices.add(idx)
+                node_coverage[s_k] += 1
+                node_coverage[o_k] += 1
+                seen_triples[triple_key] += 1
+
+        if len(selected) < max_triplets_cap:
+            remaining_scored = []
+            for idx, (score, s_k, p_k, o_k, t_item) in enumerate(scored_triplets):
+                if idx in picked_indices:
+                    continue
+                triple_key = (s_k, p_k, o_k)
+                dup_cnt = seen_triples[triple_key]
+                seen_triples[triple_key] += 1
+                if score >= 1000.0:
+                    adj_score = 1000.0 + ((score - 1000.0) / (1.0 + 0.35 * dup_cnt))
+                else:
+                    adj_score = score / (1.0 + 0.35 * dup_cnt)
+                remaining_scored.append((adj_score, t_item))
+
+            remaining_scored.sort(key=lambda x: x[0], reverse=True)
+            slots_left = max_triplets_cap - len(selected)
+            selected.extend(t_item for _, t_item in remaining_scored[:slots_left])
+
+        return selected
 
     @staticmethod
     def _get_or_load_concept_embeddings(
@@ -628,21 +690,21 @@ class TargetResolver:
         tier_cfg = config.get('topology', {}).get('architectural_tiers', {}) if 'topology' in config else config.get('architectural_tiers', {})
         tier_enabled = tier_cfg.get("enabled", True)
 
-        # 2. Pre-load / cache unified concept embeddings for all target nodes (if tiers enabled)
+        # 2. Pre-load / cache unified concept embeddings for all target nodes
         concept_embeddings = {}
-        if tier_enabled:
+        if targets:
             all_target_nodes = set()
             for target in targets:
                 all_target_nodes.update(target.get("nodes", []))
-            ref_cfg = config.get('refinement', {}) if 'refinement' in config else config
-            model_name = ref_cfg.get('embedding_model') or config.get('embedding_model')
+            ref_cfg = config.get('refinement', {}) if (config and 'refinement' in config) else (config or {})
+            model_name = ref_cfg.get('embedding_model') or (config.get('embedding_model') if config else None)
             cache_dir = Path(ref_cfg.get('vector_cache_dir', 'outputs/02_refinement/cache'))
             concept_embeddings = TargetResolver._get_or_load_concept_embeddings(
                 list(all_target_nodes),
                 cache_dir=cache_dir,
                 model_name=model_name
             )
-            topo_cfg = config.get('topology', {}) if 'topology' in config else config
+            topo_cfg = config.get('topology', {}) if (config and 'topology' in config) else (config or {})
             if topo_cfg.get('center_agglomeration_embeddings', True) and concept_embeddings:
                 concept_embeddings, _ = TargetResolver.center_concept_embeddings(concept_embeddings)
 
@@ -657,9 +719,16 @@ class TargetResolver:
             target_nodes = set(target["nodes"])
             comm_label = f"Community #{c_id}"
             
-            # Filter, score, and cap triplets with Asymmetric Synergy Engine
+            # Filter, score, and cap triplets with Coverage-Balanced Fidelity + Prototypicality Engine
             capped_triplets = TargetResolver.filter_and_cap_triplets(
-                target_nodes, refined_triplets, topology, max_triplets_cap, target_id=c_id, path_type=path_type, config=config
+                target_nodes,
+                refined_triplets,
+                topology,
+                max_triplets_cap,
+                target_id=c_id,
+                path_type=path_type,
+                config=config,
+                concept_embeddings=concept_embeddings,
             )
 
             if tier_enabled:

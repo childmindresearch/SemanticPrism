@@ -224,7 +224,7 @@ class TargetResolver:
     ) -> List[Dict[str, Any]]:
         """
         Filters triplets incident to target_nodes and prioritizes them using a
-        pure Local Community Centrality engine.
+        coverage-balanced Local Centrality + Contextual Fidelity engine.
         """
         # Gracefully handle if caller passed (triplets, target_nodes) in reverse order
         if isinstance(target_nodes, list) and target_nodes and isinstance(target_nodes[0], dict):
@@ -288,21 +288,60 @@ class TargetResolver:
             pred = str(t.get("predicate", "")).strip()
             freq = edge_frequencies.get((subj, pred, obj), 1)
             freq_boost = 1.0 + 0.1 * min(10, freq - 1)
+            fid = max(0.15, min(1.0, float(t.get("contextual_fidelity", 0.70) or 0.70)))
+            quality_mult = 0.60 + 0.40 * fid
 
             if is_subj_in and is_obj_in:
                 local_sum = local_degree[subj] + local_degree[obj]
-                rank_score = 1000.0 + (local_sum * freq_boost)
+                rank_score = 1000.0 + ((local_sum * freq_boost) * quality_mult) + (12.0 * fid)
             else:
                 internal_node = subj if is_subj_in else obj
                 anchor_degree = local_degree[internal_node]
-                rank_score = 1.0 + (anchor_degree * freq_boost)
+                rank_score = 1.0 + ((anchor_degree * freq_boost) * quality_mult) + (4.0 * fid)
 
             t_copy = dict(t)
             t_copy["triplet_rank_score"] = round(float(rank_score), 4)
-            scored_triplets.append((rank_score, t_copy))
+            scored_triplets.append((rank_score, subj, pred.lower(), obj, t_copy))
 
         scored_triplets.sort(key=lambda x: x[0], reverse=True)
-        return [t for _, t in scored_triplets[:max_triplets_cap]]
+        if max_triplets_cap <= 0:
+            return []
+
+        selected: List[Dict[str, Any]] = []
+        picked_indices: set = set()
+        node_coverage: Counter = Counter()
+        seen_triples: Counter = Counter()
+
+        for idx, (score, s_k, p_k, o_k, t_item) in enumerate(scored_triplets):
+            if len(selected) >= max_triplets_cap:
+                break
+            triple_key = (s_k, p_k, o_k)
+            if (node_coverage[s_k] < 2 or node_coverage[o_k] < 2) and seen_triples[triple_key] == 0:
+                selected.append(t_item)
+                picked_indices.add(idx)
+                node_coverage[s_k] += 1
+                node_coverage[o_k] += 1
+                seen_triples[triple_key] += 1
+
+        if len(selected) < max_triplets_cap:
+            remaining_scored = []
+            for idx, (score, s_k, p_k, o_k, t_item) in enumerate(scored_triplets):
+                if idx in picked_indices:
+                    continue
+                triple_key = (s_k, p_k, o_k)
+                dup_cnt = seen_triples[triple_key]
+                seen_triples[triple_key] += 1
+                if score >= 1000.0:
+                    adj_score = 1000.0 + ((score - 1000.0) / (1.0 + 0.35 * dup_cnt))
+                else:
+                    adj_score = score / (1.0 + 0.35 * dup_cnt)
+                remaining_scored.append((adj_score, t_item))
+
+            remaining_scored.sort(key=lambda x: x[0], reverse=True)
+            slots_left = max_triplets_cap - len(selected)
+            selected.extend(t_item for _, t_item in remaining_scored[:slots_left])
+
+        return selected
 
     @staticmethod
     def export_resolved_targets_json(

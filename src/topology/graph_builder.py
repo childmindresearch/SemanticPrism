@@ -131,6 +131,9 @@ class TopologyPipeline:
         self.agglomeration_similarity_threshold = float(self.semantic_cfg.get('agglomeration_similarity_threshold', 0.75))
         self.max_agglomeration_passes = int(self.semantic_cfg.get('max_agglomeration_passes', 5))
         self.center_agglomeration_embeddings = bool(self.semantic_cfg.get('center_agglomeration_embeddings', True))
+        self.enable_subthreshold_tail_rescue = bool(self.semantic_cfg.get('enable_subthreshold_tail_rescue', True))
+        self.subthreshold_rescue_min_similarity = float(self.semantic_cfg.get('subthreshold_rescue_min_similarity', 0.50))
+        self.subthreshold_rescue_margin = float(self.semantic_cfg.get('subthreshold_rescue_margin', 0.12))
 
         # Dedicated Visualization Engine
         self.visualizer = TopologyVisualizer(config=config)
@@ -1247,6 +1250,17 @@ class TopologyPipeline:
                             "delta": round(best_foreign_sim - home_sim, 4)
                         })
 
+        # Normalize Pre-Agglomeration Communities by Size Descending so baseline IDs (0..K_base-1)
+        # align deterministically with `merged_from` lineage in topology_partitions.json
+        communities = [c for c in communities if len(c.nodes) > 0]
+        communities.sort(key=lambda x: len(x.nodes), reverse=True)
+        for base_idx, c in enumerate(communities):
+            c.community_id = base_idx
+            c.nodes = sorted(list(set(c.nodes)))
+            c.merged_from = [base_idx]
+        comm_lookup = {c.community_id: c for c in communities}
+        comm_map = {n: c.community_id for c in communities for n in c.nodes}
+
         # Snapshot Baseline Pre-Agglomeration Communities
         baseline_communities = [
             CommunityPartition(community_id=c.community_id, nodes=list(c.nodes), merged_from=[c.community_id])
@@ -1264,32 +1278,101 @@ class TopologyPipeline:
             json.dump(baseline_result.model_dump(), f, indent=2)
 
         # -------------------------------------------------------------
-        # Pass 5: Semantic Community Agglomeration (Hierarchical Centroid Merging)
+        # Pass 5: Dynamic Core-Weighted Centroid Merging & Sub-Threshold Tail Rescue
         # -------------------------------------------------------------
-        for c in communities:
-            if not getattr(c, "merged_from", None):
-                c.merged_from = [c.community_id]
-
         agglomeration_records = []
+        agglom_report_payload = None
         if self.enable_community_agglomeration and len(communities) > 1:
             concept_vecs_agglom = concept_vecs
+
+            # Precompute node-level Stage 2 contextual fidelity and non-hub core graph
+            hub_norm_set = {str(h).lower().strip() for h in global_hubs}
+            node_fids_accum: Dict[str, List[float]] = defaultdict(list)
+            for tr in refined_triplets:
+                s_n = str(tr.get("subject", "")).lower().strip()
+                o_n = str(tr.get("object", "")).lower().strip()
+                if not s_n or not o_n or s_n in hub_norm_set or o_n in hub_norm_set:
+                    continue
+                fid_v = max(0.25, min(1.0, float(tr.get("contextual_fidelity", 0.70) or 0.70)))
+                node_fids_accum[s_n].append(fid_v)
+                node_fids_accum[o_n].append(fid_v)
+            node_avg_fidelity: Dict[str, float] = {
+                nk: float(np.mean(vals)) for nk, vals in node_fids_accum.items() if vals
+            }
+
+            non_hub_ug = nx.Graph()
+            for u_nh, v_nh, d_nh in dg.edges(data=True):
+                if u_nh in global_hubs or v_nh in global_hubs or str(u_nh).lower().strip() in hub_norm_set or str(v_nh).lower().strip() in hub_norm_set:
+                    continue
+                w_nh = float(d_nh.get("weight", 1.0))
+                if non_hub_ug.has_edge(u_nh, v_nh):
+                    non_hub_ug[u_nh][v_nh]["weight"] += w_nh
+                else:
+                    non_hub_ug.add_edge(u_nh, v_nh, weight=w_nh)
+
+            def _compute_core_centroid_and_cohesion(nodes_list: List[str]) -> Tuple[Optional[np.ndarray], float]:
+                nodes_set = set(nodes_list)
+                weighted_vecs: List[Tuple[float, np.ndarray]] = []
+                for n_raw in nodes_list:
+                    nk = str(n_raw).lower().strip()
+                    v_emb = concept_vecs_agglom.get(nk)
+                    if v_emb is None:
+                        continue
+                    deg_int = 0.0
+                    if n_raw in non_hub_ug:
+                        for nbr in non_hub_ug.neighbors(n_raw):
+                            if nbr in nodes_set:
+                                deg_int += float(non_hub_ug[n_raw][nbr].get("weight", 1.0))
+                    fid_u = node_avg_fidelity.get(nk, 0.65)
+                    w_node = (1.0 + math.log(1.0 + deg_int)) * fid_u
+                    weighted_vecs.append((w_node, v_emb))
+
+                if not weighted_vecs:
+                    return None, 0.0
+
+                c_sum = np.sum([w * vec for w, vec in weighted_vecs], axis=0)
+                c_norm = float(np.linalg.norm(c_sum))
+                if c_norm <= 1e-9:
+                    return None, 0.0
+                cent = c_sum / c_norm
+
+                w_tot = sum(w for w, _ in weighted_vecs)
+                cohesion = (
+                    sum(w * float(np.dot(vec, cent)) for w, vec in weighted_vecs) / w_tot
+                    if w_tot > 0 else 0.0
+                )
+                return cent, float(cohesion)
+
+            configured_min_size = (
+                self.full_config.get("synthesis", {}).get("min_cluster_size", 15)
+                if isinstance(self.full_config, dict) else 15
+            )
+            effective_min_comm_floor = TargetResolver.resolve_effective_min_cluster_size(
+                {"global_hubs": global_hubs, "communities": [{"nodes": c.nodes} for c in communities]},
+                configured_min_size,
+            )
+            effective_max_passes = max(self.max_agglomeration_passes, len(communities))
 
             overall_max_sim = -1.0
             overall_closest_pair = None
             initial_pairwise_sims = []
+            macro_merges_count = 0
 
-            for pass_idx in range(self.max_agglomeration_passes):
+            # Pass 5a: Core-Weighted Centroid Merging with Cohesion & Non-Collapse Guard
+            for pass_idx in range(effective_max_passes):
                 active_comms = [c for c in communities if len(c.nodes) > 0]
                 if len(active_comms) < 2:
                     break
 
-                cent_map = {}
+                cent_map: Dict[int, np.ndarray] = {}
+                cohesion_map: Dict[int, float] = {}
                 for c in active_comms:
-                    vecs = [concept_vecs_agglom[n.lower().strip()] for n in c.nodes if n.lower().strip() in concept_vecs_agglom]
-                    if vecs:
-                        c_sum = np.sum(vecs, axis=0)
-                        c_norm = np.linalg.norm(c_sum)
-                        cent_map[c.community_id] = c_sum / c_norm if c_norm > 0 else c_sum
+                    cent_vec, coh_val = _compute_core_centroid_and_cohesion(c.nodes)
+                    if cent_vec is not None:
+                        cent_map[c.community_id] = cent_vec
+                        cohesion_map[c.community_id] = coh_val
+
+                viable_count = sum(1 for c in active_comms if len(c.nodes) >= effective_min_comm_floor)
 
                 best_pair = None
                 best_sim = self.agglomeration_similarity_threshold
@@ -1307,7 +1390,24 @@ class TopologyPipeline:
                         if sim > pass_max_sim:
                             pass_max_sim = sim
                             pass_closest_pair = (cid_a, cid_b, sim)
+
                         if sim > best_sim:
+                            len_a = len(comm_lookup[cid_a].nodes)
+                            len_b = len(comm_lookup[cid_b].nodes)
+                            both_viable = (len_a >= effective_min_comm_floor) and (len_b >= effective_min_comm_floor)
+
+                            # Hard Non-Collapse Guard: Never collapse the final 2 viable macro communities into 1 cluster
+                            if both_viable and viable_count <= 2:
+                                continue
+
+                            # Cohesion Guard: Verify merged cluster maintains internal embedding tightness
+                            _, merged_coh = _compute_core_centroid_and_cohesion(
+                                comm_lookup[cid_a].nodes + comm_lookup[cid_b].nodes
+                            )
+                            min_parent_coh = min(cohesion_map.get(cid_a, 0.0), cohesion_map.get(cid_b, 0.0))
+                            if min_parent_coh > 0.0 and (merged_coh <= 0.0 or merged_coh < 0.70 * min_parent_coh):
+                                continue
+
                             best_sim = sim
                             best_pair = (cid_a, cid_b, sim)
 
@@ -1340,41 +1440,172 @@ class TopologyPipeline:
 
                 communities = [c for c in communities if c.community_id != cid_b]
                 comm_lookup.pop(cid_b, None)
+                macro_merges_count += 1
 
                 agglomeration_records.append({
                     "pass": pass_idx + 1,
+                    "merge_type": "core_centroid_merge",
                     "target_community": cid_a,
                     "merged_community": cid_b,
                     "nodes_merged": len(absorbed_nodes),
                     "centroid_similarity": round(sim_val, 4)
                 })
 
+            # Pass 5b: Asymmetric Rescue of Sub-Threshold "Tail" Clusters (< min_cluster_size)
+            # Qualifying macro communities (>= min_cluster_size) NEVER merge with each other here.
+            tail_rescues_count = 0
+            if self.enable_subthreshold_tail_rescue and len(communities) > 1:
+                effective_min_comm_floor = TargetResolver.resolve_effective_min_cluster_size(
+                    {"global_hubs": global_hubs, "communities": [{"nodes": c.nodes} for c in communities]},
+                    configured_min_size,
+                )
+
+                # Step 1: Consolidate closely aligned sub-threshold sibling pairs (>= 0.62) so split sub-topics can cross min_cluster_size
+                sibling_tail_cutoff = max(0.62, self.subthreshold_rescue_min_similarity + 0.10)
+                while True:
+                    tail_candidates = [c for c in communities if 0 < len(c.nodes) < effective_min_comm_floor]
+                    if len(tail_candidates) < 2:
+                        break
+                    tail_cents = {}
+                    for tc in tail_candidates:
+                        t_vec, _ = _compute_core_centroid_and_cohesion(tc.nodes)
+                        if t_vec is not None:
+                            tail_cents[tc.community_id] = t_vec
+                    t_ids = list(tail_cents.keys())
+                    best_tail_pair = None
+                    best_tail_sim = sibling_tail_cutoff
+                    for i_t in range(len(t_ids)):
+                        for j_t in range(i_t + 1, len(t_ids)):
+                            ta, tb = t_ids[i_t], t_ids[j_t]
+                            tsim = float(np.dot(tail_cents[ta], tail_cents[tb]))
+                            if tsim >= best_tail_sim:
+                                best_tail_sim = tsim
+                                best_tail_pair = (ta, tb, tsim)
+                    if not best_tail_pair:
+                        break
+                    ta, tb, tsim = best_tail_pair
+                    ca, cb = comm_lookup[ta], comm_lookup[tb]
+                    if len(ca.nodes) < len(cb.nodes):
+                        ca, cb = cb, ca
+                        ta, tb = ca.community_id, cb.community_id
+                    absorbed_t = list(cb.nodes)
+                    ca.nodes = sorted(list(set(ca.nodes + absorbed_t)))
+                    for n in absorbed_t:
+                        comm_map[n] = ta
+                    ca.merged_from = sorted(list(set((ca.merged_from or [ta]) + (cb.merged_from or [tb]))))
+                    communities = [c for c in communities if c.community_id != tb]
+                    comm_lookup.pop(tb, None)
+                    tail_rescues_count += 1
+                    agglomeration_records.append({
+                        "pass": len(agglomeration_records) + 1,
+                        "merge_type": "subthreshold_sibling_consolidation",
+                        "target_community": ta,
+                        "merged_community": tb,
+                        "nodes_merged": len(absorbed_t),
+                        "centroid_similarity": round(tsim, 4)
+                    })
+
+                # Step 2: Fold remaining unambiguous sub-threshold tail clusters into FROZEN viable parent schemas
+                effective_min_comm_floor = TargetResolver.resolve_effective_min_cluster_size(
+                    {"global_hubs": global_hubs, "communities": [{"nodes": c.nodes} for c in communities]},
+                    configured_min_size,
+                )
+                viable_parents = [c for c in communities if len(c.nodes) >= effective_min_comm_floor]
+                remaining_tails = sorted(
+                    [c for c in communities if 0 < len(c.nodes) < effective_min_comm_floor],
+                    key=lambda x: len(x.nodes),
+                    reverse=True,
+                )
+
+                if viable_parents and remaining_tails:
+                    frozen_parent_cents: Dict[int, np.ndarray] = {}
+                    frozen_parent_cohs: Dict[int, float] = {}
+                    for vp in viable_parents:
+                        vp_vec, vp_coh = _compute_core_centroid_and_cohesion(vp.nodes)
+                        if vp_vec is not None:
+                            frozen_parent_cents[vp.community_id] = vp_vec
+                            frozen_parent_cohs[vp.community_id] = vp_coh
+
+                    if frozen_parent_cents:
+                        for tc in remaining_tails:
+                            tc_vec, _ = _compute_core_centroid_and_cohesion(tc.nodes)
+                            if tc_vec is None:
+                                continue
+                            parent_sims = sorted(
+                                [(pid, float(np.dot(tc_vec, pvec))) for pid, pvec in frozen_parent_cents.items()],
+                                key=lambda x: x[1],
+                                reverse=True,
+                            )
+                            best_pid, best_psim = parent_sims[0]
+                            second_psim = parent_sims[1][1] if len(parent_sims) > 1 else -1.0
+                            contrast_margin = (best_psim - second_psim) if len(parent_sims) > 1 else 1.0
+
+                            # Calibrate rescue floor against the parent's own internal embedding tightness
+                            parent_coh = frozen_parent_cohs.get(best_pid, 0.60)
+                            dynamic_rescue_floor = max(
+                                self.subthreshold_rescue_min_similarity,
+                                min(0.56, 0.70 * parent_coh),
+                            )
+
+                            if best_psim >= dynamic_rescue_floor and (
+                                len(parent_sims) == 1 or contrast_margin >= self.subthreshold_rescue_margin
+                            ):
+                                parent_comm = comm_lookup[best_pid]
+                                absorbed_t = list(tc.nodes)
+                                parent_comm.nodes = sorted(list(set(parent_comm.nodes + absorbed_t)))
+                                for n in absorbed_t:
+                                    comm_map[n] = best_pid
+                                parent_comm.merged_from = sorted(
+                                    list(set((parent_comm.merged_from or [best_pid]) + (tc.merged_from or [tc.community_id])))
+                                )
+                                communities = [c for c in communities if c.community_id != tc.community_id]
+                                comm_lookup.pop(tc.community_id, None)
+                                tail_rescues_count += 1
+                                agglomeration_records.append({
+                                    "pass": len(agglomeration_records) + 1,
+                                    "merge_type": "subthreshold_tail_rescue",
+                                    "target_community": best_pid,
+                                    "merged_community": tc.community_id,
+                                    "nodes_merged": len(absorbed_t),
+                                    "centroid_similarity": round(best_psim, 4),
+                                    "contrast_margin": round(contrast_margin, 4),
+                                    "dynamic_rescue_floor": round(dynamic_rescue_floor, 4),
+                                })
+
             if agglomeration_records:
-                print(f"      -> Community Agglomeration: {len(agglomeration_records)} community merges completed (tau >= {self.agglomeration_similarity_threshold})")
+                rescue_note = f", including {tail_rescues_count} sub-threshold tail rescue(s)" if tail_rescues_count > 0 else ""
+                print(
+                    f"      -> Community Agglomeration: {len(agglomeration_records)} merge(s) completed "
+                    f"({macro_merges_count} macro >= {self.agglomeration_similarity_threshold}{rescue_note})"
+                )
             else:
                 closest_str = f" (closest pair: Comm #{overall_closest_pair[0]} & Comm #{overall_closest_pair[1]} at sim={overall_closest_pair[2]:.4f})" if overall_closest_pair else ""
                 print(f"      -> Community Agglomeration: 0 community merges completed (tau >= {self.agglomeration_similarity_threshold}){closest_str}")
 
             initial_pairwise_sims.sort(key=lambda x: x[2], reverse=True)
-            with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
-                json.dump({
-                    "enabled": self.enable_community_agglomeration,
-                    "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
-                    "max_agglomeration_passes": self.max_agglomeration_passes,
-                    "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
-                    "total_merges": len(agglomeration_records),
-                    "max_observed_similarity": round(overall_max_sim, 4) if overall_max_sim >= -1.0 else None,
-                    "closest_unmerged_pair": {
-                        "community_a": overall_closest_pair[0],
-                        "community_b": overall_closest_pair[1],
-                        "similarity": round(overall_closest_pair[2], 4)
-                    } if overall_closest_pair and not agglomeration_records else None,
-                    "top_candidate_pairs": [
-                        {"community_a": a, "community_b": b, "similarity": round(s, 4)}
-                        for a, b, s in initial_pairwise_sims[:5]
-                    ] if initial_pairwise_sims else [],
-                    "merges": agglomeration_records
-                }, f, indent=2)
+            agglom_report_payload = {
+                "enabled": self.enable_community_agglomeration,
+                "agglomeration_similarity_threshold": self.agglomeration_similarity_threshold,
+                "max_agglomeration_passes": self.max_agglomeration_passes,
+                "center_agglomeration_embeddings": self.center_agglomeration_embeddings,
+                "enable_subthreshold_tail_rescue": self.enable_subthreshold_tail_rescue,
+                "subthreshold_rescue_min_similarity": self.subthreshold_rescue_min_similarity,
+                "subthreshold_rescue_margin": self.subthreshold_rescue_margin,
+                "total_merges": len(agglomeration_records),
+                "macro_merges": macro_merges_count,
+                "subthreshold_tail_rescues": tail_rescues_count,
+                "max_observed_similarity": round(overall_max_sim, 4) if overall_max_sim >= -1.0 else None,
+                "closest_unmerged_pair": {
+                    "community_a": overall_closest_pair[0],
+                    "community_b": overall_closest_pair[1],
+                    "similarity": round(overall_closest_pair[2], 4)
+                } if overall_closest_pair and macro_merges_count == 0 else None,
+                "top_candidate_pairs": [
+                    {"community_a": a, "community_b": b, "similarity": round(s, 4)}
+                    for a, b, s in initial_pairwise_sims[:5]
+                ] if initial_pairwise_sims else [],
+                "merges": agglomeration_records
+            }
 
         # -------------------------------------------------------------
         # Re-index & Normalize Communities by Size Descending
@@ -1387,6 +1618,16 @@ class TopologyPipeline:
             c.nodes = sorted(list(set(c.nodes)))
             if not getattr(c, "merged_from", None):
                 c.merged_from = [new_idx]
+
+        if agglom_report_payload is not None:
+            baseline_to_final_cid = {}
+            for c in communities:
+                for base_id in c.merged_from:
+                    baseline_to_final_cid[base_id] = c.community_id
+            for rec in agglom_report_payload["merges"]:
+                rec["final_community_id"] = baseline_to_final_cid.get(rec["target_community"], rec["target_community"])
+            with open(path_out_dir / "community_agglomeration_report.json", "w") as f:
+                json.dump(agglom_report_payload, f, indent=2)
 
         # Update comm_map with normalized community IDs
         comm_map = {}

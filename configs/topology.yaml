@@ -143,12 +143,17 @@ topology:
     refugee_margin_delta: 0.06         # Required excess affinity: sim(foreign) - sim(home) >= 0.06
     require_structural_neighbor: true  # Node must possess at least 1 structural graph edge to foreign community
 
-    # --- 3.7 Hierarchical Community Agglomeration ---
-    # Iteratively consolidates redundant or split communities with near-identical centroids:
+    # --- 3.7 Hierarchical Community Agglomeration & Sub-Threshold Tail Rescue ---
+    # Consolidates redundant communities using core-weighted centered centroids (with a hard
+    # K >= 2 non-collapse floor), and rescues unambiguous sub-threshold tail clusters (< min_cluster_size)
+    # before they are flattened into enums.py:
     enable_community_agglomeration: true
-    agglomeration_similarity_threshold: 0.70 # Centroid cosine similarity cutoff for merging communities
-    max_agglomeration_passes: 15      # Iterative convergence ceiling
+    agglomeration_similarity_threshold: 0.70 # Core-weighted centroid cosine cutoff for merging communities
+    max_agglomeration_passes: 15      # Base iterative convergence ceiling (auto-scales with initial K)
     center_agglomeration_embeddings: true # Subtract corpus mean vector mu to eliminate anisotropic baseline shift
+    enable_subthreshold_tail_rescue: true # Fold unambiguous < min_cluster_size tail clusters into parent schemas
+    subthreshold_rescue_min_similarity: 0.50 # Minimum centered similarity floor to parent centroid
+    subthreshold_rescue_margin: 0.12  # Required margin over runner-up parent: sim(best) - sim(second) >= 0.12
 
     # --- 3.8 Disjoint Triplet Payload Partitioning ---
     triplet_payload_mode: "strictly_intra_only" # "include_boundary" or "strictly_intra_only"
