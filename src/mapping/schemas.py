@@ -5,7 +5,8 @@ Stage 5 Phase 1: Dynamic Schema Discovery, DAG Classification & Triage Models.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from enum import Enum
 import importlib.util
 import inspect
@@ -13,7 +14,27 @@ import logging
 from pathlib import Path
 import re
 import sys
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Final,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+)
+from uuid import UUID
 
 from pydantic import BaseModel, Field, create_model
 from pydantic._internal._decorators import Decorator, ModelValidatorDecoratorInfo
@@ -354,6 +375,39 @@ def load_schemas_from_file(py_file: Path) -> List[SchemaMeta]:
         raise ImportError(f"Could not load module spec from {py_file}")
 
     module = importlib.util.module_from_spec(spec)
+    # Pre-seed standard typing, pydantic, enum, and stdlib types into module namespace so
+    # LLM-synthesized schemas that omit an import (e.g. `Dict` or `Union`) still execute cleanly.
+    _default_schema_globals: Dict[str, Any] = {
+        "BaseModel": BaseModel,
+        "Field": Field,
+        "Enum": Enum,
+        "Optional": Optional,
+        "List": List,
+        "Dict": Dict,
+        "Set": Set,
+        "Tuple": Tuple,
+        "Union": Union,
+        "Any": Any,
+        "Literal": Literal,
+        "Callable": Callable,
+        "Sequence": Sequence,
+        "Mapping": Mapping,
+        "Iterable": Iterable,
+        "Type": Type,
+        "ClassVar": ClassVar,
+        "Final": Final,
+        "Annotated": Annotated,
+        "date": date,
+        "datetime": datetime,
+        "time": time,
+        "timedelta": timedelta,
+        "UUID": UUID,
+        "Decimal": Decimal,
+        "Path": Path,
+    }
+    for _k, _v in _default_schema_globals.items():
+        module.__dict__.setdefault(_k, _v)
+
     sys.modules[unique_mod_key] = module
     try:
         spec.loader.exec_module(module)
@@ -372,8 +426,23 @@ def load_schemas_from_file(py_file: Path) -> List[SchemaMeta]:
         logger.warning(f"No Pydantic BaseModel subclasses found in {py_file}")
         return []
 
-    # Attach resilient Enum pre-validator and rebuild models across two passes so forward references resolve cleanly
+    # Attach resilient Enum pre-validator, ensure all fields accept None with default=None
+    # (preventing ValidationError on required '...' fields or false-positive default=False fields),
+    # and rebuild models across two passes so forward references resolve cleanly.
     for cls in defined_models.values():
+        try:
+            for _f_name, _f_info in cls.model_fields.items():
+                _ann = _f_info.annotation
+                if _ann is not None and _ann is not Any:
+                    _origin = get_origin(_ann)
+                    if not (_origin is Union and type(None) in get_args(_ann)):
+                        _f_info.annotation = Optional[_ann]
+                if _f_info.default_factory is None and (
+                    _f_info.is_required() or _f_info.default is False or _f_info.default == ""
+                ):
+                    _f_info.default = None
+        except Exception:
+            pass
         try:
             setattr(cls, "_sp5_coerce_enum_fields", classmethod(_sp5_coerce_enum_fields_impl))
             cls.__pydantic_decorators__.model_validators["_sp5_coerce_enum_fields"] = Decorator.build(
@@ -443,6 +512,24 @@ def load_schemas(
             all_schemas.extend(file_schemas)
         except Exception as e:
             logger.error(f"Failed to load schemas from {py_file}: {e}")
+
+    # Fallback: if a single consolidated ontology file failed to load (0 schemas) and sibling community/ exists, load community/*.py
+    if not all_schemas and len(py_files) == 1 and py_files[0].name in CONSOLIDATED_ONTOLOGY_FILENAMES:
+        comm_dir = py_files[0].parent / "community"
+        if comm_dir.is_dir():
+            comm_files = sorted(
+                f for f in comm_dir.glob("*.py")
+                if f.is_file() and not f.name.startswith("_") and f.name not in CONSOLIDATED_ONTOLOGY_FILENAMES
+            )
+            if comm_files:
+                _log_discovery(
+                    f"Consolidated file '{py_files[0].name}' yielded 0 schemas; falling back to {len(comm_files)} schema module(s) in '{comm_dir}'."
+                )
+                for cf in comm_files:
+                    try:
+                        all_schemas.extend(load_schemas_from_file(cf))
+                    except Exception as e:
+                        logger.error(f"Failed to load fallback schema from {cf}: {e}")
 
     if target_class:
         filtered = [s for s in all_schemas if s.name == target_class]

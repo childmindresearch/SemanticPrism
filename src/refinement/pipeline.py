@@ -81,10 +81,11 @@ class RefinementPipeline:
         resume_mode: str = "skip",
         print_checkpoints: bool = True,
         plot_trustworthiness: bool = True,
+        save_centroid_vectors: bool = False,
         context_window_cap: Union[int, str] = "auto",
         lift_max_new_tokens: int = 256,
         lift_subjects: bool = True,
-        lift_predicates: bool = False,
+        lift_predicates: bool = True,
         lift_objects: bool = True,
     ):
         self.model_name = model_name
@@ -104,6 +105,7 @@ class RefinementPipeline:
         self.resume_mode = resume_mode
         self.print_checkpoints = print_checkpoints
         self.plot_trustworthiness = plot_trustworthiness
+        self.save_centroid_vectors = save_centroid_vectors
         self.context_window_cap = context_window_cap
         self.lift_max_new_tokens = lift_max_new_tokens
         self.lift_subjects = lift_subjects
@@ -380,9 +382,16 @@ class RefinementPipeline:
             return mat / norms
 
     def get_or_compute_embeddings(self, terms: List[str], component: str) -> np.ndarray:
+        comp_key = component.lower()
+        # Only persist subject and object node embeddings to disk (reused by Stage 2 resume and Stage 3 topology).
+        # Predicate embeddings are never read downstream and are computed in memory only.
+        if comp_key not in ("subject", "object"):
+            embs = self._encode_texts(terms)
+            print(f"   -> [{component}] Computed {len(terms)} vectors ({embs.shape[1]}d) in memory")
+            return embs
+
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         model_slug = re.sub(r"[^a-zA-Z0-9_]", "_", self.embedding_model_name)
-        comp_key = component.lower()
         npy_path = self.cache_dir / f"{comp_key}_{model_slug}_embeddings.npy"
         meta_path = self.cache_dir / f"{comp_key}_{model_slug}_meta.json"
 
@@ -621,13 +630,13 @@ class RefinementPipeline:
         if num_terms < 4 or hdbscan_cls is None:
             cluster_records = []
             for idx, t in enumerate(terms_list):
-                c_vec = term_embeddings_l2[idx]
                 rec: Dict[str, Any] = {
                     "cluster_number": idx,
                     "centroid_term": t,
                     "members": [t],
-                    "centroid_vector": c_vec.tolist(),
                 }
+                if self.save_centroid_vectors:
+                    rec["centroid_vector"] = term_embeddings_l2[idx].tolist()
                 cluster_records.append(rec)
             return cluster_records, term_embeddings_l2, terms_list
 
@@ -639,6 +648,14 @@ class RefinementPipeline:
         min_dist = params["umap_min_dist"]
         metric = "cosine"
         random_state = 42
+        umap_compat_kwargs: Dict[str, Any] = {}
+        if umap_mod is not None:
+            try:
+                import inspect as _inspect
+                if "compatibility_layout" in _inspect.signature(umap_mod.UMAP.__init__).parameters:
+                    umap_compat_kwargs["compatibility_layout"] = True
+            except Exception:
+                pass
 
         if self.plot_trustworthiness and umap_mod is not None and trustworthiness is not None and num_terms >= 4:
             try:
@@ -665,6 +682,7 @@ class RefinementPipeline:
                         metric=metric,
                         random_state=random_state,
                         n_jobs=1,
+                        **umap_compat_kwargs,
                     )
                     embedded_eval = reducer_eval.fit_transform(eval_embeddings)
                     score = trustworthiness(eval_embeddings, embedded_eval, n_neighbors=eval_neighbors, metric=metric)
@@ -704,6 +722,7 @@ class RefinementPipeline:
                 metric=metric,
                 random_state=random_state,
                 n_jobs=1,
+                **umap_compat_kwargs,
             )
             space_reduced = reducer.fit_transform(term_embeddings_l2)
         else:
@@ -802,8 +821,9 @@ class RefinementPipeline:
                 "cluster_number": int(cid),
                 "centroid_term": ex_term,
                 "members": m_sorted,
-                "centroid_vector": c_vec.tolist(),
             }
+            if self.save_centroid_vectors:
+                rec["centroid_vector"] = c_vec.tolist()
             cluster_records.append(rec)
 
         cluster_records.sort(key=lambda c: len(c["members"]), reverse=True)
@@ -1114,37 +1134,10 @@ class RefinementPipeline:
         unique_quotes = list(quotes_map.keys())
         print(f"   -> Extracted {len(unique_quotes)} unique source sentences across {len(refined_triples)} triplets.")
 
-        sent_npy_path = self.cache_dir / f"sentence_{model_slug}_embeddings.npy"
-        sent_meta_path = self.cache_dir / f"sentence_{model_slug}_meta.json"
-
-        sent_embeddings = None
-        if sent_npy_path.exists() and sent_meta_path.exists():
-            try:
-                meta = json.loads(sent_meta_path.read_text(encoding="utf-8"))
-                if meta.get("model_name") == self.embedding_model_name and meta.get("vocab") == unique_quotes:
-                    sent_embeddings = np.load(sent_npy_path)
-                    print(f"   -> Loaded {len(unique_quotes)} cached sentence vectors ({sent_embeddings.shape[1]}d)")
-            except Exception as e:
-                print(f"   -> Sentence cache read warning: {e}; recomputing...")
-
         try:
-            if sent_embeddings is None or len(sent_embeddings) != len(unique_quotes):
-                sent_embeddings = self._encode_texts(unique_quotes)
-                try:
-                    np.save(sent_npy_path, sent_embeddings)
-                    with open(sent_meta_path, "w", encoding="utf-8") as f:
-                        json.dump(
-                            {
-                                "model_name": self.embedding_model_name,
-                                "dimensions": int(sent_embeddings.shape[1]),
-                                "vocab": unique_quotes,
-                            },
-                            f,
-                            indent=2,
-                        )
-                    print(f"   -> Cached {len(unique_quotes)} sentence vectors to {sent_npy_path.name}")
-                except Exception as e:
-                    print(f"   -> Warning: Failed to cache sentence vectors: {e}")
+            sent_embeddings = self._encode_texts(unique_quotes)
+            if len(sent_embeddings) > 0:
+                print(f"   -> Computed {len(unique_quotes)} sentence vectors ({sent_embeddings.shape[1]}d) in memory")
 
             phrase_list = [
                 f"{get_field(t, 'subject')} {get_field(t, 'predicate')} {get_field(t, 'object')}".strip()
@@ -1388,25 +1381,17 @@ class RefinementPipeline:
         if is_dry:
             return raw_triples
 
-        taxonomic_map: Dict[str, str] = {}
         if lift_subj:
             with open(self.out_dir / "subject_taxonomic_map.json", "w", encoding="utf-8") as f:
                 json.dump(subject_taxonomic_map, f, indent=2)
-            taxonomic_map.update(subject_taxonomic_map)
 
         if lift_pred:
             with open(self.out_dir / "predicate_taxonomic_map.json", "w", encoding="utf-8") as f:
                 json.dump(predicate_taxonomic_map, f, indent=2)
-            taxonomic_map.update(predicate_taxonomic_map)
 
         if lift_obj:
             with open(self.out_dir / "object_taxonomic_map.json", "w", encoding="utf-8") as f:
                 json.dump(object_taxonomic_map, f, indent=2)
-            taxonomic_map.update(object_taxonomic_map)
-
-        if taxonomic_map:
-            with open(self.out_dir / "taxonomic_map.json", "w", encoding="utf-8") as f:
-                json.dump(taxonomic_map, f, indent=2)
 
         lower_subj_norm = {k.lower(): v for k, v in subject_map.items()}
         lower_pred_norm = {k.lower(): v for k, v in predicate_map.items()}

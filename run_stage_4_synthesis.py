@@ -285,6 +285,23 @@ def main() -> None:
             refined_triplets=refined_triplets,
         )
         print("=== Stage 4 Synthesis Completed Successfully ===")
+        if os.environ.get("SEMANTIC_PRISM_ORCHESTRATOR") != "1":
+            try:
+                from run_pipeline import generate_ontology_build_summary
+
+                ont_report_text, _ = generate_ontology_build_summary(
+                    outputs_dir=Path(OUTPUTS_DIR)
+                )
+                print("\n" + ont_report_text, flush=True)
+                print(
+                    f"📄 Ontology build summary saved to: '{Path(OUTPUTS_DIR) / 'SemanticPrism_OntologyBuild.txt'}'",
+                    flush=True,
+                )
+            except Exception as summary_err:
+                print(
+                    f"   [Warning] Could not generate SemanticPrism_OntologyBuild.txt: {summary_err}",
+                    flush=True,
+                )
     except Exception as e:
         print(f"Error during Stage 4 Synthesis execution: {e}", flush=True)
         traceback.print_exc()

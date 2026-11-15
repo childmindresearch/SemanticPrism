@@ -1390,7 +1390,10 @@ class SynthesisPipeline:
         # Load upstream Stage 2 taxonomic maps (surface hyponym -> lifted hypernym) if available
         refinement_dir = Path(outputs_dir) / "02_refinement"
         global_hypernym_to_hyponyms: Dict[str, List[str]] = defaultdict(list)
-        for tax_filename in ("taxonomic_map.json", "subject_taxonomic_map.json", "object_taxonomic_map.json"):
+        tax_files_to_read = ["subject_taxonomic_map.json", "object_taxonomic_map.json"]
+        if not any((refinement_dir / tf).exists() for tf in tax_files_to_read):
+            tax_files_to_read = ["taxonomic_map.json"]
+        for tax_filename in tax_files_to_read:
             tax_path = refinement_dir / tax_filename
             if tax_path.exists():
                 try:

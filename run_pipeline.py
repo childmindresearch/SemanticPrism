@@ -3,7 +3,8 @@
 SemanticPrism Master Pipeline Execution Script
 This script sequentially executes Stages 1 through 5 of the SemanticPrism pipeline.
 It utilizes subprocesses to ensure memory and VRAM are cleanly garbage collected
-between each intensive LLM and mathematical operation, and writes a final end-to-end
+between each intensive LLM and mathematical operation, writes an ontology build report
+after Stage 4 (`outputs/SemanticPrism_OntologyBuild.txt`), and writes a final end-to-end
 pipeline summary report to `outputs/pipeline_summary.txt` and `outputs/pipeline_summary.json`.
 """
 
@@ -71,7 +72,7 @@ def _format_stage_model_line(meta: Dict[str, Any], default_model: str, extra_inf
     """Formats a human-readable model status line, highlighting fallback usage if any."""
     active = meta.get("active_model") or default_model
     configured = meta.get("configured_model") or default_model
-    quant = meta.get("quantization") or "default"
+    quant = meta.get("quantization") or meta.get("quantization_or_dtype") or "default"
     fallback_used = bool(meta.get("fallback_used", False))
     fallback_reason = meta.get("fallback_reason")
     suffix = f" ({extra_info})" if extra_info else ""
@@ -87,6 +88,7 @@ def _format_stage_model_line(meta: Dict[str, Any], default_model: str, extra_inf
 def generate_pipeline_summary(
     outputs_dir: Path = Path("outputs"),
     total_duration: Optional[float] = None,
+    write_files: bool = True,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     Collects key metrics, model provenance, and artifacts across Stages 1–5 and writes:
@@ -431,6 +433,77 @@ def generate_pipeline_summary(
         },
     }
 
+    # Shared Stage 1–4 summary lines (used by both SemanticPrism_OntologyBuild.txt and pipeline_summary.txt)
+    core_stage_lines: List[str] = []
+
+    # Stage 1
+    core_stage_lines.append("Stage 1: Extraction")
+    core_stage_lines.append(f"  - Model Used: {s1_model_line}")
+    core_stage_lines.append(f"  - {docs_ingested_count} documents ingested")
+    core_stage_lines.append(f"  - {themes_identified_count} themes identified")
+    core_stage_lines.append(f"  - {len(master_themes_list)} master themes consolidated:")
+    if master_themes_list:
+        for idx, mt in enumerate(master_themes_list, start=1):
+            core_stage_lines.append(f"      {idx}. {mt}")
+    else:
+        core_stage_lines.append("      (none)")
+    core_stage_lines.append(f"  - 1 master theme (domain): {master_domain or '(not available)'}")
+    core_stage_lines.append(f"  - {triples_extracted_count} triples extracted")
+    core_stage_lines.append("")
+
+    # Stage 2
+    core_stage_lines.append("Stage 2: Refinement")
+    core_stage_lines.append(f"  - Model Used: {s2_model_line}")
+    core_stage_lines.append(
+        f"  - {subjects_lifted_count} Subjects hypernym lifted "
+        f"(-> {subjects_unique_hypernyms} canonical concepts)"
+    )
+    if predicates_lifted_count > 0:
+        core_stage_lines.append(
+            f"  - {predicates_lifted_count} Predicates hypernym lifted "
+            f"(-> {predicates_unique_hypernyms} canonical relations)"
+        )
+    core_stage_lines.append(
+        f"  - {objects_lifted_count} Objects hypernym lifted "
+        f"(-> {objects_unique_hypernyms} canonical concepts)"
+    )
+    core_stage_lines.append("")
+
+    # Stage 3
+    core_stage_lines.append("Stage 3: Topology")
+    core_stage_lines.append(f"  - Engine Used: {s3_model_line}")
+    core_stage_lines.append("  Original raw graph details:")
+    core_stage_lines.append(f"    - {raw_nodes} total nodes, {raw_dir_edges} total edges ({raw_undir_edges} undirected)")
+    core_stage_lines.append(
+        f"    - Total Graph size: {raw_total_graph_size} (nodes + edges) | "
+        f"Density: {raw_density} | Global hubs separated: {global_hubs_removed}"
+    )
+    core_stage_lines.append("  Final subgraph details:")
+    core_stage_lines.append(
+        f"    - {final_sub_nodes} core nodes, {final_sub_edges} core edges "
+        f"(dense clustering core: {dense_cluster_nodes} nodes, {dense_cluster_edges} edges)"
+    )
+    core_stage_lines.append(f"    - {initial_clusters_count} clusters identified")
+    core_stage_lines.append(f"    - {final_clusters_count} final clusters after merging")
+    core_stage_lines.append("")
+
+    # Stage 4
+    core_stage_lines.append("Stage 4: Synthesis")
+    core_stage_lines.append(f"  - Model Used: {s4_model_line}")
+    core_stage_lines.append(f"  - {len(schema_names)} final schemas created:")
+    if schema_names:
+        for s_name in schema_names:
+            core_stage_lines.append(f"      * {s_name}")
+    else:
+        core_stage_lines.append("      (none)")
+    core_stage_lines.append(f"  - {len(final_basemodels)} final BaseModels created:")
+    if final_basemodels:
+        for bm_name in final_basemodels:
+            core_stage_lines.append(f"      * {bm_name}")
+    else:
+        core_stage_lines.append("      (none)")
+    core_stage_lines.append("")
+
     lines: List[str] = [
         "=" * 70,
         "SEMANTIC PRISM — END-TO-END PIPELINE EXECUTION SUMMARY",
@@ -450,73 +523,7 @@ def generate_pipeline_summary(
     lines.append(f"  - Stage 5 (Mapping):     {s5_model_line}")
     lines.append("")
 
-    # Stage 1
-    lines.append("Stage 1: Extraction")
-    lines.append(f"  - Model Used: {s1_model_line}")
-    lines.append(f"  - {docs_ingested_count} documents ingested")
-    lines.append(f"  - {themes_identified_count} themes identified")
-    lines.append(f"  - {len(master_themes_list)} master themes consolidated:")
-    if master_themes_list:
-        for idx, mt in enumerate(master_themes_list, start=1):
-            lines.append(f"      {idx}. {mt}")
-    else:
-        lines.append("      (none)")
-    lines.append(f"  - 1 master theme (domain): {master_domain or '(not available)'}")
-    lines.append(f"  - {triples_extracted_count} triples extracted")
-    lines.append("")
-
-    # Stage 2
-    lines.append("Stage 2: Refinement")
-    lines.append(f"  - Model Used: {s2_model_line}")
-    lines.append(
-        f"  - {subjects_lifted_count} Subjects hypernym lifted "
-        f"(-> {subjects_unique_hypernyms} canonical concepts)"
-    )
-    if predicates_lifted_count > 0:
-        lines.append(
-            f"  - {predicates_lifted_count} Predicates hypernym lifted "
-            f"(-> {predicates_unique_hypernyms} canonical relations)"
-        )
-    lines.append(
-        f"  - {objects_lifted_count} Objects hypernym lifted "
-        f"(-> {objects_unique_hypernyms} canonical concepts)"
-    )
-    lines.append("")
-
-    # Stage 3
-    lines.append("Stage 3: Topology")
-    lines.append(f"  - Engine Used: {s3_model_line}")
-    lines.append("  Original raw graph details:")
-    lines.append(f"    - {raw_nodes} total nodes, {raw_dir_edges} total edges ({raw_undir_edges} undirected)")
-    lines.append(
-        f"    - Total Graph size: {raw_total_graph_size} (nodes + edges) | "
-        f"Density: {raw_density} | Global hubs separated: {global_hubs_removed}"
-    )
-    lines.append("  Final subgraph details:")
-    lines.append(
-        f"    - {final_sub_nodes} core nodes, {final_sub_edges} core edges "
-        f"(dense clustering core: {dense_cluster_nodes} nodes, {dense_cluster_edges} edges)"
-    )
-    lines.append(f"    - {initial_clusters_count} clusters identified")
-    lines.append(f"    - {final_clusters_count} final clusters after merging")
-    lines.append("")
-
-    # Stage 4
-    lines.append("Stage 4: Synthesis")
-    lines.append(f"  - Model Used: {s4_model_line}")
-    lines.append(f"  - {len(schema_names)} final schemas created:")
-    if schema_names:
-        for s_name in schema_names:
-            lines.append(f"      * {s_name}")
-    else:
-        lines.append("      (none)")
-    lines.append(f"  - {len(final_basemodels)} final BaseModels created:")
-    if final_basemodels:
-        for bm_name in final_basemodels:
-            lines.append(f"      * {bm_name}")
-    else:
-        lines.append("      (none)")
-    lines.append("")
+    lines.extend(core_stage_lines)
 
     # Stage 5
     lines.append("Stage 5: Schema-Driven Extraction & Aggregation")
@@ -534,13 +541,92 @@ def generate_pipeline_summary(
 
     report_text = "\n".join(lines) + "\n"
 
-    txt_path = outputs_dir / "pipeline_summary.txt"
-    json_path = outputs_dir / "pipeline_summary.json"
-    txt_path.write_text(report_text, encoding="utf-8")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(summary_data, f, indent=2)
+    if write_files:
+        txt_path = outputs_dir / "pipeline_summary.txt"
+        json_path = outputs_dir / "pipeline_summary.json"
+        txt_path.write_text(report_text, encoding="utf-8")
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(summary_data, f, indent=2)
 
     return report_text, summary_data
+
+
+def generate_ontology_build_summary(
+    outputs_dir: Path = Path("outputs"),
+    total_duration: Optional[float] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    Collects key metrics, model provenance, and artifacts across Stages 1–4 (prior to Stage 5)
+    and writes `outputs/SemanticPrism_OntologyBuild.txt` with all summary outputs up to Stage 4.
+    """
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    full_report_text, summary_data = generate_pipeline_summary(
+        outputs_dir=outputs_dir,
+        total_duration=total_duration,
+        write_files=False,
+    )
+
+    try:
+        from model_config import CODER_MODEL, EMBEDDING_MODEL, MODEL_NAME
+    except Exception:
+        MODEL_NAME = "Qwen/Qwen3.6-27B"
+        EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+        CODER_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
+
+    models_used = summary_data.get("models_used", {})
+    s1_meta = models_used.get("stage_1_extraction", {})
+    s2_meta = models_used.get("stage_2_refinement", {})
+    s4_meta = models_used.get("stage_4_synthesis", {})
+
+    s1_model_line = _format_stage_model_line(s1_meta, MODEL_NAME)
+    s2_embed = s2_meta.get("embedding_model") or EMBEDDING_MODEL
+    s2_model_line = _format_stage_model_line(
+        s2_meta, MODEL_NAME, extra_info=f"Embedding Model: {s2_embed}"
+    )
+    s3_model_line = "NetworkX / Leiden (Deterministic Graph Topology — No LLM)"
+    s4_model_line = _format_stage_model_line(s4_meta, CODER_MODEL)
+
+    # Extract the exact Stage 1–4 body block from full_report_text (from "Stage 1: Extraction" up to "Stage 5:")
+    marker_start = "Stage 1: Extraction"
+    marker_end = "\nStage 5: Schema-Driven Extraction & Aggregation"
+    start_idx = full_report_text.find(marker_start)
+    end_idx = full_report_text.find(marker_end)
+    if start_idx != -1 and end_idx != -1:
+        stages_1_to_4_body = full_report_text[start_idx:end_idx].rstrip()
+    else:
+        stages_1_to_4_body = full_report_text.rstrip()
+
+    ont_lines: List[str] = [
+        "=" * 70,
+        "SEMANTIC PRISM — ONTOLOGY BUILD SUMMARY (STAGES 1–4)",
+        "=" * 70,
+    ]
+    if total_duration is not None:
+        ont_lines.append(f"Total Ontology Build Time: {total_duration:.2f} seconds")
+    ont_lines.append(f"Generated At: {summary_data['generated_at']}")
+    ont_lines.append("")
+    ont_lines.append("Models Used Across Ontology Build:")
+    ont_lines.append(f"  - Stage 1 (Extraction):  {s1_model_line}")
+    ont_lines.append(f"  - Stage 2 (Refinement):  {s2_model_line}")
+    ont_lines.append(f"  - Stage 3 (Topology):    {s3_model_line}")
+    ont_lines.append(f"  - Stage 4 (Synthesis):   {s4_model_line}")
+    ont_lines.append("")
+    ont_lines.append(stages_1_to_4_body)
+    ont_lines.append("=" * 70)
+
+    ontology_report_text = "\n".join(ont_lines) + "\n"
+    ont_path = outputs_dir / "SemanticPrism_OntologyBuild.txt"
+    ont_path.write_text(ontology_report_text, encoding="utf-8")
+
+    ontology_summary_data = {
+        k: v for k, v in summary_data.items() if k != "stage_5_mapping"
+    }
+    if "models_used" in ontology_summary_data and isinstance(ontology_summary_data["models_used"], dict):
+        ontology_summary_data["models_used"] = {
+            k: v for k, v in ontology_summary_data["models_used"].items() if k != "stage_5_mapping"
+        }
+
+    return ontology_report_text, ontology_summary_data
 
 
 def run_stage(
@@ -564,6 +650,7 @@ def run_stage(
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["SEMANTIC_PRISM_ORCHESTRATOR"] = "1"
     try:
         from model_config import HF_TOKEN
         if HF_TOKEN and HF_TOKEN.strip():
@@ -631,9 +718,13 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.summary_only:
+        generate_ontology_build_summary()
         report_text, _ = generate_pipeline_summary()
         print("\n" + report_text)
-        print("Saved summary to 'outputs/pipeline_summary.txt' and 'outputs/pipeline_summary.json'.")
+        print(
+            "Saved summaries to 'outputs/SemanticPrism_OntologyBuild.txt', "
+            "'outputs/pipeline_summary.txt', and 'outputs/pipeline_summary.json'."
+        )
         return
 
     print("Welcome to SemanticPrism.")
@@ -646,6 +737,19 @@ def main() -> None:
             continue
         stage_args = ["--dry-run"] if (args.dry_run and supports_dry_run) else []
         run_stage(stage_num, script, desc, stage_args)
+
+        # Save and print SemanticPrism_OntologyBuild.txt immediately after Stage 4 (prior to Stage 5)
+        if stage_num == 4:
+            ontology_duration = time.time() - global_start
+            ont_report_text, _ = generate_ontology_build_summary(
+                total_duration=ontology_duration
+            )
+            if 5 in args.stages:
+                print("\n" + ont_report_text, flush=True)
+            print(
+                "📄 Ontology build summary saved to: 'outputs/SemanticPrism_OntologyBuild.txt'",
+                flush=True,
+            )
 
     global_duration = time.time() - global_start
     report_text, _ = generate_pipeline_summary(total_duration=global_duration)

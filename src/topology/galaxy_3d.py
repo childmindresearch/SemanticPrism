@@ -575,14 +575,19 @@ class Galaxy3DVisualizer:
         # 5. Dimensionality Reduction: UMAP 3D
         t0 = time.time()
         try:
+            import inspect as _inspect
             import umap
+            umap_3d_kwargs = {}
+            if "compatibility_layout" in _inspect.signature(umap.UMAP.__init__).parameters:
+                umap_3d_kwargs["compatibility_layout"] = True
             umap_3d = umap.UMAP(
                 n_components=3,
                 n_neighbors=15,
                 min_dist=0.12,
                 metric='cosine',
                 random_state=42,
-                verbose=False
+                verbose=False,
+                **umap_3d_kwargs,
             )
             coords_umap_raw = umap_3d.fit_transform(proj_vecs)
             coords_umap_centered = coords_umap_raw - np.mean(coords_umap_raw, axis=0)

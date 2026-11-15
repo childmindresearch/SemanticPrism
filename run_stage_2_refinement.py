@@ -14,7 +14,7 @@ Workflow Steps:
              (-> subject_clusters.json, predicate_clusters.json, object_clusters.json, umap_trustworthiness_*.jpg)
   - Step 3 : Concurrent Batch Taxonomic Hypernym Lifting via PrismRunner (with WAL SQLite resume cache):
              (-> refinement_state.db, subject_taxonomic_map.json, predicate_taxonomic_map.json,
-                 object_taxonomic_map.json, taxonomic_map.json)
+                 object_taxonomic_map.json)
   - Step 4 : Contextual Sentence Vector Grounding & Edge Fidelity (gamma_e) Computation:
              (-> refined_triplets.json, contextual_grounding_diagnostics.json)
 
@@ -85,12 +85,13 @@ SAVE_LLM_PAYLOADS: bool = True                 # Save initial LLM prompts to out
 RESUME_MODE: str = "skip"                      # "skip" (reuse SQLite cache in refinement_state.db) or "overwrite"
 PRINT_CHECKPOINTS: bool = True                 # Print real-time timestamped checkpoint progress to console
 PLOT_TRUSTWORTHINESS: bool = True              # Generate UMAP Trustworthiness (T_k) vs n_components .jpg charts
+SAVE_CENTROID_VECTORS: bool = False            # Save dense centroid_vector float arrays inside *_clusters.json (off by default to reduce disk size)
 
 # 3. Context, Token & SVO Taxonomic Lifting Settings
 CONTEXT_WINDOW_CAP: Union[int, str] = "auto"   # "auto" (detect from model config via PrismRunner) or integer token cap
 LIFT_MAX_NEW_TOKENS: int = 256                 # Max generated tokens per TaxonomicVerification JSON response
 LIFT_SUBJECTS: bool = True                     # Abstract entity subjects into canonical hypernyms
-LIFT_PREDICATES: bool = False                  # Abstract relational predicates into canonical hypernyms
+LIFT_PREDICATES: bool = True                   # Abstract relational predicates into canonical hypernyms
 LIFT_OBJECTS: bool = True                      # Abstract entity objects into canonical hypernyms
 
 
@@ -150,6 +151,7 @@ def main() -> None:
         resume_mode=RESUME_MODE,
         print_checkpoints=PRINT_CHECKPOINTS,
         plot_trustworthiness=PLOT_TRUSTWORTHINESS,
+        save_centroid_vectors=SAVE_CENTROID_VECTORS,
         context_window_cap=CONTEXT_WINDOW_CAP,
         lift_max_new_tokens=LIFT_MAX_NEW_TOKENS,
         lift_subjects=LIFT_SUBJECTS,
@@ -205,7 +207,6 @@ def main() -> None:
         print(" - subject_taxonomic_map.json")
         print(" - predicate_taxonomic_map.json")
         print(" - object_taxonomic_map.json")
-        print(" - taxonomic_map.json")
         print(" - refined_triplets.json")
         print(" - contextual_grounding_diagnostics.json")
         print("=" * 60 + "\n")

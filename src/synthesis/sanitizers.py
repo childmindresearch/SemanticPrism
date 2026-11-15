@@ -799,6 +799,78 @@ def _sanitize_ast_models(
                 modified = True
             defined_so_far.add(m.name)
 
+    # Ensure all referenced standard typing/pydantic/enum/stdlib symbols are explicitly imported
+    _STD_MODULE_SYMBOLS: Dict[str, Tuple[str, ...]] = {
+        "pydantic": ("BaseModel", "Field"),
+        "typing": (
+            "Optional", "List", "Dict", "Set", "Tuple", "Union", "Any", "Literal",
+            "Callable", "Sequence", "Mapping", "Iterable", "Type", "ClassVar", "Final", "Annotated",
+        ),
+        "enum": ("Enum",),
+        "datetime": ("date", "datetime", "time", "timedelta"),
+        "uuid": ("UUID",),
+        "decimal": ("Decimal",),
+        "pathlib": ("Path",),
+    }
+    imported_or_defined: set = set()
+    import_from_by_mod: Dict[str, ast.ImportFrom] = {}
+    for top_n in tree.body:
+        if isinstance(top_n, ast.ClassDef):
+            imported_or_defined.add(top_n.name)
+        elif isinstance(top_n, ast.Import):
+            for alias in top_n.names:
+                imported_or_defined.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(top_n, ast.ImportFrom):
+            if top_n.module and (top_n.level or 0) == 0 and top_n.module not in import_from_by_mod:
+                import_from_by_mod[top_n.module] = top_n
+            for alias in top_n.names:
+                imported_or_defined.add(alias.asname or alias.name)
+        elif isinstance(top_n, ast.Assign):
+            for t in top_n.targets:
+                if isinstance(t, ast.Name):
+                    imported_or_defined.add(t.id)
+
+    referenced_load_names: set = {
+        sub.id
+        for top_n in tree.body
+        if not isinstance(top_n, (ast.Import, ast.ImportFrom))
+        for sub in ast.walk(top_n)
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+    }
+
+    new_import_nodes: List[ast.AST] = []
+    for mod_name, sym_tuple in _STD_MODULE_SYMBOLS.items():
+        missing_syms = [
+            s for s in sym_tuple
+            if s in referenced_load_names and s not in imported_or_defined
+        ]
+        if not missing_syms:
+            continue
+        modified = True
+        if mod_name in import_from_by_mod:
+            existing_imp = import_from_by_mod[mod_name]
+            existing_names = {a.name for a in existing_imp.names}
+            for s in missing_syms:
+                if s not in existing_names:
+                    existing_imp.names.append(ast.alias(name=s, asname=None))
+                    imported_or_defined.add(s)
+        else:
+            imp_node = ast.ImportFrom(
+                module=mod_name,
+                names=[ast.alias(name=s, asname=None) for s in missing_syms],
+                level=0,
+            )
+            import_from_by_mod[mod_name] = imp_node
+            new_import_nodes.append(imp_node)
+            imported_or_defined.update(missing_syms)
+
+    if new_import_nodes:
+        insert_pos = 0
+        for idx_b, top_n in enumerate(tree.body):
+            if isinstance(top_n, (ast.Import, ast.ImportFrom)):
+                insert_pos = idx_b + 1
+        tree.body[insert_pos:insert_pos] = new_import_nodes
+
     if not modified and "'''" not in code:
         return code
 
