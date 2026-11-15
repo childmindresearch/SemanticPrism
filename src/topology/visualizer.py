@@ -2358,13 +2358,17 @@ class TopologyVisualizer:
                     pass
 
         if baseline_result is None:
-            baseline_file = vis_dir / "topology_partitions_baseline.json"
-            if baseline_file.exists():
-                try:
-                    with open(baseline_file, "r", encoding="utf-8") as f:
-                        baseline_result = TopologyResult(**json.load(f))
-                except Exception:
-                    pass
+            for candidate in (
+                vis_dir / "topology_partitions_baseline.json",
+                vis_dir.parent / "03_results" / "topology_partitions_baseline.json",
+            ):
+                if candidate.exists():
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as f:
+                            baseline_result = TopologyResult(**json.load(f))
+                        break
+                    except Exception:
+                        pass
 
         # 1. Single Isolated Communities Graph with in-page toggle
         self._generate_isolated_communities_graph(
@@ -2411,13 +2415,17 @@ class TopologyVisualizer:
         css = self._get_shared_interactive_css()
 
         if baseline_result is None:
-            baseline_file = output_path.parent / "topology_partitions_baseline.json"
-            if baseline_file.exists():
-                try:
-                    with open(baseline_file, "r", encoding="utf-8") as f:
-                        baseline_result = TopologyResult(**json.load(f))
-                except Exception:
-                    pass
+            for candidate in (
+                output_path.parent / "topology_partitions_baseline.json",
+                output_path.parent.parent / "03_results" / "topology_partitions_baseline.json",
+            ):
+                if candidate.exists():
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as f:
+                            baseline_result = TopologyResult(**json.load(f))
+                        break
+                    except Exception:
+                        pass
 
         colors = [
             "#1f77b4", "#aec7e8", "#ff7f0e", "#ffbb78", "#2ca02c", "#98df8a",
@@ -3540,13 +3548,17 @@ class TopologyVisualizer:
         agent_name = "leiden_schema_agent"
         
         if baseline_result is None:
-            baseline_file = vis_dir / "topology_partitions_baseline.json"
-            if baseline_file.exists():
-                try:
-                    with open(baseline_file, "r", encoding="utf-8") as f:
-                        baseline_result = TopologyResult(**json.load(f))
-                except Exception:
-                    pass
+            for candidate in (
+                vis_dir / "topology_partitions_baseline.json",
+                vis_dir.parent / "03_results" / "topology_partitions_baseline.json",
+            ):
+                if candidate.exists():
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as f:
+                            baseline_result = TopologyResult(**json.load(f))
+                        break
+                    except Exception:
+                        pass
 
         synth_cfg = self.full_config.get('synthesis', {}) if hasattr(self, 'full_config') and self.full_config else {}
         min_cluster_size = synth_cfg.get('min_cluster_size', 15)
@@ -4077,13 +4089,17 @@ class TopologyVisualizer:
         vis_dir.mkdir(parents=True, exist_ok=True)
 
         if baseline_result is None:
-            baseline_file = vis_dir / "topology_partitions_baseline.json"
-            if baseline_file.exists():
-                try:
-                    with open(baseline_file, "r", encoding="utf-8") as f:
-                        baseline_result = TopologyResult(**json.load(f))
-                except Exception:
-                    pass
+            for candidate in (
+                vis_dir / "topology_partitions_baseline.json",
+                vis_dir.parent / "03_results" / "topology_partitions_baseline.json",
+            ):
+                if candidate.exists():
+                    try:
+                        with open(candidate, "r", encoding="utf-8") as f:
+                            baseline_result = TopologyResult(**json.load(f))
+                        break
+                    except Exception:
+                        pass
 
         def _build_collapsed_pack(res: TopologyResult):
             clusters = res.communities

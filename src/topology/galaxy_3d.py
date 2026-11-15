@@ -281,45 +281,9 @@ class Galaxy3DVisualizer:
     ) -> Dict[str, Any]:
         """
         Loads embeddings and community partitions, computing both PCA-3D and
-        UMAP-3D projection coordinates for concepts, centroids, hulls, and highways.
-        Caches the computed 3D dataset to avoid repeated dimensionality reduction.
+        UMAP-3D projection coordinates for concepts, centroids, hulls, and highways
+        in memory (serialized directly into the standalone HTML dashboard).
         """
-        cache_dir = base_dir / "03_results" / "cache"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_file = cache_dir / "galaxy_3d_data.json"
-
-        g_cfg = self.config.get("topology", {}).get("galaxy_3d", {}) if "topology" in self.config else self.config.get("galaxy_3d", {})
-        desired_debiased = bool(g_cfg.get("debias_embeddings", True))
-        desired_weighting = str(g_cfg.get("centroid_weighting", "core_tiers"))
-        desired_hull = int(g_cfg.get("density_hull_percentile", 75))
-
-        comm_dir = base_dir / "03_results"
-        baseline_file_check = comm_dir / "topology_partitions_baseline.json"
-
-        if not force_recompute and cache_file.exists():
-            try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                cached_meta = data.get("meta", {})
-                cached_debiased = cached_meta.get("debiased")
-                cached_weighting = cached_meta.get("centroid_weighting")
-                cached_hull = cached_meta.get("density_hull_percentile")
-                has_themes = any("top_themes" in c for c in data.get("communities", []))
-                if (
-                    "concepts" in data
-                    and "agglom" in data
-                    and len(data["concepts"]) > 5
-                    and cached_debiased == desired_debiased
-                    and cached_weighting == desired_weighting
-                    and cached_hull == desired_hull
-                    and has_themes
-                    and (not baseline_file_check.exists() or data.get("has_baseline", False))
-                ):
-                    print(f"   -> [3D Galaxy] Loaded cached 3D projections from: {cache_file.name}")
-                    return data
-            except Exception as e:
-                print(f"   -> [3D Galaxy] Cache read failed ({e}), recomputing...")
-
         print("   -> [3D Galaxy] Computing dual-engine 3D projections (PCA-3D & UMAP-3D)...")
 
         # 1. Load Concept Embeddings & Metadata
@@ -683,10 +647,6 @@ class Galaxy3DVisualizer:
             "refugees": agglom_pack["refugees"]
         }
 
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(galaxy_data, f, indent=2)
-        print(f"   -> [3D Galaxy] Exported and cached 3D dataset to: {cache_file.name}")
-
         return galaxy_data
 
     # =========================================================================
@@ -707,7 +667,7 @@ class Galaxy3DVisualizer:
         galaxy_data = self.compute_3d_galaxy_data(base_dir=base_dir, refinement_dir=refinement_dir, force_recompute=force_recompute)
 
         if output_path is None:
-            output_path = base_dir / "03_results" / "cluster_3d_galaxy_visualization.html"
+            output_path = base_dir / "visuals" / "cluster_3d_galaxy_visualization.html"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         data_json_str = json.dumps(galaxy_data)

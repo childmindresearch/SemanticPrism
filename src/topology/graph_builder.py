@@ -231,9 +231,8 @@ class TopologyPipeline:
         print("=== SemanticPrism Stage 3: Topology Pipeline (Rebuilt 3-Stage Architecture) ===")
         print("[Topology] Initializing Stage 3 Graph Construction...")
         
-        # 1. Normalize Triplets & Construct Raw Network Graphs
+        # 1. Construct Raw Network Graphs from Refined Triplets
         dg = nx.DiGraph()
-        normalized_triplets = []
         for t in refined_triplets:
             subj = t.get('subject')
             obj = t.get('object')
@@ -244,11 +243,8 @@ class TopologyPipeline:
             
             subj_norm = str(subj).lower().strip()
             obj_norm = str(obj).lower().strip()
-            
-            t_norm = t.copy()
-            t_norm['subject'] = subj_norm
-            t_norm['object'] = obj_norm
-            normalized_triplets.append(t_norm)
+            if not subj_norm or not obj_norm:
+                continue
                 
             if dg.has_edge(subj_norm, obj_norm):
                 dg[subj_norm][obj_norm]['weight'] = dg[subj_norm][obj_norm].get('weight', 1) + 1
@@ -273,8 +269,7 @@ class TopologyPipeline:
         raw_diagnostics, global_hubs, global_hubs_registry, node_metrics = self._stage_3_1_raw_graph_evaluation(
             dg=dg,
             ug=ug,
-            refined_triplets=refined_triplets,
-            normalized_triplets=normalized_triplets
+            refined_triplets=refined_triplets
         )
 
         # ---------------------------------------------------------------------
@@ -309,44 +304,54 @@ class TopologyPipeline:
         )
 
         # ---------------------------------------------------------------------
-        # VISUALIZATIONS GENERATION (Co-located directly in 03_topology directories)
+        # VISUALIZATIONS GENERATION (Consolidated in outputs/03_topology/visuals)
         # ---------------------------------------------------------------------
-        print("   ==> [Visuals] Generating Co-Located HTML Visuals in 03_topology...")
-        # Remove legacy separate visuals directory if present
+        vis_dir = Path("outputs/03_topology/visuals")
+        vis_dir.mkdir(parents=True, exist_ok=True)
+        print(f"   ==> [Visuals] Generating HTML Visuals in {vis_dir}...")
+        # Remove legacy top-level visuals directory or stale co-located HTML files if present
         legacy_vis_base = Path("outputs/visuals")
         if legacy_vis_base.exists():
             shutil.rmtree(legacy_vis_base, ignore_errors=True)
+        for legacy_subdir in ("01_raw_graph_evaluation", "02_core_separation", "03_results"):
+            sub_p = Path("outputs/03_topology") / legacy_subdir
+            if sub_p.exists():
+                for stale_html in sub_p.glob("*.html"):
+                    try:
+                        stale_html.unlink()
+                    except Exception:
+                        pass
 
-        # 1. 01_raw_graph_evaluation: Operations on entire raw graph
+        # 1. Stage 3.1: Operations on entire raw graph
         self.visualizer.generate_stage_3_1_overview_visuals(
             dg=dg,
             ug=ug,
             global_hubs=global_hubs,
             node_metrics=node_metrics,
             raw_diagnostics=raw_diagnostics,
-            vis_dir=Path("outputs/03_topology/01_raw_graph_evaluation"),
+            vis_dir=vis_dir,
             community_result=results.get("community")
         )
 
-        # 2. 02_core_separation: Reduced graph (hubs removed) & Hub Backbone Network
+        # 2. Stage 3.2: Reduced graph (hubs removed) & Hub Backbone Network
         self.visualizer.generate_stage_3_2_reduced_core_visuals(
             core_dg=core_dg,
             cluster_ug=cluster_ug,
             global_hubs=global_hubs,
             separation_report=separation_report,
-            vis_dir=Path("outputs/03_topology/02_core_separation"),
+            vis_dir=vis_dir,
             dg=dg,
             hub_partitions=hub_partitions,
             node_metrics=node_metrics
         )
 
-        # 3. 03_results: Dedicated community results visuals
+        # 3. Stage 3.3: Dedicated community results visuals
         if "community" in results:
             self.visualizer.generate_stage_3_3_community_visuals(
                 dg=dg,
                 result=results["community"],
                 refined_triplets=refined_triplets,
-                vis_dir=Path("outputs/03_topology/03_results"),
+                vis_dir=vis_dir,
                 baseline_result=getattr(self, 'baseline_community_result', None)
             )
 
@@ -379,17 +384,13 @@ class TopologyPipeline:
     # =========================================================================
     def _stage_3_1_raw_graph_evaluation(
         self, dg: nx.DiGraph, ug: nx.Graph, refined_triplets: List[dict],
-        normalized_triplets: List[dict]
+        normalized_triplets: Optional[List[dict]] = None
     ) -> Tuple[Dict[str, Any], List[str], List[Dict[str, Any]], Dict[str, NodeMetrics]]:
         print("   ==> [Stage 3.1] Overall Graph Evaluation, Modularity & Hub Identification...")
         out_dir = Path("outputs/03_topology/01_raw_graph_evaluation")
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Save normalized triplets
-        with open(out_dir / "normalized_triplets.json", "w") as f:
-            json.dump(normalized_triplets, f, indent=2)
-
-        # 2. Basic Scale & Density
+        # 1. Basic Scale & Density
         num_nodes = len(dg)
         num_dir_edges = dg.number_of_edges()
         num_undir_edges = ug.number_of_edges()
@@ -683,22 +684,6 @@ class TopologyPipeline:
 
         # True unattached orphans are degree-0 isolates and disconnected pairs
         orphans = sorted(true_isolates + isolated_dyads)
-
-        with open(out_dir / "orphans_and_singletons.json", "w") as f:
-            json.dump({
-                "summary": {
-                    "dense_core_nodes": len(dense_core_nodes),
-                    "attachable_pendant_leaves": len(attachable_leaves),
-                    "true_isolated_singletons": len(true_isolates),
-                    "isolated_dyads": len(isolated_dyads),
-                    "unattached_orphans_total": len(orphans)
-                },
-                "true_isolated_singletons": sorted(true_isolates),
-                "attachable_pendant_leaves": [
-                    {"node": u, "core_neighbor": v} for u, v in sorted(attachable_leaves.items())
-                ],
-                "isolated_dyads": sorted(isolated_dyads)
-            }, f, indent=2)
 
         # 4. Target graph for cluster/community detection (G_cluster = dense core with degree > 1)
         cluster_ug = core_ug.subgraph(dense_core_nodes).copy()

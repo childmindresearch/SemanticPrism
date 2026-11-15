@@ -18,6 +18,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -693,6 +694,62 @@ def run_stage(
     print(f"\n✅ {stage_desc} completed in {duration:.2f} seconds.", flush=True)
 
 
+def clear_embedding_model_cache(outputs_dir: Path = Path("outputs")) -> List[Path]:
+    """
+    Clears cached embedding matrices (.npy) and vocab metadata (_meta.json) in
+    `outputs/02_refinement/cache/` for the active `EMBEDDING_MODEL` when
+    `CLEAR_CACHE` in `model_config.py` is enabled.
+    """
+    try:
+        import model_config as _mc
+        if hasattr(_mc, "clear_cache"):
+            should_clear = bool(_mc.clear_cache)
+        else:
+            should_clear = bool(getattr(_mc, "CLEAR_CACHE", True))
+        configured_embed = getattr(_mc, "EMBEDDING_MODEL", "BAAI/bge-large-en-v1.5")
+    except Exception:
+        should_clear = True
+        configured_embed = "BAAI/bge-large-en-v1.5"
+
+    if not should_clear:
+        return []
+
+    cache_dir = outputs_dir / "02_refinement" / "cache"
+    if not cache_dir.exists() or not cache_dir.is_dir():
+        return []
+
+    s2_meta = _load_json_safe(outputs_dir / "02_refinement" / "model_execution_metadata.json") or {}
+    model_names = {configured_embed}
+    if s2_meta.get("embedding_model"):
+        model_names.add(str(s2_meta["embedding_model"]))
+
+    removed: List[Path] = []
+    for m_name in model_names:
+        if not m_name:
+            continue
+        model_slug = re.sub(r"[^a-zA-Z0-9_]", "_", str(m_name))
+        for pattern in (f"*_{model_slug}_embeddings.npy", f"*_{model_slug}_meta.json"):
+            for fp in sorted(cache_dir.glob(pattern)):
+                try:
+                    fp.unlink()
+                    removed.append(fp)
+                except Exception:
+                    pass
+
+    # Remove cache directory itself if no cache artifacts remain
+    try:
+        remaining = [p for p in cache_dir.iterdir() if p.name != ".DS_Store"]
+        if not remaining:
+            ds_store = cache_dir / ".DS_Store"
+            if ds_store.exists():
+                ds_store.unlink()
+            cache_dir.rmdir()
+    except Exception:
+        pass
+
+    return removed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="SemanticPrism Master Pipeline Orchestrator (Stages 1-5)"
@@ -754,6 +811,15 @@ def main() -> None:
     global_duration = time.time() - global_start
     report_text, _ = generate_pipeline_summary(total_duration=global_duration)
     print("\n" + report_text)
+
+    if not args.dry_run and 5 in args.stages:
+        cleared_files = clear_embedding_model_cache()
+        if cleared_files:
+            print(
+                f"🧹 Cleared {len(cleared_files)} embedding cache file(s) from 'outputs/02_refinement/cache/' "
+                "(CLEAR_CACHE=True in model_config.py)."
+            )
+
     print("🎉 SEMANTIC PRISM PIPELINE COMPLETE!")
     print("Summary saved to: 'outputs/pipeline_summary.txt' and 'outputs/pipeline_summary.json'.")
 

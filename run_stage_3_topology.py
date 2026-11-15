@@ -89,11 +89,13 @@ def run_resolver_only(base_dir: Path, config: dict) -> None:
         except Exception:
             pass
 
+    vis_dir = base_dir / "visuals"
+    vis_dir.mkdir(parents=True, exist_ok=True)
     TopologyVisualizer(config=config)._generate_llm_payload_gallery(
-        dg, result, normalized_triplets, out_dir, "Path 1: Community Workflow Path", "community",
+        dg, result, normalized_triplets, vis_dir, "Path 1: Community Workflow Path", "community",
         baseline_result=baseline_result
     )
-    print(f"   [OK] Tier-Aware Payload Gallery Saved: {out_dir / 'stage_04_llm_payload_gallery.html'}")
+    print(f"   [OK] Tier-Aware Payload Gallery Saved: {vis_dir / 'stage_04_llm_payload_gallery.html'}")
     print("✅ TargetResolver Fast Update Complete.")
 
 
@@ -204,22 +206,23 @@ def main():
         if comm_targets.exists():
             print(f"   [OK] Community Resolved Targets: {comm_targets}")
 
-        v1 = Path("outputs/03_topology/01_raw_graph_evaluation/complete_topology_graph.html")
-        v2 = Path("outputs/03_topology/02_core_separation/reduced_core_graph.html")
-        v2_hub = Path("outputs/03_topology/02_core_separation/hub_backbone_network.html")
-        v3_comm = Path("outputs/03_topology/03_results/isolated_communities_only.html")
-        v3_disp = Path("outputs/03_topology/03_results/cluster_semantic_dispersion_map.html")
-        v3_galaxy = Path("outputs/03_topology/03_results/cluster_3d_galaxy_visualization.html")
+        vis_dir = Path("outputs/03_topology/visuals")
+        v1 = vis_dir / "complete_topology_graph.html"
+        v2 = vis_dir / "reduced_core_graph.html"
+        v2_hub = vis_dir / "hub_backbone_network.html"
+        v3_comm = vis_dir / "isolated_communities_only.html"
+        v3_disp = vis_dir / "cluster_semantic_dispersion_map.html"
+        v3_galaxy = vis_dir / "cluster_3d_galaxy_visualization.html"
 
-        print("\n--- Visuals Verification (Co-Located in 03_topology) ---")
+        print(f"\n--- Visuals Verification ({vis_dir}) ---")
         if v1.exists():
-            print(f"   [OK] Stage 3.1 Visuals: {v1.parent}")
+            print(f"   [OK] Stage 3.1 Visuals: {v1}")
         if v2.exists() and v2_hub.exists():
-            print(f"   [OK] Stage 3.2 Visuals (Reduced Graph & Hub Backbone): {v2.parent}")
+            print(f"   [OK] Stage 3.2 Visuals (Reduced Graph & Hub Backbone): {v2}, {v2_hub}")
         elif v2.exists():
-            print(f"   [OK] Stage 3.2 Visuals (Reduced Graph): {v2.parent}")
+            print(f"   [OK] Stage 3.2 Visuals (Reduced Graph): {v2}")
         if v3_comm.exists():
-            print(f"   [OK] Stage 3.3 Community Visuals: {v3_comm.parent}")
+            print(f"   [OK] Stage 3.3 Community Visuals: {v3_comm}")
         if v3_disp.exists():
             print(f"   [OK] Stage 3.3 Centroid Dispersion Dashboard: {v3_disp}")
         if v3_galaxy.exists():

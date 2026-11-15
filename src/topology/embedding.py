@@ -466,11 +466,12 @@ class ClusterEmbeddingVisualizer:
         metrics = self.compute_centroid_metrics(base_dir=base_dir, refinement_dir=refinement_dir)
         
         if output_path is None:
-            output_path = base_dir / "03_results" / "cluster_semantic_dispersion_map.html"
+            output_path = base_dir / "visuals" / "cluster_semantic_dispersion_map.html"
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Export companion diagnostics JSON for programmatic evaluation
-        diag_path = output_path.parent / "cluster_centroid_diagnostics.json"
+        # Export companion diagnostics JSON in 03_results for programmatic evaluation
+        diag_path = base_dir / "03_results" / "cluster_centroid_diagnostics.json"
+        diag_path.parent.mkdir(parents=True, exist_ok=True)
         with open(diag_path, "w", encoding="utf-8") as f:
             json.dump({
                 "global_metrics": metrics["global_metrics"],

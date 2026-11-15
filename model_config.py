@@ -44,6 +44,7 @@ if HF_TOKEN and HF_TOKEN.strip():
 # - MODEL_NAME      : Reads text, finds facts, and extracts structured data (Stages 1, 2 & 5)
 # - EMBEDDING_MODEL : Converts concepts into numbers to group similar ideas together (Stages 1, 2 & 3)
 # - CODER_MODEL     : Writes clean Python data schemas from discovered topics (Stage 4)
+# - CLEAR_CACHE     : Clears 02_refinement/cache vectors for EMBEDDING_MODEL once the full pipeline completes
 
 # Default High-Accuracy Server Preset (80 GB+ GPU VRAM, or 48 GB+ with auto 4-bit compression):
 MODEL_NAME: str = "Qwen/Qwen3.6-27B"                    # Main text & extraction LLM (~54 GB memory)
@@ -67,6 +68,9 @@ CODER_MODEL: str = "Qwen/Qwen2.5-Coder-32B-Instruct"    # Schema code-writing LL
 # MODEL_NAME: str = "Qwen/Qwen3.6-27B"
 # EMBEDDING_MODEL: str = "BAAI/bge-large-en-v1.5"
 # CODER_MODEL: str = "Qwen/Qwen2.5-Coder-14B-Instruct"
+
+# Automatically delete 02_refinement/cache vector files for EMBEDDING_MODEL after the full pipeline completes:
+CLEAR_CACHE: bool = True
 
 # =============================================================================
 # 3. STAGE 1 DISCOVERY DATASET (USED TO LEARN TOPICS & BUILD SCHEMAS)
