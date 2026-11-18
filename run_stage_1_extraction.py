@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SemanticPrism Stage 1: Full Extraction Pipeline (Powered by PrismRunner)
-========================================================================
-Performs the exact Stage 1 Extraction workflow from:
+SemanticPrism Stage 1: Relational Extraction (Powered by PrismRunner)
+=====================================================================
+Performs Stage 1 Relational Extraction (dual-pass thematic conditioning and grounded SVO parsing):
     https://github.com/childmindresearch/SemanticPrism
 
 Workflow Phases:

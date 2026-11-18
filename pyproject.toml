@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "semantic-prism"
+version = "1.0.0"
+description = "Unsupervised, local-first neuro-symbolic schema induction and text-to-table extraction."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "David LoBue", email = "david.lobue@childmind.org" },
+]
+keywords = [
+    "neuro-symbolic",
+    "schema-induction",
+    "text-to-table",
+    "clinical-nlp",
+    "knowledge-graph",
+    "pydantic",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "configs*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+

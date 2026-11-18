@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SemanticPrism Stage 5: Schema-Driven Extraction & Relational Aggregation (Powered by PrismRunner)
-=================================================================================================
-Performs the Stage 5 SchemaMap extraction and relational/wide-table aggregation workflow,
+SemanticPrism Stage 5: Tabular Projection (Schema-Driven Extraction & Relational Aggregation)
+=============================================================================================
+Performs Stage 5 Tabular Projection across document corpora using compiled Pydantic schemas,
 powered by PrismRunner's local HuggingFace batch inference engine.
 
 Supported Schema Input Modes (SCHEMA_PATH):
@@ -54,6 +54,7 @@ from model_config import (
     STAGE5_DOCUMENT_LIMIT as MASTER_STAGE5_DOCUMENT_LIMIT,
     STAGE5_EXTRACT_MODE as MASTER_STAGE5_EXTRACT_MODE,
     STAGE5_ID_COLUMN as MASTER_STAGE5_ID_COLUMN,
+    STAGE5_INCLUDE_SOURCE_TEXT as MASTER_STAGE5_INCLUDE_SOURCE_TEXT,
     STAGE5_INPUT_PATH as MASTER_STAGE5_INPUT_PATH,
     STAGE5_SCHEMA_PATH as MASTER_STAGE5_SCHEMA_PATH,
     STAGE5_TEXT_COLUMN as MASTER_STAGE5_TEXT_COLUMN,
@@ -130,7 +131,7 @@ DB_FILENAME: str = "aggregated_data.db"                # SQLite database filenam
 MULTI_TABLE_RELATIONAL: bool = True                    # Generate normalized parent/child relational tables
 CONSOLIDATED_WIDE_TABLE: bool = True                   # Generate 1-row-per-document consolidated_wide table
 WIDE_TABLE_NAME: str = "consolidated_wide"             # Base name for consolidated wide table (.csv, .parquet, SQLite table)
-INCLUDE_SOURCE_TEXT: bool = True                       # Include full document source_text column in consolidated_wide
+INCLUDE_SOURCE_TEXT: bool = MASTER_STAGE5_INCLUDE_SOURCE_TEXT  # False by default to keep consolidated_wide prose-free
 DROP_EMPTY_RECORDS: bool = True                        # Omit all-null records when building relational/wide tables
 DROP_EMPTY_TABLES: bool = True                         # Omit relational tables that have 0 extracted rows
 
@@ -231,6 +232,12 @@ def parse_args() -> argparse.Namespace:
         help="Run LLM extraction only and skip table aggregation.",
     )
     parser.add_argument(
+        "--include-source-text",
+        action="store_true",
+        default=INCLUDE_SOURCE_TEXT,
+        help="Include verbatim document `source_text` column in `consolidated_wide` (disabled by default for privacy).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         default=DRY_RUN,
@@ -288,7 +295,7 @@ def main() -> None:
             multi_table_relational=MULTI_TABLE_RELATIONAL,
             consolidated_wide_table=CONSOLIDATED_WIDE_TABLE,
             wide_table_name=WIDE_TABLE_NAME,
-            include_source_text=INCLUDE_SOURCE_TEXT,
+            include_source_text=bool(args.include_source_text),
             drop_empty_records=DROP_EMPTY_RECORDS,
             drop_empty_tables=DROP_EMPTY_TABLES,
         )

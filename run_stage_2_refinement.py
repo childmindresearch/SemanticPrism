@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-SemanticPrism Stage 2: Refinement & Taxonomic Hypernym Lifting (Powered by PrismRunner)
-=======================================================================================
-Performs the exact Stage 2 Refinement workflow from:
+SemanticPrism Stage 2: Hypernym Lifting (Powered by PrismRunner)
+================================================================
+Performs Stage 2 Hypernym Lifting (dimension-aware SVO vector clustering & taxonomic lifting):
     https://github.com/childmindresearch/SemanticPrism
 
 Workflow Steps:

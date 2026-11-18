@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-SemanticPrism Stage 4: Synthesis Pipeline (Powered by PrismRunner)
-==================================================================
-Drop-in replacement for SemanticPrism's Stage 4 Ontological Schema Synthesis pipeline
-(https://github.com/childmindresearch/SemanticPrism), replacing Ollama / pydantic-ai
-with PrismRunner's local HuggingFace batch inference engine.
+SemanticPrism Stage 4: Schema Synthesis (Powered by PrismRunner)
+================================================================
+Compiles stratified graph communities from Stage 3 into AST-verified Pydantic v2 BaseModel
+and bounded Enum schemas (`master_ontology.py`) via PrismRunner's local batch inference engine.
 
 Workflow Phases & Output Artifacts:
   - Phase 0 : Dynamic Target Resolution

@@ -32,7 +32,7 @@ topology:
     # 2. Core Separation Profile (Strictness of Global Hub Pruning)
     #    "conservative": Prunes only extreme statistical outliers (Z > 2.5); preserves more bridges
     #    "balanced":     Uses automatic knee detection on composite bridge prominence (recommended)
-    #    "aggressive":   Aggressively strips shared cross-cutting terms into enums.py
+    #    "aggressive":   Aggressively strips shared cross-cutting terms into the hub-backbone registry
     core_separation_profile: "balanced"
 
     # 3. Dynamic Scale Auto-Detection
@@ -60,7 +60,7 @@ topology:
   # Evaluated on the complete raw graph before modular community partitioning.
   # Concepts meeting these criteria are identified as systemic nexus points,
   # pruned from the core graph to decouple distinct thematic communities, and
-  # exported to enums.py / global hub registries.
+  # archived in dedicated global hub-backbone registries.
   # ----------------------------------------------------------------------------
   hub_pruning:
     # --- Topological Dispersion (Qualitative Cross-Thematic Bridging) ---
@@ -108,7 +108,7 @@ topology:
   semantic_clustering:
     # --- 3.1 Strict Quarantine Safeguards ---
     quarantine_global_hubs: true       # Immutable invariant: Pruned hubs NEVER re-enter communities
-    quarantine_true_isolates: true     # Degree-0 concepts (connected only to global hubs) remain in enums
+    quarantine_true_isolates: true     # Degree-0 concepts (connected only to global hubs) remain segregated
 
     # --- 3.2 Hybrid Semantic-Structural Edge Weighting ---
     # Modulates graph edge weights for Leiden modularity:
@@ -146,7 +146,7 @@ topology:
     # --- 3.7 Hierarchical Community Agglomeration & Sub-Threshold Tail Rescue ---
     # Consolidates redundant communities using core-weighted centered centroids (with a hard
     # K >= 2 non-collapse floor), and rescues unambiguous sub-threshold tail clusters (< min_cluster_size)
-    # before they are flattened into enums.py:
+    # before sub-threshold clusters are filtered out prior to Stage 4 synthesis:
     enable_community_agglomeration: true
     agglomeration_similarity_threshold: 0.70 # Core-weighted centroid cosine cutoff for merging communities
     max_agglomeration_passes: 15      # Base iterative convergence ceiling (auto-scales with initial K)

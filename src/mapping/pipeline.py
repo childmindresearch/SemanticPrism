@@ -634,7 +634,7 @@ class SemanticPrismStage5Pipeline:
         multi_table_relational: bool = True,
         consolidated_wide_table: bool = True,
         wide_table_name: str = "consolidated_wide",
-        include_source_text: bool = True,
+        include_source_text: bool = False,
         drop_empty_records: bool = True,
         drop_empty_tables: bool = True,
     ):

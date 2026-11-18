@@ -6,9 +6,10 @@ Edit this single file to choose your AI models and point SemanticPrism to your d
 Quick Guide to the 4 Sections Below:
   1. Hugging Face Token (Optional) : Speeds up model downloads and avoids rate limits.
   2. AI Model Selection            : Picks the AI models based on your computer's GPU memory (VRAM).
-  3. Stage 1 Discovery Dataset     : The documents used in Stages 1–4 to discover topics and build schemas.
-  4. Stage 5 Extraction Dataset    : The documents used in Stage 5 to extract structured CSV/Parquet/SQLite tables
-                                     (can be the exact same dataset as Stage 1, or a separate/larger batch of files).
+  3. Stage 1 Discovery Dataset     : Documents used in Stages 1–4 (Relational Extraction, Hypernym Lifting,
+                                     Community Partitioning, Schema Synthesis) to build schemas.
+  4. Stage 5 Extraction Dataset    : Documents used in Stage 5 (Tabular Projection) to extract structured
+                                     CSV/Parquet/SQLite tables (can match Stage 1 or be a larger cohort).
 
 Choosing Models for Your Hardware (GPU Memory / VRAM):
   - Laptop / Small GPU (8–12 GB)   : Uncomment the "Lightweight" preset in Section 2.
@@ -99,3 +100,8 @@ STAGE5_SCHEMA_PATH: str = "outputs/04_synthesis/schemas/master_ontology.py"
 #   - "child"                  : Extracts only nested sub-schemas.
 #   - "all"                    : Extracts both main schemas and nested sub-schemas separately.
 STAGE5_EXTRACT_MODE: str = "unified"
+
+# Privacy-by-Default Tabular Export:
+#   - False (Recommended): Omits raw `source_text` from `consolidated_wide` tables so exported matrices stay prose-free.
+#   - True               : Includes verbatim document text in column `source_text` of `consolidated_wide`.
+STAGE5_INCLUDE_SOURCE_TEXT: bool = False

@@ -147,7 +147,7 @@ def extract_relational_tables(
 def build_consolidated_wide_table(
     grouped_records: Dict[Tuple[str, str], List[Dict[str, Any]]],
     source_texts: Optional[Dict[str, str]] = None,
-    include_source_text: bool = True,
+    include_source_text: bool = False,
     drop_empty_records: bool = True,
 ) -> List[Dict[str, Any]]:
     """
@@ -337,7 +337,7 @@ class DataAggregator:
         multi_table_relational: bool = True,
         consolidated_wide_table: bool = True,
         wide_table_name: str = "consolidated_wide",
-        include_source_text: bool = True,
+        include_source_text: bool = False,
         drop_empty_records: bool = True,
         drop_empty_tables: bool = True,
         print_checkpoints: bool = True,

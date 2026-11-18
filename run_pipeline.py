@@ -25,11 +25,11 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 STAGES: List[Tuple[int, str, str, bool]] = [
-    (1, "run_stage_1_extraction.py", "Stage 1: Triplet Extraction & Theme Discovery", True),
-    (2, "run_stage_2_refinement.py", "Stage 2: Vector Clustering & Taxonomic Lifting", True),
-    (3, "run_stage_3_topology.py", "Stage 3: Topology Graphing & Structural Clustering", False),
-    (4, "run_stage_4_synthesis.py", "Stage 4: Pydantic Schema Synthesis", True),
-    (5, "run_stage_5_mapping.py", "Stage 5: Schema-Driven Extraction & Aggregation", True),
+    (1, "run_stage_1_extraction.py", "Stage 1: Relational Extraction (Theme Discovery & SVO Parsing)", True),
+    (2, "run_stage_2_refinement.py", "Stage 2: Hypernym Lifting (Vector Clustering & Canonicalization)", True),
+    (3, "run_stage_3_topology.py", "Stage 3: Community Partitioning (Hub Decoupling & Tiering)", False),
+    (4, "run_stage_4_synthesis.py", "Stage 4: Schema Synthesis (AST-Verified Pydantic Compilation)", True),
+    (5, "run_stage_5_mapping.py", "Stage 5: Tabular Projection (Schema-Guided Extraction & Export)", True),
 ]
 
 
@@ -438,7 +438,7 @@ def generate_pipeline_summary(
     core_stage_lines: List[str] = []
 
     # Stage 1
-    core_stage_lines.append("Stage 1: Extraction")
+    core_stage_lines.append("Stage 1: Relational Extraction")
     core_stage_lines.append(f"  - Model Used: {s1_model_line}")
     core_stage_lines.append(f"  - {docs_ingested_count} documents ingested")
     core_stage_lines.append(f"  - {themes_identified_count} themes identified")
@@ -453,7 +453,7 @@ def generate_pipeline_summary(
     core_stage_lines.append("")
 
     # Stage 2
-    core_stage_lines.append("Stage 2: Refinement")
+    core_stage_lines.append("Stage 2: Hypernym Lifting")
     core_stage_lines.append(f"  - Model Used: {s2_model_line}")
     core_stage_lines.append(
         f"  - {subjects_lifted_count} Subjects hypernym lifted "
@@ -471,7 +471,7 @@ def generate_pipeline_summary(
     core_stage_lines.append("")
 
     # Stage 3
-    core_stage_lines.append("Stage 3: Topology")
+    core_stage_lines.append("Stage 3: Community Partitioning")
     core_stage_lines.append(f"  - Engine Used: {s3_model_line}")
     core_stage_lines.append("  Original raw graph details:")
     core_stage_lines.append(f"    - {raw_nodes} total nodes, {raw_dir_edges} total edges ({raw_undir_edges} undirected)")
@@ -489,7 +489,7 @@ def generate_pipeline_summary(
     core_stage_lines.append("")
 
     # Stage 4
-    core_stage_lines.append("Stage 4: Synthesis")
+    core_stage_lines.append("Stage 4: Schema Synthesis")
     core_stage_lines.append(f"  - Model Used: {s4_model_line}")
     core_stage_lines.append(f"  - {len(schema_names)} final schemas created:")
     if schema_names:
@@ -517,17 +517,17 @@ def generate_pipeline_summary(
 
     # Models Used Section
     lines.append("Models Used Across Pipeline:")
-    lines.append(f"  - Stage 1 (Extraction):  {s1_model_line}")
-    lines.append(f"  - Stage 2 (Refinement):  {s2_model_line}")
-    lines.append(f"  - Stage 3 (Topology):    {s3_model_line}")
-    lines.append(f"  - Stage 4 (Synthesis):   {s4_model_line}")
-    lines.append(f"  - Stage 5 (Mapping):     {s5_model_line}")
+    lines.append(f"  - Stage 1 (Relational Extraction):  {s1_model_line}")
+    lines.append(f"  - Stage 2 (Hypernym Lifting):       {s2_model_line}")
+    lines.append(f"  - Stage 3 (Community Partitioning): {s3_model_line}")
+    lines.append(f"  - Stage 4 (Schema Synthesis):       {s4_model_line}")
+    lines.append(f"  - Stage 5 (Tabular Projection):     {s5_model_line}")
     lines.append("")
 
     lines.extend(core_stage_lines)
 
     # Stage 5
-    lines.append("Stage 5: Schema-Driven Extraction & Aggregation")
+    lines.append("Stage 5: Tabular Projection")
     lines.append(f"  - Model Used: {s5_model_line}")
     lines.append(f"  - {s5_docs_processed} documents processed")
     lines.append(
@@ -587,9 +587,9 @@ def generate_ontology_build_summary(
     s3_model_line = "NetworkX / Leiden (Deterministic Graph Topology — No LLM)"
     s4_model_line = _format_stage_model_line(s4_meta, CODER_MODEL)
 
-    # Extract the exact Stage 1–4 body block from full_report_text (from "Stage 1: Extraction" up to "Stage 5:")
-    marker_start = "Stage 1: Extraction"
-    marker_end = "\nStage 5: Schema-Driven Extraction & Aggregation"
+    # Extract the exact Stage 1–4 body block from full_report_text (from "Stage 1:" up to "Stage 5:")
+    marker_start = "Stage 1: Relational Extraction"
+    marker_end = "\nStage 5: Tabular Projection"
     start_idx = full_report_text.find(marker_start)
     end_idx = full_report_text.find(marker_end)
     if start_idx != -1 and end_idx != -1:
@@ -607,10 +607,10 @@ def generate_ontology_build_summary(
     ont_lines.append(f"Generated At: {summary_data['generated_at']}")
     ont_lines.append("")
     ont_lines.append("Models Used Across Ontology Build:")
-    ont_lines.append(f"  - Stage 1 (Extraction):  {s1_model_line}")
-    ont_lines.append(f"  - Stage 2 (Refinement):  {s2_model_line}")
-    ont_lines.append(f"  - Stage 3 (Topology):    {s3_model_line}")
-    ont_lines.append(f"  - Stage 4 (Synthesis):   {s4_model_line}")
+    ont_lines.append(f"  - Stage 1 (Relational Extraction):  {s1_model_line}")
+    ont_lines.append(f"  - Stage 2 (Hypernym Lifting):       {s2_model_line}")
+    ont_lines.append(f"  - Stage 3 (Community Partitioning): {s3_model_line}")
+    ont_lines.append(f"  - Stage 4 (Schema Synthesis):       {s4_model_line}")
     ont_lines.append("")
     ont_lines.append(stages_1_to_4_body)
     ont_lines.append("=" * 70)

@@ -1,10 +1,10 @@
 # Custom Multi-Variable Scoring, Ranking & Filtering Processes
 
-This document provides a technical reference for all custom multi-variable scoring, ranking, and filtering algorithms implemented across **Stage 1 (`run_stage_1_extraction.py` / `src/extraction/`)**, **Stage 2 (`run_stage_2_refinement.py` / `src/refinement/`)**, and **Stage 4 (`run_stage_4_synthesis.py` / `src/synthesis/`)**. Single-variable cutoffs are excluded; each process below combines **two or more dynamic variables** to solve specific geometric, statistical, or structural challenges in the SemanticPrism pipeline.
+This document provides a technical reference for all custom multi-variable scoring, ranking, and filtering algorithms implemented across **Stage 1: Relational Extraction (`src/extraction/`)**, **Stage 2: Hypernym Lifting (`src/refinement/`)**, **Stage 3: Community Partitioning (`src/topology/`)**, and **Stage 4: Schema Synthesis (`src/synthesis/`)**. Single-variable cutoffs are excluded; each process below combines **two or more dynamic variables** to solve specific geometric, statistical, or structural challenges in the SemanticPrism pipeline.
 
 ---
 
-## 1. Stage 1 (`src/extraction/`) — Theme Discovery, Clustering & Triple Extraction
+## 1. Stage 1: Relational Extraction (`src/extraction/`) — Theme Discovery, Clustering & Triple Extraction
 
 ### 1.1 Self-Calibrating Manifold Edge Admission & Excess-Weight Scoring
 * **Location**: `src/extraction/clustering.py` (`ThemeClusteringEngine.cluster_themes`)
@@ -82,7 +82,7 @@ This document provides a technical reference for all custom multi-variable scori
 
 ---
 
-## 2. Stage 2 (`src/refinement/`) — SVO Vector Clustering & Taxonomic Lifting
+## 2. Stage 2: Hypernym Lifting (`src/refinement/`) — SVO Vector Clustering & Taxonomic Lifting
 
 ### 2.1 Dimension- & Role-Calibrated Anisotropy Distance Cutoffs (`rescue_tau` & `tau_macro`)
 * **Location**: `src/refinement/pipeline.py` (`RefinementPipeline.resolve_clustering_params` & `RefinementPipeline._calibrate_distance_thresholds`)
@@ -156,9 +156,59 @@ This document provides a technical reference for all custom multi-variable scori
 
 ---
 
-## 3. Stage 4 (`src/synthesis/`) — Ontological Schema Synthesis & AST Sanitization
+## 3. Stage 3: Community Partitioning (`src/topology/`) — Hub Decoupling, Hybrid Leiden & Architectural Tiering
 
-### 3.1 Cross-Cluster C-TF-IDF Domain Term Ranking (`top_domain_terms`)
+### 3.1 Participation-Guided Global Bridge-Hub Decoupling
+* **Location**: `src/topology/graph_builder.py` & `configs/topology.yaml` (`hub_pruning`)
+* **Challenge Solved**: Removing high-degree nodes purely by raw degree destroys genuine clinical domain anchors (e.g., `"Behavioral Intervention"` or `"Psychometric Assessment"`), whereas leaving generic connectors (`"Patient"`, `"Person"`) intact collapses distinct domains into a single giant component.
+* **Variables Combined (5)**:
+  1. Total node degree ($k_i$) and dynamic corpus degree percentile ($Q_{0.98}(\mathbf{k})$)
+  2. Configured minimum degree floor ($k_{\min}$)
+  3. Guimerà–Amaral thematic participation coefficient ($P_i = 1 - \sum_{s=1}^{M} (k_{is} / k_i)^2$)
+  4. Global shortest-path betweenness centrality ($C_B(i)$) and percentile cutoff ($Q_{0.98}(\mathbf{C}_B)$)
+  5. Graph-scale hub safety budget (`max_global_hubs`)
+* **Process & Formula**:
+  1. **Effective Degree Gate**:
+     $$k_{\text{eff}} = \max\!\big(k_{\min},\; Q_{0.98}(\mathbf{k})\big)$$
+  2. **Dispersion & Chokepoint Qualification**:
+     A degree-qualified candidate ($k_i \ge k_{\text{eff}}$) is flagged as a systemic hub if:
+     $$P_i \ge \tau_{P} \quad \text{OR} \quad \Big(C_B(i) \ge \max\!\big(c_{\min},\, Q_{0.98}(\mathbf{C}_B)\big)\Big)$$
+  3. **Budget-Capped Pruning**:
+     Qualified hubs are ranked by composite prominence ($P_i \cdot k_i$), capped at `max_global_hubs`, and moved to the `hub_backbone_network` registry prior to Leiden optimization.
+
+---
+
+### 3.2 Hybrid Semantic-Structural Leiden Edge Weighting & Boundary Refinement
+* **Location**: `src/topology/` (`semantic_clustering`)
+* **Challenge Solved**: Purely frequency-weighted edges merge distinct domains sharing incidental transitions, while purely embedding-weighted graphs lose observed relational topology.
+* **Variables Combined (4)**:
+  1. Normalized triplet observation frequency weight ($w^{\text{freq}}_{uv}$)
+  2. All-but-the-Top corpus-mean-centered concept cosine similarity ($\cos(\tilde{\mathbf{e}}_u, \tilde{\mathbf{e}}_v)$)
+  3. Hybrid convex mixing parameter ($\alpha$) and baseline cosine floor ($c_{\text{floor}} = 0.10$)
+  4. Neighbor-gated refugee realignment margin ($\Delta_{\text{refugee}} = 0.06$)
+* **Process & Formula**:
+  $$w^{\text{eff}}_{uv} = (1 - \alpha)\, w^{\text{freq}}_{uv} + \alpha \max\!\big(c_{\text{floor}},\; \cos(\tilde{\mathbf{e}}_u, \tilde{\mathbf{e}}_v)\big)$$
+  Following Leiden modularity optimization over the multi-hop core ($\deg(v) > 1$), boundary nodes $u \in C_{\text{home}}$ possessing at least one structural edge to $C_{\text{nbr}}$ are realigned if $\cos(\tilde{\mathbf{e}}_u, \mathbf{c}_{\text{nbr}}) - \cos(\tilde{\mathbf{e}}_u, \mathbf{c}_{\text{home}}) \ge \Delta_{\text{refugee}}$, and redundant sibling communities are merged when centered core-weighted centroids exceed `agglomeration_similarity_threshold` (`0.70`, guarded by $K \ge 2$).
+
+---
+
+### 3.3 Hybrid Geometric-Topological Architectural Tiering ($S_u$)
+* **Location**: `src/topology/` (`architectural_tiers`)
+* **Challenge Solved**: Compiling flat community node lists directly into schemas conflates root domain classes, relational attributes, and peripheral categorical literals.
+* **Variables Combined (4)**:
+  1. Centered Fréchet centroid prototypicality ($P_u$, weight $w_{\text{proto}} = 0.40$)
+  2. Normalized effective intra-community degree ($D_u = \frac{d_{\text{int}}(u) + 0.5\,d_{\text{bound}}(u)}{\max_{v \in C} d_{\text{eff}}(v)}$, weight $w_{\text{cent}} = 0.40$)
+  3. Mean Stage 2 sentence-grounding fidelity ($\Gamma_u$, weight $w_{\text{fid}} = 0.20$)
+  4. Numerical stability floor ($\varepsilon = 10^{-3}$)
+* **Process & Formula**:
+  $$S_u = \max(\varepsilon, P_u)^{w_{\text{proto}}} \cdot D_u^{w_{\text{cent}}} \cdot \max(\varepsilon, \Gamma_u)^{w_{\text{fid}}}$$
+  Ranked concepts within each community are stratified dynamically by intra-community percentiles into **Tier 1: Thematic Nucleus** (root `BaseModel` anchors), **Tier 2: Relational Mechanics** (typed attributes), and **Tier 3: Contextual Modifiers** (bounded `Enum` states).
+
+---
+
+## 4. Stage 4: Schema Synthesis (`src/synthesis/`) — Ontological Schema Synthesis & AST Sanitization
+
+### 4.1 Cross-Cluster C-TF-IDF Domain Term Ranking (`top_domain_terms`)
 * **Location**: `src/synthesis/pipeline.py` (`SynthesisPipeline.execute_path_synthesis` $\rightarrow$ `extract_top_domain_terms`)
 * **Challenge Solved**: Raw node degree within a community is dominated by generic hub entities (e.g., `"Child"`, `"Clinician"`, `"System"`) that appear across many communities. Even though Leiden assigns each node to a single community's `nodes` list, hub concepts bleed across communities via cross-cluster edges and source sentences.
 * **Variables Combined (4)**:
@@ -172,7 +222,7 @@ This document provides a technical reference for all custom multi-variable scori
 
 ---
 
-### 3.2 Fidelity- & Entity-Overlap-Weighted Sentence Ranking (`thematic_observations`)
+### 4.2 Fidelity- & Entity-Overlap-Weighted Sentence Ranking (`thematic_observations`)
 * **Location**: `src/synthesis/pipeline.py` (`SynthesisPipeline.execute_path_synthesis` $\rightarrow$ `extract_thematic_observations`)
 * **Challenge Solved**: A community can reference hundreds of raw sentences, exceeding the LLM context window or diluting schema synthesis with peripheral remarks. Sentences must be ranked by both their semantic grounding quality and their density of community-specific entities.
 * **Variables Combined (5)**:
@@ -187,7 +237,7 @@ This document provides a technical reference for all custom multi-variable scori
 
 ---
 
-### 3.3 Multi-Criteria AST Field Filtering, Entropy Collapse & Priority Ranking
+### 4.3 Multi-Criteria AST Field Filtering, Entropy Collapse & Priority Ranking
 * **Location**: `src/synthesis/sanitizers.py` (`_sanitize_ast_models`)
 * **Challenge Solved**: LLMs frequently flatten nested sub-entities into long runs of prefixed fields (`sub_entity_name`, `sub_entity_role`, `sub_entity_status`), emit boolean checklist dumps (`outcome_a_achieved: bool`, `outcome_b_achieved: bool`), or exceed the 15-field cognitive/schema cap (`MAX_BASEMODEL_FIELDS_PER_CLASS`).
 * **Variables Combined (5)**:
@@ -207,7 +257,7 @@ This document provides a technical reference for all custom multi-variable scori
 
 ---
 
-### 3.4 Multi-Signal Module Name Disambiguation
+### 4.4 Multi-Signal Module Name Disambiguation
 * **Location**: `src/synthesis/sanitizers.py` (`_resolve_unique_module_name`)
 * **Challenge Solved**: Multiple graph communities in the same domain often receive identical or generic `module_name` strings from the LLM (e.g., `clinical_assessment` or `community_schema`), which would overwrite or collide when saved to `01_<module>.py`, `02_<module>.py`, etc.
 * **Variables Combined (4)**:

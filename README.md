@@ -1,8 +1,11 @@
 # SemanticPrism
 
-**SemanticPrism** automatically turns unstructured documents—such as clinical notes, research papers, incident reports, or policy documents—into **clean Python data schemas** (`Pydantic` models) and **ready-to-use spreadsheets and databases** (`CSV`, `Parquet`, and `SQLite`).
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776AB.svg)](pyproject.toml)
 
-Instead of asking a single AI prompt to read everything and invent a database at once (which often leads to missing details or made-up categories), SemanticPrism breaks the job into **five clear stages**. AI models handle reading text and writing schemas, while reliable math and graph steps organize topics, merge duplicates, and verify every rule.
+**SemanticPrism** is an unsupervised, local-first neuro-symbolic pipeline that compiles unstructured narrative documents—such as clinical notes, research papers, incident reports, or behavioral evaluations—into **validated Python data schemas** (`Pydantic` `BaseModel` and `Enum` classes) and **prose-free relational tables** (`CSV`, `Parquet`, and `SQLite`).
+
+Instead of prompting a single language model to read long documents and invent columns ad hoc (which causes schema drift, hallucinated fields, and uncalibrated predictions), SemanticPrism coordinates local open-weight language models with deterministic embedding, graph-partitioning, and AST compiler safeguards across **five modular stages**.
 
 ---
 
@@ -10,22 +13,22 @@ Instead of asking a single AI prompt to read everything and invent a database at
 
 ```mermaid
 flowchart TD
-    subgraph Row1 ["Part 1: Discover Topics & Standardize Terms"]
+    subgraph Row1 ["Part 1: Extract Grounded Facts & Standardize Vocabulary"]
         direction LR
         In(["📄 <b>Your Documents</b><br/><i>Parquet • CSV • JSON • TXT</i>"])
-        --> |Raw Text| S1["🔍 <b>Stage 1: Extraction</b><br/>Finds Themes & Key Facts"]
-        --> |Raw Facts| S2["🎯 <b>Stage 2: Refinement</b><br/>Groups Synonyms & Standardizes Terms"]
+        --> |Raw Text| S1["🔍 <b>Stage 1: Relational Extraction</b><br/>Discovers Themes & Grounded SVO Triples"]
+        --> |Raw Triples| S2["🎯 <b>Stage 2: Hypernym Lifting</b><br/>Clusters Synonyms & Standardizes Terms"]
     end
 
-    subgraph Row2 ["Part 2: Organize Domains, Build Schemas & Extract Tables"]
+    subgraph Row2 ["Part 2: Partition Communities, Compile Schemas & Project Tables"]
         direction LR
-        S3["🌐 <b>Stage 3: Topology</b><br/>Builds Topic Map & Merges Overlapping Groups"]
-        --> |Topic Clusters| S4["⚙️ <b>Stage 4: Synthesis</b><br/>Writes Clean Python Schemas"]
-        --> |master_ontology.py| S5["📊 <b>Stage 5: Mapping</b><br/>Extracts Structured Tables from Text"]
+        S3["🌐 <b>Stage 3: Community Partitioning</b><br/>Decouples Bridge Hubs, Runs Leiden & Tiers"]
+        --> |Stratified Blueprints| S4["⚙️ <b>Stage 4: Schema Synthesis</b><br/>Compiles AST-Verified Pydantic & Enum Code"]
+        --> |master_ontology.py| S5["📊 <b>Stage 5: Tabular Projection</b><br/>Extracts Prose-Free Tables & Databases"]
         --> |Final Data| Out(["📦 <b>Ready-to-Use Outputs</b><br/><i>CSV • Parquet • SQLite • 3D Visuals</i>"])
     end
 
-    Row1 --> |Clean Concept Network| Row2
+    Row1 --> |Canonicalized Concept Graph| Row2
 
     style Row1 stroke:#3b82f6,stroke-width:1.5px,stroke-dasharray: 4 4,fill:none
     style Row2 stroke:#8b5cf6,stroke-width:1.5px,stroke-dasharray: 4 4,fill:none
@@ -43,7 +46,7 @@ flowchart TD
 ## Quickstart
 
 ### 1. Install
-Requires **Python 3.10+** and a GPU (NVIDIA CUDA or Apple Silicon recommended for local AI models).
+Requires **Python 3.10+** and a GPU (NVIDIA CUDA or Apple Silicon recommended for local AI inference, powered by [PrismRunner](https://github.com/childmindresearch/PrismRunner)).
 
 ```bash
 git clone https://github.com/childmindresearch/SemanticPrism.git
@@ -52,7 +55,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Edit `model_config.py` (One-Stop Setup)
-Open **[model_config.py](model_config.py)** in the main folder. Everything you need to change—your AI models and your input files—lives in four simple sections:
+Open **[model_config.py](model_config.py)** in the root directory. Your local AI models and input paths live in four clean sections:
 
 ```python
 # 1. Optional Hugging Face token (for faster model downloads)
@@ -63,25 +66,28 @@ MODEL_NAME = "Qwen/Qwen3.6-27B"                    # Reads text & extracts data 
 EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"         # Measures similarity between concepts (Stages 1–3)
 CODER_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"    # Writes Python schemas (Stage 4)
 
-# 3. Stage 1 Discovery Dataset (documents used to learn topics & design schemas)
+# 3. Stage 1 Discovery Dataset (documents used in Stages 1–4 to discover topics & design schemas)
 INPUT_PATH = "inputs/testdocs.parquet"             # .parquet, .csv, .json, .jsonl, or folder of .txt files
 ID_COLUMN = "unique_val"                           # Column with unique document IDs
 TEXT_COLUMN = "report"                             # Column with document text
 DOCUMENT_LIMIT = None                              # Optional cap (e.g. 100 for a quick test; None = all)
 
-# 4. Stage 5 Extraction Dataset (documents to extract into final CSV/Parquet/SQLite tables)
-STAGE5_INPUT_PATH = "inputs/testdocs.parquet"      # Same dataset as Stage 1, or a separate/larger dataset
+# 4. Stage 5 Extraction Dataset (documents projected into final CSV/Parquet/SQLite tables)
+STAGE5_INPUT_PATH = "inputs/testdocs.parquet"      # Same dataset as Stage 1, or a separate/larger cohort
 STAGE5_ID_COLUMN = "unique_val"
 STAGE5_TEXT_COLUMN = "report"
 STAGE5_DOCUMENT_LIMIT = None
 STAGE5_SCHEMA_PATH = "outputs/04_synthesis/schemas/master_ontology.py"
 STAGE5_EXTRACT_MODE = "unified"                    # "unified" (recommended), "top_level", "child", or "all"
+STAGE5_INCLUDE_SOURCE_TEXT = False                 # False = keeps consolidated_wide prose-free by default
 ```
 
+> **Note on Sample Data (`inputs/`):** All 15 sample clinical evaluation documents in `inputs/testdocs.parquet` and `inputs/testdocs/doc1..5.txt` are **100% synthetic, fictional mock reports** generated solely for testing and demonstration. They contain zero real patient or Protected Health Information (PHI).
+
 #### Helpful Notes on `model_config.py`:
-- **Picking Models for Your Hardware**: `model_config.py` includes ready-to-uncomment presets for **8–12 GB** laptops, **16–24 GB** workstations, **48–60 GB** servers, and **80 GB+** servers (default). If the Stage 4 coding model is ever too large for your GPU, SemanticPrism automatically switches to a compressed (4-bit) or smaller backup model so your run doesn't crash.
-- **Why Stage 1 and Stage 5 Have Separate Inputs**: You can discover your schema on a smaller representative sample in Stages 1–4 (`INPUT_PATH`), and then run Stage 5 (`STAGE5_INPUT_PATH`) to extract structured tables across thousands of new documents—or even bring your own custom `.py` schema file directly into Stage 5.
-- **What `STAGE5_EXTRACT_MODE = "unified"` Means**: Instead of reading the same document over and over for each topic schema, `"unified"` bundles your top-level schemas together so the AI extracts all of them in **one pass per document** (including any nested sub-items).
+- **Hardware Presets (`8 GB` to `80 GB+` VRAM)**: `model_config.py` includes ready-to-uncomment presets for **8–12 GB** laptops, **16–24 GB** workstations, **48–60 GB** servers, and **80 GB+** servers (default). If the Stage 4 coding model ever exceeds available GPU memory, SemanticPrism automatically switches to 4-bit quantization or a smaller backup model.
+- **Separating Discovery from Deployment**: You can induce your ontology on an unlabeled discovery sample in Stages 1–4 (`INPUT_PATH`), then run Stage 5 (`STAGE5_INPUT_PATH`) across thousands of held-out documents—or bring your own custom `.py` Pydantic schema directly into Stage 5.
+- **Privacy-by-Default Exports**: `STAGE5_INCLUDE_SOURCE_TEXT = False` omits raw `source_text` from `consolidated_wide.csv` / `.parquet` / `aggregated_data.db` so exported tables remain detached from verbatim narrative text unless you explicitly pass `--include-source-text` or set `True`.
 
 ### 3. Run the Pipeline
 
@@ -95,77 +101,71 @@ python3 run_pipeline.py
 python3 run_pipeline.py --stages 4 5
 ```
 
-**Or run any single stage on its own:**
+**Or run any single stage standalone:**
 ```bash
-python3 run_stage_1_extraction.py   # Stage 1: Find themes & facts
-python3 run_stage_2_refinement.py   # Stage 2: Group synonyms & standardize terms
-python3 run_stage_3_topology.py     # Stage 3: Map topic communities & build 3D visuals
-python3 run_stage_4_synthesis.py    # Stage 4: Generate Python schemas (master_ontology.py)
-python3 run_stage_5_mapping.py      # Stage 5: Extract data into CSV, Parquet & SQLite tables
+python3 run_stage_1_extraction.py   # Stage 1: Relational Extraction
+python3 run_stage_2_refinement.py   # Stage 2: Hypernym Lifting
+python3 run_stage_3_topology.py     # Stage 3: Community Partitioning & 3D Visuals
+python3 run_stage_4_synthesis.py    # Stage 4: Schema Synthesis (master_ontology.py)
+python3 run_stage_5_mapping.py      # Stage 5: Tabular Projection (CSV, Parquet & SQLite)
 ```
 
 ---
 
 ## What Happens in Each Stage
 
-SemanticPrism automatically adjusts to your dataset—whether you have short notes, specialized technical jargon, or long multi-page reports—so you don't have to hand-tune math settings.
+SemanticPrism adapts automatically to short notes, specialized technical prose, and multi-page clinical evaluations without manual threshold tuning.
 
-### Stage 1: Extraction (`src/extraction/`)
-Reads your documents, identifies broad themes, and pulls out simple **Subject – Action – Object** facts tied to exact quotes from the text.
-- **Model-Aware, Structure-Preserving Chunking**: Automatically scales chunk sizes, overlap, and output token budgets to match your chosen AI model (compact chunks for lightweight 3B laptop models, mid-sized chunks for 7B–14B models, and larger section-level chunks for 27B+ server models) while keeping section headers, bullet lists, and tables intact and carrying forward a brief context header so pronouns like *"he"*, *"she"*, or *"it"* resolve cleanly.
-- **Small-Model Safety Net**: Automatically salvages valid facts if a smaller model cuts off mid-output, splits dense failed passages in half for a clean retry, and removes duplicate facts across chunk overlaps.
-- **Self-Adjusting Theme Grouping**: Automatically adapts similarity cutoffs to your dataset so topics neither lump into one giant bucket nor split into dozens of tiny ones.
+### Stage 1: Relational Extraction (`src/extraction/`)
+Scans documents in two passes—first discovering corpus-wide master themes, then extracting **Subject – Predicate – Object** triples anchored to exact source quotes.
+- **Model-Aware, Structure-Preserving Chunking**: Scales chunk windows and token budgets to match your chosen model while preserving section headers, lists, and carry-over entity context.
+- **Small-Model Recovery**: Salvages valid propositions from truncated outputs, splits dense failed passages for clean retries, and deduplicates across chunk boundaries.
 
-### Stage 2: Refinement (`src/refinement/`)
-Cleans up messy wording by grouping synonyms (for example, *"heart attack"* and *"myocardial infarction"*) under clean standard labels.
-- **Separate Handling for Nouns vs. Actions**: Uses tailored grouping rules for things/entities (`Subject`/`Object`) versus actions/relationships (`Predicate`).
-- **Source Quote Check**: Checks every standardized fact against its original sentence to measure how closely it stays true to the source text.
+### Stage 2: Hypernym Lifting (`src/refinement/`)
+Resolves synonym fragmentation (for example, unifying *"heart attack"* and *"myocardial infarction"*) through dimension-calibrated UMAP + HDBSCAN micro-clustering, agglomerative macro-linkage, and batched LLM hypernym synthesis.
+- **Role-Aware Vocabulary Consolidation**: Clusters Subjects, Predicates, and Objects independently while passing singletons through with zero LLM overhead.
+- **Contextual Grounding Check**: Scores every canonicalized triple via cosine similarity against its original source sentence ($\gamma_e$).
 
-### Stage 3: Graph Topology (`src/topology/`)
-Connects all refined facts into a network map and organizes them into clear, non-overlapping subject areas (communities).
-- **Filtering Out Generic "Hub" Words**: Broad words that connect to everything (like *"patient"*, *"report"*, or *"system"*) are separated from core topic clusters so they don't blur boundaries between distinct subjects.
-- **Leiden Clustering + Dynamic Post-Embedding Polish**: Groups tightly connected concepts into communities using Leiden modularity, then refines the final clusters before Stage 4 without collapsing distinct topics—using core-weighted concept centroids (`0.70` similarity cutoff with a strict non-collapse guard), rescuing small "just-missed" sub-clusters that clearly belong to a parent topic, and ensuring every concept gets its highest-accuracy source quotes included for schema generation.
-- **Interactive 3D Visuals**: Creates standalone HTML files you can open in any browser (including `cluster_3d_galaxy_visualization.html`) to explore your topics visually.
+### Stage 3: Community Partitioning (`src/topology/`)
+Assembles canonicalized triples into a concept graph and isolates cohesive domain modules using deterministic graph math (zero LLM calls).
+- **Participation-Guided Bridge-Hub Decoupling**: Separates ubiquitous pan-corpus connectors (such as *"patient"* or *"person"*) via degree prominence, geodesic betweenness, and Guimerà–Amaral thematic participation ($P_i$) while preserving genuine domain anchors.
+- **Hybrid Leiden & Boundary Refinement**: Optimizes hybrid semantic-structural modularity, realigns misplaced boundary concepts, and stratifies each community into three prominence tiers ($S_u$: *Tier 1 Nucleus*, *Tier 2 Mechanics*, *Tier 3 Modifiers*).
+- **Interactive Browser Visuals**: Exports standalone HTML network and 3D manifold explorers to `outputs/03_topology/visuals/`.
 
 ### Stage 4: Schema Synthesis (`src/synthesis/`)
-Turns each topic community into clean, documented Python data models (`Pydantic BaseModel` and `Enum` classes) and combines them into **`outputs/04_synthesis/schemas/master_ontology.py`**.
-- **Smart Field Types**: Uses fixed-choice dropdown lists (`Enum`s with an automatic `"Other"` safety option), `True`/`False` (`bool`) flags for yes/no facts, and nested sub-models for repeating items.
-- **Automatic Code Cleanup (AST Sanitizer)**: Checks the generated Python code and automatically collapses repetitive field lists, removes duplicate classes across communities, and caps each model to a clean, readable size (15 fields and 15 enum choices by default).
+Compiles each stratified community blueprint into executable Python data models (`Pydantic` v2 `BaseModel` and `(str, Enum)` classes) consolidated into **`outputs/04_synthesis/schemas/master_ontology.py`**.
+- **Bounded Clinical & Analytical Primitives**: Prioritizes closed `Enum` vocabularies (each with a guaranteed `OTHER = "Other"` fallback), `bool` indicators, and typed numeric scalars (`int`, `float`).
+- **Deterministic AST Sanitizer**: Collapses repetitive prefix/suffix field lists, deduplicates overlapping classes across communities, enforces field/member caps (`15` by default), and verifies runtime `exec()` validity.
 
-### Stage 5: Data Extraction & Tables (`src/mapping/`)
-Applies your `master_ontology.py` schema back onto your documents to extract real structured records.
-- **Single-Pass Unified Extraction**: Extracts all main topic schemas at once in a single AI pass per document (and automatically runs a fast relevance filter first if your ontology has more than 6 main schemas).
-- **Whole-Document Context**: Keeps short and medium documents (up to 1,500 words) completely whole so context is never cut mid-paragraph. Very long documents are split cleanly at sentence endings and re-merged seamlessly.
-- **Live Saving & Easy Resume**: Saves progress after every chunk and document. If a long run is interrupted, running Stage 5 again automatically picks up right where it left off (pass `--overwrite` to start fresh).
-- **Ready-to-Use Exports**: Produces clean CSV spreadsheets, a single 1-row-per-document wide table (`consolidated_wide.csv` and `consolidated_wide.parquet`), and a SQLite database (`aggregated_data.db`).
+### Stage 5: Tabular Projection (`src/mapping/`)
+Maps document collections against `master_ontology.py` to populate structured relational databases and wide feature matrices.
+- **Unified Envelope & Relevance Triage**: Populates compact ontologies in a single pass per chunk, and automatically applies fast chunk-level relevance triage when ontologies contain 6+ root schemas.
+- **Live Checkpoint Resume**: Saves progress per chunk and document; re-running automatically resumes from `.completed.json` markers (pass `--overwrite` to rebuild from scratch).
+- **Multi-Format Relational Exports**: Writes parent/child CSV tables, a 1-row-per-document wide matrix (`consolidated_wide.csv` and `consolidated_wide.parquet`), and a SQLite database (`aggregated_data.db`).
 
 ---
 
 ## Key Output Files
 
-After running the pipeline, look in the `outputs/` folder for these main results:
-
 | File / Folder | What It Contains |
 | :--- | :--- |
-| `outputs/pipeline_summary.txt` | Plain-English summary of models used, runtime, discovered schemas, and extracted table counts. |
-| `outputs/03_topology/03_results/*.html` | Interactive browser dashboards, including the 3D topic galaxy (`cluster_3d_galaxy_visualization.html`). |
-| `outputs/04_synthesis/schemas/master_ontology.py` | Your complete, ready-to-use Python `Pydantic` & `Enum` schema file. |
-| `outputs/05_extraction/aggregated_tables/consolidated_wide.csv` | **Main spreadsheet**: 1 row per document with extracted columns across all schemas (also saved as `.parquet`). |
+| `outputs/SemanticPrism_OntologyBuild.txt` | Pre-Stage-5 summary of Stages 1–4 ontology discovery, graph compression, and compiled classes. |
+| `outputs/pipeline_summary.txt` | End-to-end report of models used, runtime, discovered schemas, and Stage 5 table dimensions (`pipeline_summary.json` for machine reading). |
+| `outputs/03_topology/visuals/*.html` | Interactive HTML network visuals, including `cluster_3d_galaxy_visualization.html` and `reduced_core_graph.html`. |
+| `outputs/04_synthesis/schemas/master_ontology.py` | Consolidated, AST-verified Python `Pydantic` & `Enum` ontology. |
+| `outputs/05_extraction/aggregated_tables/consolidated_wide.csv` | **Main wide table**: 1 row per document across all schemas (also saved as `.parquet`, prose-free by default). |
 | `outputs/05_extraction/aggregated_tables/aggregated_data.db` | SQLite database containing normalized parent/child tables plus `consolidated_wide`. |
 
 ---
 
 ## Optional Advanced Configuration
 
-Most users only ever need **[model_config.py](model_config.py)**. If you want finer control over specific stages:
-
 | File | What It Controls |
 | :--- | :--- |
-| **[model_config.py](model_config.py)** | **Main setup**: AI models, optional Hugging Face token, Stage 1 discovery dataset, and Stage 5 extraction dataset/mode. |
-| **[configs/topology.yaml](configs/topology.yaml)** | Stage 3 topic granularity (`"macro"`, `"balanced"`, or `"granular"`), hub filtering, community merging, and 3D visual settings. |
-| **[configs/AST_toggle.py](configs/AST_toggle.py)** | Stage 4 simple `True`/`False` switches and size limits (such as max fields per model or max choices per `Enum`). |
-| **`run_stage_1..5_*.py`** | Per-stage batch size, token limits, chunking size, and CLI flags (`--dry-run`, `--overwrite`, etc.). |
-| **[docs/Custom_Process.md](docs/Custom_Process.md)** & **[docs/AST_Sanitization_Rules.md](docs/AST_Sanitization_Rules.md)** | Deep-dive reference guides on the underlying math and code cleanup rules. |
+| **[model_config.py](model_config.py)** | **Main setup**: AI models, optional Hugging Face token, Stage 1 discovery dataset, and Stage 5 extraction settings. |
+| **[configs/topology.yaml](configs/topology.yaml)** | Stage 3 granularity (`"macro"`, `"balanced"`, or `"granular"`), hub pruning, boundary refinement, and visual settings. |
+| **[configs/AST_toggle.py](configs/AST_toggle.py)** | Stage 4 AST sanitization switches and max field/enum caps. |
+| **[docs/Custom_Process.md](docs/Custom_Process.md)** & **[docs/AST_Sanitization_Rules.md](docs/AST_Sanitization_Rules.md)** | Mathematical formulations across Stages 1–4 and AST sanitization specifications. |
 
 ---
 
@@ -173,18 +173,34 @@ Most users only ever need **[model_config.py](model_config.py)**. If you want fi
 
 ```text
 SemanticPrism/
-├── model_config.py             # Main configuration (models & datasets for Stage 1 and Stage 5)
+├── model_config.py             # Main configuration (models & datasets for Stages 1–4 and Stage 5)
 ├── configs/
-│   ├── topology.yaml           # Stage 3 topic grouping, merging & visual settings
-│   └── AST_toggle.py           # Stage 4 schema cleanup switches & field/enum caps
-├── docs/                       # Detailed reference documentation
-├── src/                        # Stage source code
-│   ├── extraction/             # Stage 1: Theme discovery & fact extraction
-│   ├── refinement/             # Stage 2: Synonym grouping & term standardization
-│   ├── topology/               # Stage 3: Topic network & smart community merging
-│   ├── synthesis/              # Stage 4: Python schema generation & cleanup
-│   └── mapping/                # Stage 5: Unified data extraction & CSV/Parquet/SQLite export
-├── outputs/                    # Saved results, schemas, tables, logs & HTML visuals
-├── run_pipeline.py             # Runs all (or selected) stages and builds pipeline_summary.txt
-└── run_stage_1..5_*.py         # Individual stage runner scripts
+│   ├── topology.yaml           # Stage 3 community partitioning, hub decoupling & visual settings
+│   └── AST_toggle.py           # Stage 4 AST sanitization switches & field/enum caps
+├── docs/                       # Mathematical & AST reference documentation
+├── inputs/                     # Synthetic mock evaluation documents for quickstart testing
+├── src/                        # Modular stage implementations
+│   ├── extraction/             # Stage 1: Relational Extraction
+│   ├── refinement/             # Stage 2: Hypernym Lifting
+│   ├── topology/               # Stage 3: Community Partitioning
+│   ├── synthesis/              # Stage 4: Schema Synthesis
+│   └── mapping/                # Stage 5: Tabular Projection
+├── tests/                      # Fast CPU unit tests (AST sanitizer, aggregator, topology tiering)
+├── run_pipeline.py             # End-to-end orchestrator & summary builder
+└── run_stage_1..5_*.py         # Standalone stage entrypoints
+```
+
+---
+
+## Citation
+
+If you use **SemanticPrism** in your research, please cite:
+
+```bibtex
+@article{semanticprism2026,
+  title   = {Semantic Prism: Unsupervised, Local-First Neuro-Symbolic Schema Induction for Text-to-Table Extraction},
+  author  = {LoBue, David and {Child Mind Institute}},
+  year    = {2026},
+  url     = {https://github.com/childmindresearch/SemanticPrism}
+}
 ```

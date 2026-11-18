@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use SemanticPrism in your research or software, please cite it using the metadata below."
+title: "Semantic Prism: Unsupervised, Local-First Neuro-Symbolic Schema Induction for Text-to-Table Extraction"
+type: software
+authors:
+  - family-names: "LoBue"
+    given-names: "David"
+    affiliation: "Child Mind Institute"
+repository-code: "https://github.com/childmindresearch/SemanticPrism"
+license: MIT
+keywords:
+  - neuro-symbolic-ai
+  - schema-induction
+  - text-to-table
+  - clinical-nlp
+  - knowledge-graph
+  - pydantic
+  - local-llm
+  - leiden-clustering
+
